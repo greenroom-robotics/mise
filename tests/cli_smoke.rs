@@ -41,12 +41,58 @@ fn bump_help_lists_subcommands() {
 }
 
 #[test]
-fn matrix_compute_stub_bails() {
-    mise()
-        .args(["matrix", "compute"])
+fn matrix_compute_workflow_dispatch_produces_matrix() {
+    use std::fs;
+    use std::io::Read;
+    let td = tempfile::TempDir::new().unwrap();
+    let root = td.path();
+
+    fs::write(root.join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    fs::write(
+        root.join("pixi_native_packages.yaml"),
+        "packages:\n  - name: a\n    url: https://github.com/x/y.git\n    rev: 4110a9a40736b555c7419119ef6c607951563745\n",
+    ).unwrap();
+    fs::create_dir_all(root.join(".github")).unwrap();
+    fs::write(
+        root.join(".github/deepstream-recipes.yaml"),
+        "recipes:\n  - deepstream-x\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("variants")).unwrap();
+    fs::write(
+        root.join("variants/deepstream.yaml"),
+        "deepstream_version:\n  - \"7.1\"\n  - \"8.0\"\n",
+    )
+    .unwrap();
+
+    let out_file = tempfile::NamedTempFile::new().unwrap();
+
+    let assert = mise()
+        .env("GITHUB_EVENT_NAME", "workflow_dispatch")
+        .env("GITHUB_OUTPUT", out_file.path())
+        .env("GITHUB_RUN_ID", "TEST")
+        .args(["matrix", "compute", "--repo-root", root.to_str().unwrap()])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("not implemented"));
+        .success();
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"include\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"pipeline\":\"vinca\""),
+        "stdout: {stdout}"
+    );
+
+    let mut s = String::new();
+    fs::File::open(out_file.path())
+        .unwrap()
+        .read_to_string(&mut s)
+        .unwrap();
+    assert!(s.contains("has-work=true"), "$GITHUB_OUTPUT: {s}");
+    assert!(s.contains("matrix-json="), "$GITHUB_OUTPUT: {s}");
+    assert!(
+        s.contains("recipes-csv=deepstream-x"),
+        "$GITHUB_OUTPUT: {s}"
+    );
 }
 
 #[test]

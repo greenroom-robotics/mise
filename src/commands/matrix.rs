@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use serde::Serialize;
 
-use crate::gh::ChangedFiles;
-use crate::repo::DeepstreamCfg;
+use crate::gh::{self, ChangedFiles};
+use crate::repo::{DeepstreamCfg, Repo};
 use crate::types::{Arch, DeepstreamVersion, PixiNativeManifest, RunnerSize};
 
 const GLOBAL_VINCA: &[&str] = &[
@@ -18,16 +18,15 @@ const GLOBAL_VINCA: &[&str] = &[
 
 const GLOBAL_BOTH: &[&str] = &["pixi.toml", "pixi.lock"];
 
-const GLOBAL_BOTH_PREFIXES: &[&str] = &[
-    ".github/workflows/",
-    ".github/actions/",
-    "scripts/",
-];
+const GLOBAL_BOTH_PREFIXES: &[&str] = &[".github/workflows/", ".github/actions/", "scripts/"];
 
 /// The two archs and their default runner template (used by the vinca pipeline).
 const ARCHS: &[(Arch, &str)] = &[
     (Arch::Linux64, "runs-on={run_id}/runner=4cpu-linux-x64"),
-    (Arch::LinuxAarch64, "runs-on={run_id}/runner=4cpu-linux-arm64"),
+    (
+        Arch::LinuxAarch64,
+        "runs-on={run_id}/runner=4cpu-linux-arm64",
+    ),
 ];
 
 fn ds_runner_family(arch: Arch) -> &'static str {
@@ -63,8 +62,56 @@ pub enum Matrix {
 impl Matrix {
     pub fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Compute { repo_root: _ } => anyhow::bail!("matrix compute: not implemented"),
+            Self::Compute { repo_root } => compute(repo_root),
         }
+    }
+}
+
+fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+    let ds = repo.deepstream()?;
+    let manifest = repo.pixi_native_manifest()?;
+    let event = gh::Event::load()?;
+    let changed = gh::changed_files(&repo, &event)?;
+
+    let run_id = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into());
+    let state = classify(&changed, &ds);
+    let entries = build_matrix(&state, &manifest, &run_id);
+
+    let has_work = !entries.is_empty();
+    let entries = if has_work {
+        entries
+    } else {
+        vec![placeholder_entry(&run_id)]
+    };
+
+    let matrix_json = serde_json::to_string(&serde_json::json!({ "include": entries }))?;
+    let recipes_csv = ds
+        .recipes
+        .iter()
+        .map(|r| r.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    gh::outputs::set("matrix-json", &matrix_json)?;
+    gh::outputs::set("recipes-csv", &recipes_csv)?;
+    gh::outputs::set("has-work", &has_work)?;
+
+    // Always print matrix_json to stdout — matches the Python script for log visibility.
+    println!("{matrix_json}");
+
+    Ok(())
+}
+
+fn placeholder_entry(run_id: &str) -> MatrixEntry {
+    MatrixEntry {
+        pipeline: Pipeline::ShouldNotRun,
+        target_platform: Arch::Linux64,
+        ds_version: String::new(),
+        ds_image: String::new(),
+        runner: format!("runs-on={run_id}/runner=1cpu-linux-x64"),
+        runner_size: String::new(),
+        artifact_name: "should-not-run".into(),
     }
 }
 
@@ -104,7 +151,6 @@ struct MatrixState {
     ds_versions: BTreeSet<DeepstreamVersion>,
 }
 
-#[allow(dead_code)]
 fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
     let mut state = MatrixState::default();
 
@@ -127,7 +173,9 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
             continue;
         }
         if GLOBAL_BOTH.contains(&p)
-            || GLOBAL_BOTH_PREFIXES.iter().any(|prefix| p.starts_with(prefix))
+            || GLOBAL_BOTH_PREFIXES
+                .iter()
+                .any(|prefix| p.starts_with(prefix))
         {
             state.vinca = true;
             state.pixi_native = true;
@@ -170,7 +218,6 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
     state
 }
 
-#[allow(dead_code)]
 fn build_matrix(
     state: &MatrixState,
     manifest: &PixiNativeManifest,
@@ -248,9 +295,18 @@ mod tests {
 
     #[test]
     fn pipeline_serializes_to_kebab_case() {
-        assert_eq!(serde_json::to_string(&Pipeline::Vinca).unwrap(), "\"vinca\"");
-        assert_eq!(serde_json::to_string(&Pipeline::PixiNative).unwrap(), "\"pixi-native\"");
-        assert_eq!(serde_json::to_string(&Pipeline::ShouldNotRun).unwrap(), "\"should-not-run\"");
+        assert_eq!(
+            serde_json::to_string(&Pipeline::Vinca).unwrap(),
+            "\"vinca\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Pipeline::PixiNative).unwrap(),
+            "\"pixi-native\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Pipeline::ShouldNotRun).unwrap(),
+            "\"should-not-run\""
+        );
     }
 
     #[test]
@@ -265,10 +321,16 @@ mod tests {
             artifact_name: "build-linux-64".into(),
         };
         let json = serde_json::to_string(&e).unwrap();
-        assert!(json.contains("\"target-platform\":\"linux-64\""), "got: {json}");
+        assert!(
+            json.contains("\"target-platform\":\"linux-64\""),
+            "got: {json}"
+        );
         assert!(json.contains("\"ds-version\":\"\""), "got: {json}");
         assert!(json.contains("\"runner-size\":\"\""), "got: {json}");
-        assert!(json.contains("\"artifact-name\":\"build-linux-64\""), "got: {json}");
+        assert!(
+            json.contains("\"artifact-name\":\"build-linux-64\""),
+            "got: {json}"
+        );
     }
 
     use crate::types::{DeepstreamVersion, RecipeName};
@@ -276,7 +338,8 @@ mod tests {
 
     fn cfg(recipes: &[&str], versions: &[DeepstreamVersion]) -> DeepstreamCfg {
         DeepstreamCfg {
-            recipes: recipes.iter()
+            recipes: recipes
+                .iter()
                 .map(|n| RecipeName::from_str(n).unwrap())
                 .collect(),
             versions: versions.iter().copied().collect(),
@@ -289,7 +352,10 @@ mod tests {
 
     #[test]
     fn classify_all_means_everything() {
-        let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1, DeepstreamVersion::V8_0]);
+        let ds = cfg(
+            &["foo"],
+            &[DeepstreamVersion::V7_1, DeepstreamVersion::V8_0],
+        );
         let s = classify(&ChangedFiles::All, &ds);
         assert!(s.vinca);
         assert!(s.pixi_native);
@@ -307,7 +373,10 @@ mod tests {
 
     #[test]
     fn classify_global_both_triggers_everything() {
-        let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1, DeepstreamVersion::V8_0]);
+        let ds = cfg(
+            &["foo"],
+            &[DeepstreamVersion::V7_1, DeepstreamVersion::V8_0],
+        );
         let s = classify(&paths(&["pixi.toml"]), &ds);
         assert!(s.vinca);
         assert!(s.pixi_native);
@@ -400,13 +469,17 @@ mod tests {
     fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
         let url = crate::types::GithubRepoUrl::parse("https://github.com/x/y").unwrap();
         let sha = Sha40::new("4110a9a40736b555c7419119ef6c607951563745").unwrap();
-        let packages = sizes.iter().enumerate().map(|(i, size)| PixiNativeEntry {
-            name: format!("pkg{i}"),
-            url: url.clone(),
-            version: GitVersion::Rev(sha.clone()),
-            subdir: None,
-            runner_size: *size,
-        }).collect();
+        let packages = sizes
+            .iter()
+            .enumerate()
+            .map(|(i, size)| PixiNativeEntry {
+                name: format!("pkg{i}"),
+                url: url.clone(),
+                version: GitVersion::Rev(sha.clone()),
+                subdir: None,
+                runner_size: *size,
+            })
+            .collect();
         PixiNativeManifest { packages }
     }
 
@@ -419,10 +492,16 @@ mod tests {
 
     #[test]
     fn build_matrix_vinca_only_produces_two_arches() {
-        let state = MatrixState { vinca: true, ..Default::default() };
+        let state = MatrixState {
+            vinca: true,
+            ..Default::default()
+        };
         let out = build_matrix(&state, &empty_manifest(), "RUN");
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|e| e.pipeline == Pipeline::Vinca && e.ds_version.is_empty()));
+        assert!(
+            out.iter()
+                .all(|e| e.pipeline == Pipeline::Vinca && e.ds_version.is_empty())
+        );
         assert!(out.iter().any(|e| e.target_platform == Arch::Linux64));
         assert!(out.iter().any(|e| e.target_platform == Arch::LinuxAarch64));
         assert!(out[0].runner.contains("RUN"));
@@ -430,10 +509,11 @@ mod tests {
 
     #[test]
     fn build_matrix_pixi_native_groups_by_size() {
-        let state = MatrixState { pixi_native: true, ..Default::default() };
-        let manifest = manifest_with_sizes(&[
-            RunnerSize::Cpu4, RunnerSize::Cpu4, RunnerSize::Cpu8,
-        ]);
+        let state = MatrixState {
+            pixi_native: true,
+            ..Default::default()
+        };
+        let manifest = manifest_with_sizes(&[RunnerSize::Cpu4, RunnerSize::Cpu4, RunnerSize::Cpu8]);
         let out = build_matrix(&state, &manifest, "RUN");
         // Two unique sizes (4, 8) × 2 arches = 4 entries
         assert_eq!(out.len(), 4);
@@ -446,11 +526,20 @@ mod tests {
 
     #[test]
     fn build_matrix_pixi_native_uses_correct_arch_tag() {
-        let state = MatrixState { pixi_native: true, ..Default::default() };
+        let state = MatrixState {
+            pixi_native: true,
+            ..Default::default()
+        };
         let manifest = manifest_with_sizes(&[RunnerSize::Cpu4]);
         let out = build_matrix(&state, &manifest, "RUN");
-        let x64 = out.iter().find(|e| e.target_platform == Arch::Linux64).unwrap();
-        let arm = out.iter().find(|e| e.target_platform == Arch::LinuxAarch64).unwrap();
+        let x64 = out
+            .iter()
+            .find(|e| e.target_platform == Arch::Linux64)
+            .unwrap();
+        let arm = out
+            .iter()
+            .find(|e| e.target_platform == Arch::LinuxAarch64)
+            .unwrap();
         assert!(x64.runner.contains("4cpu-linux-x64"));
         assert!(arm.runner.contains("4cpu-linux-arm64"));
     }
@@ -462,11 +551,20 @@ mod tests {
         state.ds_versions.insert(DeepstreamVersion::V8_0);
         let out = build_matrix(&state, &empty_manifest(), "RUN");
         assert_eq!(out.len(), 4);
-        let v71_x64 = out.iter().find(|e| e.ds_version == "7.1" && e.target_platform == Arch::Linux64).unwrap();
-        assert_eq!(v71_x64.ds_image, "nvcr.io/nvidia/deepstream:7.1-triton-multiarch");
+        let v71_x64 = out
+            .iter()
+            .find(|e| e.ds_version == "7.1" && e.target_platform == Arch::Linux64)
+            .unwrap();
+        assert_eq!(
+            v71_x64.ds_image,
+            "nvcr.io/nvidia/deepstream:7.1-triton-multiarch"
+        );
         assert!(v71_x64.runner.contains("family=c6id.xlarge"));
         assert!(v71_x64.runner.contains("deepstream-x64-7.1"));
-        let v80_arm = out.iter().find(|e| e.ds_version == "8.0" && e.target_platform == Arch::LinuxAarch64).unwrap();
+        let v80_arm = out
+            .iter()
+            .find(|e| e.ds_version == "8.0" && e.target_platform == Arch::LinuxAarch64)
+            .unwrap();
         assert!(v80_arm.runner.contains("family=c7gd.xlarge"));
         assert!(v80_arm.runner.contains("deepstream-arm64-8.0"));
     }
@@ -482,5 +580,13 @@ mod tests {
         assert_eq!(out[1].ds_version, "7.1");
         assert_eq!(out[2].ds_version, "8.0");
         assert_eq!(out[3].ds_version, "8.0");
+    }
+
+    #[test]
+    fn placeholder_entry_is_should_not_run() {
+        let e = placeholder_entry("RUN");
+        assert_eq!(e.pipeline, Pipeline::ShouldNotRun);
+        assert_eq!(e.artifact_name, "should-not-run");
+        assert!(e.runner.contains("RUN"));
     }
 }
