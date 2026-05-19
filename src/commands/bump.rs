@@ -1,7 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::Subcommand;
+use serde::{Deserialize, Serialize};
+
+use crate::types::Sha40;
 
 #[derive(Subcommand, Debug)]
 pub enum Bump {
@@ -290,8 +293,57 @@ pub(crate) fn mutate_pixi_entry(
     Ok(result_str)
 }
 
-fn route(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
-    anyhow::bail!("bump route: not implemented")
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DispatchPayload {
+    pub package: String,
+    pub version: String,
+    pub source_repo: String,
+    pub sha: Sha40,
+    #[serde(default)]
+    pub manifest_type: Option<ManifestType>,
+    #[serde(default)]
+    pub subdir: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestType {
+    #[serde(rename = "pixi.toml")]
+    PixiToml,
+    #[serde(rename = "package.xml")]
+    PackageXml,
+}
+
+impl DispatchPayload {
+    pub fn manifest_type_or_default(&self) -> ManifestType {
+        self.manifest_type.unwrap_or(ManifestType::PixiToml)
+    }
+    pub fn source_url(&self) -> String {
+        format!("https://github.com/{}", self.source_repo)
+    }
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("read payload {}", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parse payload {}", path.display()))
+    }
+}
+
+fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
+    let p = DispatchPayload::load(&payload)?;
+    match p.manifest_type_or_default() {
+        ManifestType::PackageXml => recipe(
+            repo_root,
+            p.package.clone(),
+            p.version.clone(),
+            p.sha.as_str().to_string(),
+        ),
+        ManifestType::PixiToml => pixi(
+            repo_root,
+            p.package.clone(),
+            p.source_url(),
+            p.sha.as_str().to_string(),
+            p.subdir.clone(),
+        ),
+    }
 }
 
 fn open_pr(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
@@ -470,5 +522,50 @@ packages:
         .unwrap();
         assert!(out.contains("- name: epsilon"));
         assert!(!out.lines().any(|l| l.trim() == "subdir:"));
+    }
+
+    #[test]
+    fn dispatch_payload_defaults_manifest_type_to_pixi_toml() {
+        let json = r#"{
+            "package": "foo",
+            "version": "1.0.0",
+            "source_repo": "owner/repo",
+            "sha": "0000000000000000000000000000000000000000"
+        }"#;
+        let p: DispatchPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(p.manifest_type_or_default(), ManifestType::PixiToml);
+    }
+
+    #[test]
+    fn dispatch_payload_parses_package_xml() {
+        let json = r#"{
+            "package": "foo",
+            "version": "1.0.0",
+            "source_repo": "owner/repo",
+            "sha": "0000000000000000000000000000000000000000",
+            "manifest_type": "package.xml"
+        }"#;
+        let p: DispatchPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(p.manifest_type_or_default(), ManifestType::PackageXml);
+    }
+
+    #[test]
+    fn dispatch_payload_rejects_short_sha() {
+        let json = r#"{"package":"foo","version":"1.0","source_repo":"a/b","sha":"deadbeef"}"#;
+        let r: Result<DispatchPayload, _> = serde_json::from_str(json);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn dispatch_payload_source_url() {
+        let p = DispatchPayload {
+            package: "foo".into(),
+            version: "1.0".into(),
+            source_repo: "owner/repo".into(),
+            sha: Sha40::new("0000000000000000000000000000000000000000").unwrap(),
+            manifest_type: None,
+            subdir: None,
+        };
+        assert_eq!(p.source_url(), "https://github.com/owner/repo");
     }
 }
