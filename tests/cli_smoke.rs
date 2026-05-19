@@ -172,6 +172,30 @@ fn build_deepstream_container_requires_recipe() {
 }
 
 #[test]
+fn bump_recipe_errors_when_package_missing() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    std::fs::write(
+        td.path().join("rosdistro_additional_recipes.yaml"),
+        "foo:\n  tag: 1.0\n  version: 1.0\n",
+    )
+    .unwrap();
+    mise()
+        .args([
+            "bump",
+            "recipe",
+            "--repo-root",
+            td.path().to_str().unwrap(),
+            "missing-pkg",
+            "1.0.0",
+            "0000000000000000000000000000000000000000",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing-pkg"));
+}
+
+#[test]
 fn invalid_deepstream_version_rejected_at_parse_time() {
     mise()
         .args([

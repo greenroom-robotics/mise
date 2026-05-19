@@ -1,44 +1,279 @@
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
 pub enum Bump {
-    /// Bump a recipe entry's version.
+    /// Update a recipe entry in rosdistro_additional_recipes.yaml.
     Recipe {
         #[arg(long)]
         repo_root: Option<PathBuf>,
-        recipe: String,
+        /// Package key in the YAML (top-level map key).
+        package: String,
+        /// New `version:` value.
         version: String,
+        /// New `rev:` value (40-char SHA). Also deletes any existing `tag:`/`branch:`.
+        rev: String,
     },
-    /// Bump a pixi-native package entry's rev or ref.
+    /// Update or insert a package entry in pixi_native_packages.yaml.
     Pixi {
         #[arg(long)]
         repo_root: Option<PathBuf>,
+        /// Entry `name:` to find or create.
         name: String,
-        rev_or_ref: String,
+        /// `url:` value.
+        url: String,
+        /// `rev:` value (40-char SHA). Deletes any existing `ref:`.
+        rev: String,
+        /// Optional `subdir:` value.
+        #[arg(long)]
+        subdir: Option<String>,
     },
-    /// Route a dispatch payload to the appropriate bump subcommand.
+    /// Read a dispatch payload JSON and dispatch to bump recipe or bump pixi.
     Route {
+        #[arg(long)]
+        repo_root: Option<PathBuf>,
         #[arg(long)]
         payload: PathBuf,
     },
-    /// Open a PR for an applied bump.
+    /// Commit the recipe-yaml edits and open/update an auto-merge PR.
     OpenPr {
         #[arg(long)]
         repo_root: Option<PathBuf>,
         #[arg(long)]
-        bump_result: PathBuf,
+        payload: PathBuf,
     },
 }
 
 impl Bump {
     pub fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Recipe { .. } => anyhow::bail!("bump recipe: not implemented"),
-            Self::Pixi { .. } => anyhow::bail!("bump pixi: not implemented"),
-            Self::Route { .. } => anyhow::bail!("bump route: not implemented"),
-            Self::OpenPr { .. } => anyhow::bail!("bump open-pr: not implemented"),
+            Self::Recipe {
+                repo_root,
+                package,
+                version,
+                rev,
+            } => recipe(repo_root, package, version, rev),
+            Self::Pixi {
+                repo_root,
+                name,
+                url,
+                rev,
+                subdir,
+            } => pixi(repo_root, name, url, rev, subdir),
+            Self::Route { repo_root, payload } => route(repo_root, payload),
+            Self::OpenPr { repo_root, payload } => open_pr(repo_root, payload),
         }
+    }
+}
+
+use crate::repo::Repo;
+
+fn recipe(
+    repo_root: Option<PathBuf>,
+    package: String,
+    version: String,
+    rev: String,
+) -> anyhow::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+    let path = repo.root().join("rosdistro_additional_recipes.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let updated = mutate_recipe_entry(&text, &package, &version, &rev)?;
+    std::fs::write(&path, updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Mutate a top-level-keyed YAML in-place style. Returns the new content.
+///
+/// Behavior:
+/// - The `package:` block must exist; otherwise returns an error.
+/// - Within that block (until the next top-level key or EOF), delete any
+///   `tag:` and `branch:` lines, replace any `version:` line, replace any
+///   `rev:` line (or insert one after the first sub-key line if not present).
+/// - All other lines (including comments) pass through.
+pub(crate) fn mutate_recipe_entry(
+    text: &str,
+    package: &str,
+    version: &str,
+    rev: &str,
+) -> anyhow::Result<String> {
+    let header = format!("{package}:");
+    let lines: Vec<&str> = text.lines().collect();
+
+    let header_idx = lines
+        .iter()
+        .position(|l| l.trim_end() == header)
+        .ok_or_else(|| anyhow::anyhow!("entry {package:?} not found"))?;
+
+    // Block spans header_idx+1 .. block_end (exclusive). A line ends the
+    // block when it starts at column 0 with non-whitespace and is not blank.
+    let block_end = lines[header_idx + 1..]
+        .iter()
+        .position(|l| !l.is_empty() && !l.starts_with(' ') && !l.starts_with('\t'))
+        .map(|p| header_idx + 1 + p)
+        .unwrap_or(lines.len());
+
+    let mut out: Vec<String> = lines[..=header_idx].iter().map(|s| s.to_string()).collect();
+    let mut rev_seen = false;
+    let mut version_seen = false;
+    // The indent of the first non-blank sub-line is the block's indent.
+    let block_indent = lines[header_idx + 1..block_end]
+        .iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.len() - l.trim_start().len())
+        .unwrap_or(2);
+
+    for line in &lines[header_idx + 1..block_end] {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("tag:") || trimmed.starts_with("branch:") {
+            // drop
+            continue;
+        }
+        if trimmed.starts_with("version:") {
+            version_seen = true;
+            out.push(format!("{}version: {}", " ".repeat(block_indent), version));
+            continue;
+        }
+        if trimmed.starts_with("rev:") {
+            rev_seen = true;
+            out.push(format!("{}rev: {}", " ".repeat(block_indent), rev));
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !rev_seen {
+        // Insert just after the header to keep rev visible near the top of the block.
+        out.insert(
+            header_idx + 1,
+            format!("{}rev: {}", " ".repeat(block_indent), rev),
+        );
+    }
+    if !version_seen {
+        out.push(format!("{}version: {}", " ".repeat(block_indent), version));
+    }
+
+    for line in &lines[block_end..] {
+        out.push(line.to_string());
+    }
+
+    let has_trailing_newline = text.ends_with('\n');
+    let mut result = out.join("\n");
+    if has_trailing_newline {
+        result.push('\n');
+    }
+    Ok(result)
+}
+
+fn pixi(
+    _repo_root: Option<PathBuf>,
+    _name: String,
+    _url: String,
+    _rev: String,
+    _subdir: Option<String>,
+) -> anyhow::Result<()> {
+    anyhow::bail!("bump pixi: not implemented")
+}
+
+fn route(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
+    anyhow::bail!("bump route: not implemented")
+}
+
+fn open_pr(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
+    anyhow::bail!("bump open-pr: not implemented")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = "\
+px4_msgs:
+  url: https://github.com/example/px4_msgs.git
+  tag: 1.3.0-amd64
+  version: 1.3.0
+  manifest_file: package.xml
+
+# Comment between entries — must be preserved.
+foo_pkg:
+  url: https://github.com/example/foo_pkg.git
+  branch: main
+  version: 0.1.0
+  manifest_file: package.xml
+
+bar_pkg:
+  url: https://github.com/example/bar_pkg.git
+  rev: 1111111111111111111111111111111111111111
+  version: 0.5.0
+  manifest_file: package.xml
+";
+
+    #[test]
+    fn recipe_replaces_tag_with_rev_and_updates_version() {
+        let result = mutate_recipe_entry(
+            FIXTURE,
+            "px4_msgs",
+            "1.4.0",
+            "2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        assert!(result.contains("px4_msgs:"));
+        assert!(
+            !result.contains("tag: 1.3.0-amd64"),
+            "tag should be removed:\n{result}"
+        );
+        assert!(result.contains("rev: 2222222222222222222222222222222222222222"));
+        assert!(result.contains("version: 1.4.0"));
+        // Untouched entries.
+        assert!(result.contains("foo_pkg:"));
+        assert!(result.contains("# Comment between entries"));
+    }
+
+    #[test]
+    fn recipe_replaces_branch_with_rev() {
+        let result = mutate_recipe_entry(
+            FIXTURE,
+            "foo_pkg",
+            "0.2.0",
+            "3333333333333333333333333333333333333333",
+        )
+        .unwrap();
+        assert!(!result.contains("branch: main"));
+        assert!(result.contains("rev: 3333333333333333333333333333333333333333"));
+        assert!(result.contains("version: 0.2.0"));
+    }
+
+    #[test]
+    fn recipe_updates_existing_rev_in_place() {
+        let result = mutate_recipe_entry(
+            FIXTURE,
+            "bar_pkg",
+            "0.6.0",
+            "4444444444444444444444444444444444444444",
+        )
+        .unwrap();
+        assert!(!result.contains("rev: 1111111111111111111111111111111111111111"));
+        assert!(result.contains("rev: 4444444444444444444444444444444444444444"));
+        assert!(result.contains("version: 0.6.0"));
+    }
+
+    #[test]
+    fn recipe_rejects_missing_package() {
+        let err =
+            mutate_recipe_entry(FIXTURE, "no_such", "0.0.1", "0".repeat(40).as_str()).unwrap_err();
+        assert!(format!("{err:#}").contains("no_such"));
+    }
+
+    #[test]
+    fn recipe_preserves_trailing_newline() {
+        let result = mutate_recipe_entry(
+            FIXTURE,
+            "px4_msgs",
+            "1.4.0",
+            "2222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        assert!(result.ends_with('\n'));
     }
 }
