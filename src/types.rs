@@ -31,7 +31,9 @@ pub enum DeepstreamVersion {
     V8_0,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum RunnerSize {
     #[serde(rename = "4cpu")]
