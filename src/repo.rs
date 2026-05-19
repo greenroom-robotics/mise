@@ -10,23 +10,30 @@ use crate::types::{DeepstreamVersion, PixiNativeManifest, RecipeName};
 
 #[derive(Debug, Clone)]
 pub struct Repo {
-    pub root: PathBuf,
+    root: PathBuf,
 }
 
 impl Repo {
-    /// Walk up from `cwd` looking for `pixi.toml`.
+    /// Walk up from cwd looking for `pixi.toml`.
     pub fn discover() -> anyhow::Result<Self> {
         let cwd = env::current_dir().context("get current dir")?;
-        let mut cur: &Path = &cwd;
+        Self::discover_from(&cwd)
+    }
+
+    /// Walk up from `start` looking for `pixi.toml`.
+    pub fn discover_from(start: &Path) -> anyhow::Result<Self> {
+        let mut cur: &Path = start;
         loop {
             if cur.join("pixi.toml").is_file() {
-                return Ok(Self { root: cur.to_path_buf() });
+                return Ok(Self {
+                    root: cur.canonicalize().context("canonicalize repo root")?,
+                });
             }
             match cur.parent() {
                 Some(p) => cur = p,
                 None => anyhow::bail!(
                     "no pixi.toml found walking up from {}",
-                    cwd.display()
+                    start.display()
                 ),
             }
         }
@@ -37,14 +44,21 @@ impl Repo {
         if !root.join("pixi.toml").is_file() {
             anyhow::bail!("{} does not contain pixi.toml", root.display());
         }
-        Ok(Self { root })
+        Ok(Self {
+            root: root.canonicalize().context("canonicalize repo root")?,
+        })
     }
 
+    /// Use `--repo-root <PATH>` if given, otherwise walk up from cwd looking for `pixi.toml`.
     pub fn or_discover(root: Option<PathBuf>) -> anyhow::Result<Self> {
         match root {
             Some(p) => Self::at(p),
             None => Self::discover(),
         }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn deepstream(&self) -> anyhow::Result<DeepstreamCfg> {
@@ -83,6 +97,7 @@ struct DeepstreamRaw {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
     use tempfile::TempDir;
 
     fn make_repo() -> (TempDir, Repo) {
@@ -97,9 +112,8 @@ mod tests {
         let (td, _) = make_repo();
         let sub = td.path().join("a").join("b");
         fs::create_dir_all(&sub).unwrap();
-        env::set_current_dir(&sub).unwrap();
-        let found = Repo::discover().unwrap();
-        assert_eq!(found.root, td.path().canonicalize().unwrap());
+        let found = Repo::discover_from(&sub).unwrap();
+        assert_eq!(found.root(), td.path().canonicalize().unwrap());
     }
 
     #[test]
@@ -114,13 +128,15 @@ mod tests {
         let gh = td.path().join(".github");
         fs::create_dir_all(&gh).unwrap();
         fs::copy(
-            "tests/fixtures/deepstream-recipes.yaml",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/deepstream-recipes.yaml"),
             gh.join("deepstream-recipes.yaml"),
         ).unwrap();
         let cfg = repo.deepstream().unwrap();
         assert_eq!(cfg.recipes.len(), 2);
         assert_eq!(cfg.versions.len(), 2);
         assert!(cfg.versions.contains(&DeepstreamVersion::V7_1));
+        assert!(cfg.recipes.contains(&RecipeName::from_str("deepstream-test1").unwrap()));
+        assert!(cfg.recipes.contains(&RecipeName::from_str("deepstream-test2").unwrap()));
     }
 
     #[test]
