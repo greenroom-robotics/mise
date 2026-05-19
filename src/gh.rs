@@ -11,6 +11,9 @@ use serde::Deserialize;
 use crate::repo::Repo;
 use crate::types::Sha40;
 
+/// The GitHub "no parent" sentinel for `push` event's `before` field on initial pushes.
+const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     PullRequest { base: Sha40, head: Sha40 },
@@ -56,7 +59,7 @@ impl Event {
                     after: Sha40,
                 }
                 let e: E = serde_json::from_str(json)?;
-                let before = if e.before.chars().all(|c| c == '0') {
+                let before = if e.before == ZERO_SHA {
                     None
                 } else {
                     Some(Sha40::new(e.before)?)
@@ -76,13 +79,13 @@ pub enum ChangedFiles {
 }
 
 pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles> {
-    let (base, head) = match event {
-        Event::PullRequest { base, head } => (base.clone(), head.clone()),
-        Event::Push { before: Some(b), after } => (b.clone(), after.clone()),
+    let range = match event {
+        Event::PullRequest { base, head } => format!("{base}...{head}"),
+        Event::Push { before: Some(b), after } => format!("{b}..{after}"),
         _ => return Ok(ChangedFiles::All),
     };
     let out = Command::new("git")
-        .args(["diff", "--name-only", &format!("{base}...{head}")])
+        .args(["diff", "--name-only", &range])
         .current_dir(repo.root())
         .output()
         .context("run git diff")?;
@@ -139,6 +142,12 @@ mod tests {
         let e = Event::from_str_with_kind("push", json).unwrap();
         let Event::Push { before, .. } = e else { panic!() };
         assert!(before.is_none());
+    }
+
+    #[test]
+    fn parses_push_event_rejects_short_zero_before() {
+        let json = r#"{"before":"00","after":"0000000000000000000000000000000000000004"}"#;
+        assert!(Event::from_str_with_kind("push", json).is_err());
     }
 
     #[test]
