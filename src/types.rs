@@ -417,3 +417,27 @@ impl Default for TargetPlatform {
         Self(Arch::Linux64)
     }
 }
+
+impl fmt::Display for RunnerSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Cpu4 => "4cpu",
+            Self::Cpu8 => "8cpu",
+            Self::Cpu16 => "16cpu",
+            Self::Cpu32 => "32cpu",
+        })
+    }
+}
+
+impl FromStr for RunnerSize {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "4cpu" => Ok(Self::Cpu4),
+            "8cpu" => Ok(Self::Cpu8),
+            "16cpu" => Ok(Self::Cpu16),
+            "32cpu" => Ok(Self::Cpu32),
+            other => anyhow::bail!("unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"),
+        }
+    }
+}

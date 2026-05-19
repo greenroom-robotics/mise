@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use crate::types::{DeepstreamVersion, RecipeName, TargetPlatform};
+use crate::types::{DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
 
 #[derive(Subcommand, Debug)]
 pub enum Build {
@@ -31,6 +31,9 @@ pub enum Build {
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
         target_platform: TargetPlatform,
+        /// Optional filter: only build entries with this runner-size.
+        #[arg(long)]
+        runner_size: Option<RunnerSize>,
     },
     /// Build inside a DeepStream container.
     DeepstreamContainer {
@@ -59,7 +62,13 @@ impl Build {
                 ds_recipes,
                 ds_version,
             ),
-            Self::Pixi { .. } => anyhow::bail!("build pixi: not implemented"),
+            Self::Pixi {
+                repo_root: _,
+                channel_url: _,
+                output_dir: _,
+                target_platform: _,
+                runner_size: _,
+            } => anyhow::bail!("build pixi: not implemented"),
             Self::DeepstreamContainer { .. } => {
                 anyhow::bail!("build deepstream-container: not implemented")
             }
