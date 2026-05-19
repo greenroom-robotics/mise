@@ -411,16 +411,11 @@ impl UpstreamPixiToml {
     }
 }
 
-use crate::types::{GitVersion, GithubRepoUrl, PixiNativeEntry};
+use crate::types::{GithubRepoUrl, PixiNativeEntry, Sha40};
 
 /// Fetch `pixi.toml` for an entry from `raw.githubusercontent.com`. Uses Bearer
 /// auth from `GITHUB_TOKEN` / `GH_TOKEN` when present.
 fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
-    let rev_or_ref = match &entry.version {
-        GitVersion::Rev(sha) => sha.as_str().to_string(),
-        GitVersion::Ref(r) => r.clone(),
-    };
-
     let subdir = entry
         .subdir
         .as_deref()
@@ -431,7 +426,10 @@ fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
 
     let raw_url = format!(
         "https://raw.githubusercontent.com/{}/{}/{}/{}",
-        entry.url.owner, entry.url.repo, rev_or_ref, subdir
+        entry.url.owner,
+        entry.url.repo,
+        entry.rev.as_str(),
+        subdir
     );
 
     let token = std::env::var("GITHUB_TOKEN")
@@ -461,14 +459,9 @@ fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
     }
 }
 
-/// Initialize a fresh git repo in `dest`, fetch one commit (`rev_or_ref`),
-/// and check it out. `rev_or_ref` may be a 40-char SHA or a branch/tag name.
-fn fetch_at_rev(url: &GithubRepoUrl, version: &GitVersion, dest: &Path) -> anyhow::Result<()> {
+/// Initialize a fresh git repo in `dest`, fetch the given commit, and check it out.
+fn fetch_at_rev(url: &GithubRepoUrl, rev: &Sha40, dest: &Path) -> anyhow::Result<()> {
     let url_str = format!("https://github.com/{}/{}", url.owner, url.repo);
-    let rev_or_ref = match version {
-        GitVersion::Rev(sha) => sha.as_str().to_string(),
-        GitVersion::Ref(r) => r.clone(),
-    };
 
     process::git(&["init", "--quiet", dest.to_str().unwrap()])?;
     process::git(&[
@@ -486,7 +479,7 @@ fn fetch_at_rev(url: &GithubRepoUrl, version: &GitVersion, dest: &Path) -> anyho
         "--depth=1",
         "--quiet",
         "origin",
-        &rev_or_ref,
+        rev.as_str(),
     ])?;
     process::git(&[
         "-C",
@@ -634,10 +627,11 @@ fn pixi(
             .context("create temp workdir")?;
         let workdir = tmp.path().join("src");
         fs::create_dir(&workdir)?;
-        fetch_at_rev(&entry.url, &entry.version, &workdir)?;
+        fetch_at_rev(&entry.url, &entry.rev, &workdir)?;
 
         let subdir = entry.subdir.as_deref().unwrap_or(Path::new("."));
-        let manifest_path = workdir.join(subdir).join("pixi.toml");
+        let manifest_dir = workdir.join(subdir);
+        let manifest_path = manifest_dir.join("pixi.toml");
         if !manifest_path.is_file() {
             anyhow::bail!(
                 "entry {}: no pixi.toml at {}/pixi.toml in checkout",
@@ -645,6 +639,11 @@ fn pixi(
                 subdir.display(),
             );
         }
+
+        // `pixi publish` does not honour --locked; pre-flight install --locked
+        // is our drift/missing-lock check before the (re-resolving) publish.
+        process::run_in(&manifest_dir, "pixi", &["install", "--locked"])
+            .with_context(|| format!("entry {}: pixi.lock validation failed", entry.name))?;
 
         // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
         // the upload-artifact glob.

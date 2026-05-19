@@ -216,28 +216,6 @@ impl Serialize for GithubRepoUrl {
     }
 }
 
-/// Exactly one of `rev` or `ref` is set in `pixi_native_packages.yaml`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum GitVersion {
-    Rev(Sha40),
-    Ref(String),
-}
-
-impl GitVersion {
-    pub fn from_optional(rev: Option<Sha40>, git_ref: Option<String>) -> anyhow::Result<Self> {
-        match (rev, git_ref) {
-            (Some(r), None) => Ok(Self::Rev(r)),
-            (None, Some(r)) => Ok(Self::Ref(r)),
-            (Some(_), Some(_)) => {
-                anyhow::bail!("entry has both `rev` and `ref`; exactly one is required")
-            }
-            (None, None) => {
-                anyhow::bail!("entry has neither `rev` nor `ref`; exactly one is required")
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod newtype_tests {
     use super::*;
@@ -286,14 +264,6 @@ mod newtype_tests {
         assert!(GithubRepoUrl::parse("http://github.com/foo/bar").is_err());
     }
 
-    #[test]
-    fn gitversion_requires_exactly_one() {
-        let sha = Sha40::new("4110a9a40736b555c7419119ef6c607951563745").unwrap();
-        assert!(GitVersion::from_optional(Some(sha.clone()), None).is_ok());
-        assert!(GitVersion::from_optional(None, Some("main".into())).is_ok());
-        assert!(GitVersion::from_optional(Some(sha), Some("main".into())).is_err());
-        assert!(GitVersion::from_optional(None, None).is_err());
-    }
 }
 
 use std::path::PathBuf;
@@ -302,7 +272,7 @@ use std::path::PathBuf;
 pub struct PixiNativeEntry {
     pub name: String,
     pub url: GithubRepoUrl,
-    pub version: GitVersion,
+    pub rev: Sha40,
     pub subdir: Option<PathBuf>,
     pub runner_size: RunnerSize,
 }
@@ -313,6 +283,7 @@ struct PixiNativeEntryRaw {
     url: GithubRepoUrl,
     #[serde(default)]
     rev: Option<Sha40>,
+    // Kept solely to produce a helpful migration-pointer error when `ref:` appears.
     #[serde(default, rename = "ref")]
     git_ref: Option<String>,
     #[serde(default)]
@@ -324,12 +295,23 @@ struct PixiNativeEntryRaw {
 impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
     type Error = anyhow::Error;
     fn try_from(raw: PixiNativeEntryRaw) -> Result<Self, Self::Error> {
-        let version = GitVersion::from_optional(raw.rev, raw.git_ref)
-            .map_err(|e| anyhow::anyhow!("entry {:?}: {e}", raw.name))?;
+        if raw.git_ref.is_some() {
+            anyhow::bail!(
+                "entry {:?}: `ref:` is no longer supported; use `rev:` with a 40-char SHA. \
+                 See ros-recipes/scripts/ for a one-shot migrator.",
+                raw.name
+            );
+        }
+        let rev = raw.rev.ok_or_else(|| {
+            anyhow::anyhow!(
+                "entry {:?}: missing required `rev:` (40-char SHA)",
+                raw.name
+            )
+        })?;
         Ok(Self {
             name: raw.name,
             url: raw.url,
-            version,
+            rev,
             subdir: raw.subdir,
             runner_size: raw.runner_size.unwrap_or_default(),
         })
@@ -362,33 +344,54 @@ impl PixiNativeManifest {
 mod manifest_tests {
     use super::*;
 
-    const FIXTURE: &str = include_str!("../tests/fixtures/pixi_native_packages.yaml");
-
     #[test]
-    fn rejects_entry_with_both_rev_and_ref() {
-        let err = PixiNativeManifest::from_yaml_str(FIXTURE).unwrap_err();
+    fn rejects_ref_entry_with_migration_pointer() {
+        let yaml = r#"
+packages:
+  - name: pkg_with_ref
+    url: https://github.com/example/repo.git
+    ref: main
+"#;
+        let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("pkg_with_both"), "got: {msg}");
-        assert!(msg.contains("both"), "got: {msg}");
+        assert!(msg.contains("pkg_with_ref"), "got: {msg}");
+        assert!(msg.contains("no longer supported"), "got: {msg}");
+        assert!(msg.contains("ros-recipes/scripts"), "got: {msg}");
     }
 
     #[test]
-    fn parses_valid_subset() {
+    fn rejects_missing_rev() {
+        let yaml = r#"
+packages:
+  - name: pkg_without_rev
+    url: https://github.com/example/repo.git
+"#;
+        let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("pkg_without_rev"), "got: {msg}");
+        assert!(msg.contains("rev"), "got: {msg}");
+    }
+
+    #[test]
+    fn parses_valid_entries() {
         let yaml = r#"
 packages:
   - name: pkg_with_rev
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
-  - name: pkg_with_ref
+  - name: pkg_with_subdir
     url: https://github.com/example/repo.git
-    ref: main
+    rev: 4110a9a40736b555c7419119ef6c607951563745
     subdir: packages/inner
     runner-size: 8cpu
 "#;
         let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
         assert_eq!(m.packages.len(), 2);
         assert_eq!(m.packages[0].name, "pkg_with_rev");
-        assert!(matches!(m.packages[0].version, GitVersion::Rev(_)));
+        assert_eq!(
+            m.packages[0].rev.as_str(),
+            "4110a9a40736b555c7419119ef6c607951563745"
+        );
         assert_eq!(m.packages[0].runner_size, RunnerSize::Cpu4);
         assert_eq!(
             m.packages[1].subdir.as_deref(),
