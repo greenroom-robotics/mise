@@ -93,10 +93,131 @@ impl VincaBuildMode {
     }
 }
 
+/// Manipulate the `<repo>/recipes` directory before invoking rattler-build:
+///
+/// 1. Overlay each entry from `<repo>/vendor_recipes/` onto `recipes/`, overwriting
+///    existing dirs (vendor recipes win — they're handrolled and the vinca-generated
+///    versions in `recipes/` are stale).
+/// 2. Remove `recipes/deepstream-mutex` unconditionally (a payload-less noarch
+///    metapackage published by `bootstrap-mutex.yml`; consumed from the channel,
+///    never built here).
+/// 3. Apply the mode-specific filter:
+///    - `Normal` → no further filtering.
+///    - `DropDeepstream { recipes }` → remove each listed recipe dir.
+///    - `DeepstreamOnly { recipes, .. }` → remove every recipe dir whose name is NOT
+///      in the listed set.
+#[allow(dead_code)]
+fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Result<()> {
+    let recipes_dir = repo_root.join("recipes");
+    let vendor_dir = repo_root.join("vendor_recipes");
+
+    if vendor_dir.is_dir() {
+        for entry in
+            fs::read_dir(&vendor_dir).with_context(|| format!("read {}", vendor_dir.display()))?
+        {
+            let entry = entry?;
+            let src = entry.path();
+            let name = entry.file_name();
+            let dst = recipes_dir.join(&name);
+            if dst.exists() {
+                fs::remove_dir_all(&dst).with_context(|| format!("remove {}", dst.display()))?;
+            }
+            copy_dir_all(&src, &dst)
+                .with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+        }
+    }
+
+    // Always drop the mutex metapackage if vinca emitted one.
+    let mutex = recipes_dir.join("deepstream-mutex");
+    if mutex.exists() {
+        fs::remove_dir_all(&mutex).with_context(|| format!("remove {}", mutex.display()))?;
+    }
+
+    match mode {
+        VincaBuildMode::Normal => {}
+        VincaBuildMode::DropDeepstream { recipes } => {
+            for r in recipes {
+                let p = recipes_dir.join(r.as_str());
+                if p.exists() {
+                    fs::remove_dir_all(&p).with_context(|| format!("remove {}", p.display()))?;
+                }
+            }
+        }
+        VincaBuildMode::DeepstreamOnly { recipes, .. } => {
+            let keep: std::collections::HashSet<&str> =
+                recipes.iter().map(|r| r.as_str()).collect();
+            for entry in fs::read_dir(&recipes_dir)
+                .with_context(|| format!("read {}", recipes_dir.display()))?
+            {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if !keep.contains(name_str.as_ref()) {
+                    fs::remove_dir_all(entry.path())
+                        .with_context(|| format!("remove {}", entry.path().display()))?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Recursively copy `src` to `dst`, creating `dst` if needed.
+fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        let to = dst.join(entry.file_name());
+        if ft.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            fs::copy(entry.path(), &to)?;
+        }
+    }
+    Ok(())
+}
+
+use tempfile::NamedTempFile;
+
+/// Write a one-off variants YAML pinning the DS axis (and, for DS 7.1, the gcc
+/// version that nvcc accepts). Returned `NamedTempFile` lives as long as the
+/// caller keeps it; rattler-build reads the path before it's dropped.
+///
+/// `None` means no pin — the caller should pass `variants/deepstream.yaml`
+/// (the full variants file with both DS versions) to rattler-build instead.
+#[allow(dead_code)]
+fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFile> {
+    // rattler-build's `-m` flag takes file paths, not KEY=VALUE. Passing
+    // `variants/deepstream.yaml` would expand over every listed version.
+    // DS 7.1's CUDA 12.6 nvcc rejects host gcc > 13 as -ccbin; DS 8.0 (CUDA
+    // 12.8) accepts gcc 14 — so 7.1 needs an explicit gcc pin alongside.
+    let mut content = format!("deepstream_version:\n  - \"{version}\"\n");
+    if version == DeepstreamVersion::V7_1 {
+        content.push_str("c_compiler_version:\n  - \"13\"\n");
+        content.push_str("cxx_compiler_version:\n  - \"13\"\n");
+    }
+    let mut tf = tempfile::Builder::new()
+        .prefix("ds-pin.")
+        .suffix(".yaml")
+        .tempfile()
+        .context("create temp variants file")?;
+    use std::io::Write;
+    tf.write_all(content.as_bytes())
+        .context("write temp variants file")?;
+    tf.flush().context("flush temp variants file")?;
+    Ok(tf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::str::FromStr;
+    use tempfile::TempDir;
 
     fn recipe(name: &str) -> RecipeName {
         RecipeName::from_str(name).unwrap()
@@ -136,5 +257,137 @@ mod tests {
     fn vinca_mode_rejects_version_without_recipes() {
         let err = VincaBuildMode::from_flags(vec![], Some(DeepstreamVersion::V8_0)).unwrap_err();
         assert!(format!("{err:#}").contains("requires at least one --ds-recipe"));
+    }
+
+    fn write_recipe_dir(parent: &Path, name: &str) {
+        let d = parent.join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("recipe.yaml"), "marker").unwrap();
+    }
+
+    fn make_repo_with_recipes(recipe_names: &[&str], vendor_names: &[&str]) -> TempDir {
+        let td = TempDir::new().unwrap();
+        let recipes = td.path().join("recipes");
+        fs::create_dir_all(&recipes).unwrap();
+        for n in recipe_names {
+            write_recipe_dir(&recipes, n);
+        }
+        if !vendor_names.is_empty() {
+            let vendor = td.path().join("vendor_recipes");
+            fs::create_dir_all(&vendor).unwrap();
+            for n in vendor_names {
+                write_recipe_dir(&vendor, n);
+            }
+        }
+        td
+    }
+
+    fn recipe_names_in(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().unwrap().is_dir())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn apply_filter_overlays_vendor_recipes() {
+        let td = make_repo_with_recipes(&["foo"], &["bar"]);
+        apply_recipe_filter(td.path(), &VincaBuildMode::Normal).unwrap();
+        assert_eq!(
+            recipe_names_in(&td.path().join("recipes")),
+            vec!["bar", "foo"]
+        );
+    }
+
+    #[test]
+    fn apply_filter_overlays_vendor_overwriting() {
+        // recipes/foo exists with content "marker"; vendor_recipes/foo exists too
+        let td = TempDir::new().unwrap();
+        let recipes = td.path().join("recipes");
+        fs::create_dir_all(&recipes).unwrap();
+        write_recipe_dir(&recipes, "foo");
+        fs::write(recipes.join("foo/old.txt"), "old").unwrap();
+        let vendor = td.path().join("vendor_recipes");
+        fs::create_dir_all(&vendor).unwrap();
+        write_recipe_dir(&vendor, "foo");
+        fs::write(vendor.join("foo/new.txt"), "new").unwrap();
+
+        apply_recipe_filter(td.path(), &VincaBuildMode::Normal).unwrap();
+        // After overlay, recipes/foo/new.txt should exist and recipes/foo/old.txt should not.
+        assert!(recipes.join("foo/new.txt").exists());
+        assert!(!recipes.join("foo/old.txt").exists());
+    }
+
+    #[test]
+    fn apply_filter_removes_deepstream_mutex() {
+        let td = make_repo_with_recipes(&["foo", "deepstream-mutex"], &[]);
+        apply_recipe_filter(td.path(), &VincaBuildMode::Normal).unwrap();
+        assert_eq!(recipe_names_in(&td.path().join("recipes")), vec!["foo"]);
+    }
+
+    #[test]
+    fn apply_filter_drop_deepstream_removes_listed() {
+        let td = make_repo_with_recipes(&["foo", "deepstream-a", "deepstream-b"], &[]);
+        apply_recipe_filter(
+            td.path(),
+            &VincaBuildMode::DropDeepstream {
+                recipes: vec![recipe("deepstream-a"), recipe("deepstream-b")],
+            },
+        )
+        .unwrap();
+        assert_eq!(recipe_names_in(&td.path().join("recipes")), vec!["foo"]);
+    }
+
+    #[test]
+    fn apply_filter_deepstream_only_keeps_listed() {
+        let td = make_repo_with_recipes(&["foo", "deepstream-a", "deepstream-b"], &[]);
+        apply_recipe_filter(
+            td.path(),
+            &VincaBuildMode::DeepstreamOnly {
+                recipes: vec![recipe("deepstream-a")],
+                version: DeepstreamVersion::V7_1,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            recipe_names_in(&td.path().join("recipes")),
+            vec!["deepstream-a"]
+        );
+    }
+
+    #[test]
+    fn write_variants_pin_v71_pins_gcc_13() {
+        let tf = write_variants_pin(DeepstreamVersion::V7_1).unwrap();
+        let content = fs::read_to_string(tf.path()).unwrap();
+        assert!(
+            content.contains("deepstream_version:\n  - \"7.1\""),
+            "got: {content}"
+        );
+        assert!(
+            content.contains("c_compiler_version:\n  - \"13\""),
+            "got: {content}"
+        );
+        assert!(
+            content.contains("cxx_compiler_version:\n  - \"13\""),
+            "got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_variants_pin_v80_no_compiler_pin() {
+        let tf = write_variants_pin(DeepstreamVersion::V8_0).unwrap();
+        let content = fs::read_to_string(tf.path()).unwrap();
+        assert!(
+            content.contains("deepstream_version:\n  - \"8.0\""),
+            "got: {content}"
+        );
+        assert!(
+            !content.contains("c_compiler_version"),
+            "should not pin gcc for 8.0: {content}"
+        );
     }
 }
