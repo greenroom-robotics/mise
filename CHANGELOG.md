@@ -1,3 +1,9 @@
+## [1.0.1](https://github.com/greenroom-robotics/mise/compare/mise@1.0.0...mise@1.0.1) (2026-05-19)
+
+### Bug Fixes
+
+* bump commands no longer absorb between-entry blank lines ([4775e8b](https://github.com/greenroom-robotics/mise/commit/4775e8be35605944fa979c67f6d9e38a2981853c))
+
 ## 1.0.0 (2026-05-19)
 
 ### Features
