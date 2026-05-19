@@ -15,7 +15,11 @@ pub enum Arch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct TargetPlatform(pub Arch);
+pub struct TargetPlatform(Arch);
+
+impl TargetPlatform {
+    pub fn arch(&self) -> Arch { self.0 }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DeepstreamVersion {
@@ -25,10 +29,11 @@ pub enum DeepstreamVersion {
     V8_0,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RunnerSize {
     #[serde(rename = "4cpu")]
+    #[default]
     Cpu4,
     #[serde(rename = "8cpu")]
     Cpu8,
@@ -36,10 +41,6 @@ pub enum RunnerSize {
     Cpu16,
     #[serde(rename = "32cpu")]
     Cpu32,
-}
-
-impl Default for RunnerSize {
-    fn default() -> Self { Self::Cpu4 }
 }
 
 impl fmt::Display for Arch {
@@ -153,7 +154,11 @@ impl<'de> Deserialize<'de> for Sha40 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct RecipeName(pub String);
+pub struct RecipeName(String);
+
+impl RecipeName {
+    pub fn as_str(&self) -> &str { &self.0 }
+}
 
 impl fmt::Display for RecipeName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
@@ -169,7 +174,7 @@ impl GithubRepoUrl {
     pub fn parse(url: &str) -> anyhow::Result<Self> {
         static RE: OnceLock<Regex> = OnceLock::new();
         let re = RE.get_or_init(|| {
-            Regex::new(r"^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$").unwrap()
+            Regex::new(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$").unwrap()
         });
         let caps = re.captures(url)
             .ok_or_else(|| anyhow::anyhow!("not a GitHub https URL: {url:?}"))?;
@@ -198,14 +203,6 @@ impl Serialize for GithubRepoUrl {
 pub enum GitVersion {
     Rev(Sha40),
     Ref(String),
-}
-
-#[derive(Deserialize)]
-struct GitVersionRaw {
-    #[serde(default)]
-    rev: Option<Sha40>,
-    #[serde(default, rename = "ref")]
-    git_ref: Option<String>,
 }
 
 impl GitVersion {
@@ -260,6 +257,11 @@ mod newtype_tests {
     #[test]
     fn github_url_rejects_non_github() {
         assert!(GithubRepoUrl::parse("https://gitlab.com/foo/bar").is_err());
+    }
+
+    #[test]
+    fn github_url_rejects_http() {
+        assert!(GithubRepoUrl::parse("http://github.com/foo/bar").is_err());
     }
 
     #[test]
