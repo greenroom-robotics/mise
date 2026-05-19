@@ -569,6 +569,47 @@ fn package_published(
     false
 }
 
+enum CheckOutcome {
+    Build { name: String, version: String },
+    SkipPlatformUnsupported { name: String, version: String },
+    SkipAlreadyPublished { name: String, version: String },
+}
+
+fn check_entry(
+    entry: &PixiNativeEntry,
+    channel_url: &str,
+    target_platform: TargetPlatform,
+) -> anyhow::Result<CheckOutcome> {
+    let pixi_toml_text = fetch_pixi_toml(entry)?;
+    let upstream = UpstreamPixiToml::parse(&pixi_toml_text)
+        .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
+
+    if !upstream.supports_platform(target_platform) {
+        return Ok(CheckOutcome::SkipPlatformUnsupported {
+            name: upstream.package.name,
+            version: upstream.package.version,
+        });
+    }
+
+    if package_published(
+        &upstream.package.name,
+        &upstream.package.version,
+        upstream.build_number(),
+        channel_url,
+        target_platform,
+    ) {
+        return Ok(CheckOutcome::SkipAlreadyPublished {
+            name: upstream.package.name,
+            version: upstream.package.version,
+        });
+    }
+
+    Ok(CheckOutcome::Build {
+        name: upstream.package.name,
+        version: upstream.package.version,
+    })
+}
+
 fn pixi(
     repo_root: Option<PathBuf>,
     channel_url: String,
@@ -591,43 +632,66 @@ fn pixi(
         return Ok(());
     }
 
-    for entry in &manifest.packages {
-        if let Some(filter) = runner_size
-            && entry.runner_size != filter
-        {
-            continue;
+    let filtered: Vec<&PixiNativeEntry> = manifest
+        .packages
+        .iter()
+        .filter(|e| runner_size.is_none_or(|s| e.runner_size == s))
+        .collect();
+
+    if filtered.is_empty() {
+        return Ok(());
+    }
+
+    let channel_url_ref: &str = &channel_url;
+    let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = filtered
+                .iter()
+                .copied()
+                .map(|entry| {
+                    scope.spawn(move || check_entry(entry, channel_url_ref, target_platform))
+                })
+                .collect();
+            filtered
+                .iter()
+                .copied()
+                .zip(handles)
+                .map(|(entry, h)| (entry, h.join().expect("check thread panicked")))
+                .collect()
+        });
+
+    let mut to_build: Vec<&PixiNativeEntry> = Vec::new();
+    let mut build_labels: Vec<String> = Vec::new();
+    for (entry, outcome) in outcomes {
+        match outcome? {
+            CheckOutcome::Build { name, version } => {
+                build_labels.push(format!("{name} {version}"));
+                to_build.push(entry);
+            }
+            CheckOutcome::SkipPlatformUnsupported { name, version } => {
+                tracing::info!(
+                    "skipping {name} {version}: pixi.toml does not list {}",
+                    target_platform.arch(),
+                );
+            }
+            CheckOutcome::SkipAlreadyPublished { name, version } => {
+                tracing::info!("skipping {name} {version}: already in channel {channel_url}");
+            }
         }
+    }
 
-        let pixi_toml_text = fetch_pixi_toml(entry)?;
-        let upstream = UpstreamPixiToml::parse(&pixi_toml_text)
-            .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
+    if to_build.is_empty() {
+        tracing::info!("nothing to build");
+        return Ok(());
+    }
 
-        if !upstream.supports_platform(target_platform) {
-            tracing::info!(
-                "skipping {} {}: pixi.toml does not list {}",
-                upstream.package.name,
-                upstream.package.version,
-                target_platform.arch(),
-            );
-            continue;
-        }
+    tracing::info!(
+        "building {} entries: {}",
+        to_build.len(),
+        build_labels.join(", "),
+    );
 
-        if package_published(
-            &upstream.package.name,
-            &upstream.package.version,
-            upstream.build_number(),
-            &channel_url,
-            target_platform,
-        ) {
-            tracing::info!(
-                "skipping {} {}: already in channel {}",
-                upstream.package.name,
-                upstream.package.version,
-                channel_url,
-            );
-            continue;
-        }
-
+    for entry in to_build {
         let tmp = tempfile::Builder::new()
             .prefix(&format!("pixi-native-{}-", entry.name))
             .tempdir()
