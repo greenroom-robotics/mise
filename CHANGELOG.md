@@ -1,3 +1,9 @@
+## [1.0.3](https://github.com/greenroom-robotics/mise/compare/mise@1.0.2...mise@1.0.3) (2026-05-19)
+
+### Bug Fixes
+
+* trigger ci ([0b62638](https://github.com/greenroom-robotics/mise/commit/0b62638df804a4ac8652f19406a54a41f7590188))
+
 ## [1.0.2](https://github.com/greenroom-robotics/mise/compare/mise@1.0.1...mise@1.0.2) (2026-05-19)
 
 ### Bug Fixes
