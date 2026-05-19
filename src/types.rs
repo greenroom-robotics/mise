@@ -103,9 +103,9 @@ mod enum_tests {
     #[test]
     fn deepstream_version_round_trips_via_serde() {
         let yaml = "\"7.1\"\n";
-        let v: DeepstreamVersion = serde_yaml::from_str(yaml).unwrap();
+        let v: DeepstreamVersion = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(v, DeepstreamVersion::V7_1);
-        let out = serde_yaml::to_string(&DeepstreamVersion::V8_0).unwrap();
+        let out = serde_yaml_ng::to_string(&DeepstreamVersion::V8_0).unwrap();
         assert_eq!(out.trim(), "'8.0'");
     }
 
@@ -116,9 +116,9 @@ mod enum_tests {
 
     #[test]
     fn runner_size_serde() {
-        let v: RunnerSize = serde_yaml::from_str("16cpu").unwrap();
+        let v: RunnerSize = serde_yaml_ng::from_str("16cpu").unwrap();
         assert_eq!(v, RunnerSize::Cpu16);
-        assert!(serde_yaml::from_str::<RunnerSize>("2cpu").is_err());
+        assert!(serde_yaml_ng::from_str::<RunnerSize>("2cpu").is_err());
     }
 }
 
@@ -341,7 +341,7 @@ pub struct PixiNativeManifest {
 
 impl PixiNativeManifest {
     pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
-        let raw: PixiNativeManifestRaw = serde_yaml::from_str(yaml)?;
+        let raw: PixiNativeManifestRaw = serde_yaml_ng::from_str(yaml)?;
         let packages = raw
             .packages
             .into_iter()

@@ -62,7 +62,7 @@ impl Repo {
         let path = self.root.join(".github").join("deepstream-recipes.yaml");
         let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         let raw: DeepstreamRaw =
-            serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+            serde_yaml_ng::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         Ok(DeepstreamCfg {
             recipes: raw.recipes.into_iter().collect(),
             versions: raw.deepstream_versions.into_iter().collect(),
