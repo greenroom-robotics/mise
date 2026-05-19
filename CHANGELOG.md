@@ -1,3 +1,9 @@
+## [1.1.0](https://github.com/greenroom-robotics/mise/compare/mise@1.0.3...mise@1.1.0) (2026-05-19)
+
+### Features
+
+* add parallel package checks ([83ae8ba](https://github.com/greenroom-robotics/mise/commit/83ae8ba7756999bed52bfb3dc7175fe1cb4987ae))
+
 ## [1.0.3](https://github.com/greenroom-robotics/mise/compare/mise@1.0.2...mise@1.0.3) (2026-05-19)
 
 ### Bug Fixes
