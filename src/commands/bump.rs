@@ -118,17 +118,24 @@ pub(crate) fn mutate_recipe_entry(
         .map(|p| header_idx + 1 + p)
         .unwrap_or(lines.len());
 
+    // Trailing blank lines in the range belong to the gap *between* entries, not
+    // to this entry. Walk back so the mutation doesn't absorb them.
+    let mut block_actual_end = block_end;
+    while block_actual_end > header_idx + 1 && lines[block_actual_end - 1].trim().is_empty() {
+        block_actual_end -= 1;
+    }
+
     let mut out: Vec<String> = lines[..=header_idx].iter().map(|s| s.to_string()).collect();
     let mut rev_seen = false;
     let mut version_seen = false;
     // The indent of the first non-blank sub-line is the block's indent.
-    let block_indent = lines[header_idx + 1..block_end]
+    let block_indent = lines[header_idx + 1..block_actual_end]
         .iter()
         .find(|l| !l.trim().is_empty())
         .map(|l| l.len() - l.trim_start().len())
         .unwrap_or(2);
 
-    for line in &lines[header_idx + 1..block_end] {
+    for line in &lines[header_idx + 1..block_actual_end] {
         let trimmed = line.trim_start();
         if trimmed.starts_with("tag:") || trimmed.starts_with("branch:") {
             // drop
@@ -157,6 +164,10 @@ pub(crate) fn mutate_recipe_entry(
         out.push(format!("{}version: {}", " ".repeat(block_indent), version));
     }
 
+    // Preserve the original between-entry blank lines.
+    for line in &lines[block_actual_end..block_end] {
+        out.push(line.to_string());
+    }
     for line in &lines[block_end..] {
         out.push(line.to_string());
     }
@@ -227,11 +238,18 @@ pub(crate) fn mutate_pixi_entry(
             .map(|p| idx + 1 + p)
             .unwrap_or(lines.len());
 
+        // Trailing blank lines in the range belong to the gap *between* entries.
+        // Walk back so the mutation doesn't absorb them into this item.
+        let mut block_actual_end = block_end;
+        while block_actual_end > idx + 1 && lines[block_actual_end - 1].trim().is_empty() {
+            block_actual_end -= 1;
+        }
+
         let mut out: Vec<String> = lines[..=idx].iter().map(|s| s.to_string()).collect();
         let mut url_seen = false;
         let mut rev_seen = false;
         let mut subdir_seen = false;
-        for line in &lines[idx + 1..block_end] {
+        for line in &lines[idx + 1..block_actual_end] {
             let trimmed = line.trim_start();
             if trimmed.starts_with("ref:") {
                 // drop
@@ -264,6 +282,10 @@ pub(crate) fn mutate_pixi_entry(
         }
         if !subdir_seen && let Some(s) = subdir {
             out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+        }
+        // Preserve original between-entry blank lines.
+        for line in &lines[block_actual_end..block_end] {
+            out.push(line.to_string());
         }
         for line in &lines[block_end..] {
             out.push(line.to_string());
@@ -601,6 +623,71 @@ packages:
         .unwrap();
         assert!(out.contains("- name: epsilon"));
         assert!(!out.lines().any(|l| l.trim() == "subdir:"));
+    }
+
+    #[test]
+    fn pixi_preserves_blank_line_between_items() {
+        // After mutating `alpha`, the blank line that originally separated it
+        // from the next item must remain between items, NOT migrate inside
+        // alpha's block.
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "alpha",
+            "https://github.com/example/alpha.git",
+            "7777777777777777777777777777777777777777",
+            None,
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let alpha_idx = lines
+            .iter()
+            .position(|l| l.trim() == "- name: alpha")
+            .unwrap();
+        let beta_idx = lines
+            .iter()
+            .position(|l| l.trim() == "- name: beta")
+            .unwrap();
+        // Inside alpha's block (from header to next blank/item) there must be NO blank line.
+        let alpha_block_end = lines[alpha_idx + 1..beta_idx]
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .map(|p| alpha_idx + 1 + p)
+            .unwrap_or(beta_idx);
+        for line in &lines[alpha_idx + 1..alpha_block_end] {
+            assert!(
+                !line.trim().is_empty(),
+                "alpha block should be contiguous, got blank inside: {out}"
+            );
+        }
+        // And the blank between alpha and beta must still exist.
+        assert!(
+            lines[alpha_block_end..beta_idx]
+                .iter()
+                .any(|l| l.trim().is_empty()),
+            "blank line between items lost: {out}"
+        );
+    }
+
+    #[test]
+    fn recipe_preserves_blank_line_between_entries() {
+        // FIXTURE has a blank line between foo_pkg and bar_pkg.
+        // After bumping foo_pkg, that blank must still exist between them.
+        let out = mutate_recipe_entry(
+            FIXTURE,
+            "foo_pkg",
+            "0.2.0",
+            "8888888888888888888888888888888888888888",
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let foo_idx = lines.iter().position(|l| l.trim() == "foo_pkg:").unwrap();
+        let bar_idx = lines.iter().position(|l| l.trim() == "bar_pkg:").unwrap();
+        assert!(
+            lines[foo_idx + 1..bar_idx]
+                .iter()
+                .any(|l| l.trim().is_empty()),
+            "blank line between foo_pkg and bar_pkg lost: {out}"
+        );
     }
 
     #[test]
