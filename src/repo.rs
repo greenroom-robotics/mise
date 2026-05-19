@@ -31,10 +31,7 @@ impl Repo {
             }
             match cur.parent() {
                 Some(p) => cur = p,
-                None => anyhow::bail!(
-                    "no pixi.toml found walking up from {}",
-                    start.display()
-                ),
+                None => anyhow::bail!("no pixi.toml found walking up from {}", start.display()),
             }
         }
     }
@@ -63,10 +60,9 @@ impl Repo {
 
     pub fn deepstream(&self) -> anyhow::Result<DeepstreamCfg> {
         let path = self.root.join(".github").join("deepstream-recipes.yaml");
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
-        let raw: DeepstreamRaw = serde_yaml::from_str(&text)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+        let raw: DeepstreamRaw =
+            serde_yaml::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         Ok(DeepstreamCfg {
             recipes: raw.recipes.into_iter().collect(),
             versions: raw.deepstream_versions.into_iter().collect(),
@@ -75,8 +71,7 @@ impl Repo {
 
     pub fn pixi_native_manifest(&self) -> anyhow::Result<PixiNativeManifest> {
         let path = self.root.join("pixi_native_packages.yaml");
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         PixiNativeManifest::from_yaml_str(&text)
             .with_context(|| format!("parse {}", path.display()))
     }
@@ -128,15 +123,25 @@ mod tests {
         let gh = td.path().join(".github");
         fs::create_dir_all(&gh).unwrap();
         fs::copy(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/deepstream-recipes.yaml"),
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/deepstream-recipes.yaml"
+            ),
             gh.join("deepstream-recipes.yaml"),
-        ).unwrap();
+        )
+        .unwrap();
         let cfg = repo.deepstream().unwrap();
         assert_eq!(cfg.recipes.len(), 2);
         assert_eq!(cfg.versions.len(), 2);
         assert!(cfg.versions.contains(&DeepstreamVersion::V7_1));
-        assert!(cfg.recipes.contains(&RecipeName::from_str("deepstream-test1").unwrap()));
-        assert!(cfg.recipes.contains(&RecipeName::from_str("deepstream-test2").unwrap()));
+        assert!(
+            cfg.recipes
+                .contains(&RecipeName::from_str("deepstream-test1").unwrap())
+        );
+        assert!(
+            cfg.recipes
+                .contains(&RecipeName::from_str("deepstream-test2").unwrap())
+        );
     }
 
     #[test]

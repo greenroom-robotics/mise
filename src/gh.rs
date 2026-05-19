@@ -29,14 +29,12 @@ impl Event {
         if name == "workflow_dispatch" {
             return Ok(Event::WorkflowDispatch);
         }
-        let path = env::var("GITHUB_EVENT_PATH")
-            .context("GITHUB_EVENT_PATH must be set")?;
+        let path = env::var("GITHUB_EVENT_PATH").context("GITHUB_EVENT_PATH must be set")?;
         Self::load_from(&name, Path::new(&path))
     }
 
     pub fn load_from(name: &str, path: &Path) -> anyhow::Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         Self::from_str_with_kind(name, &text)
     }
 
@@ -44,13 +42,23 @@ impl Event {
         match name {
             "pull_request" => {
                 #[derive(Deserialize)]
-                struct E { pull_request: Pr }
+                struct E {
+                    pull_request: Pr,
+                }
                 #[derive(Deserialize)]
-                struct Pr { base: Side, head: Side }
+                struct Pr {
+                    base: Side,
+                    head: Side,
+                }
                 #[derive(Deserialize)]
-                struct Side { sha: Sha40 }
+                struct Side {
+                    sha: Sha40,
+                }
                 let e: E = serde_json::from_str(json)?;
-                Ok(Event::PullRequest { base: e.pull_request.base.sha, head: e.pull_request.head.sha })
+                Ok(Event::PullRequest {
+                    base: e.pull_request.base.sha,
+                    head: e.pull_request.head.sha,
+                })
             }
             "push" => {
                 #[derive(Deserialize)]
@@ -64,7 +72,10 @@ impl Event {
                 } else {
                     Some(Sha40::new(e.before)?)
                 };
-                Ok(Event::Push { before, after: e.after })
+                Ok(Event::Push {
+                    before,
+                    after: e.after,
+                })
             }
             "workflow_dispatch" => Ok(Event::WorkflowDispatch),
             _ => Ok(Event::Other),
@@ -81,7 +92,10 @@ pub enum ChangedFiles {
 pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles> {
     let range = match event {
         Event::PullRequest { base, head } => format!("{base}...{head}"),
-        Event::Push { before: Some(b), after } => format!("{b}..{after}"),
+        Event::Push {
+            before: Some(b),
+            after,
+        } => format!("{b}..{after}"),
         _ => return Ok(ChangedFiles::All),
     };
     let out = Command::new("git")
@@ -104,9 +118,13 @@ pub mod outputs {
 
     /// Append `key=value` to `$GITHUB_OUTPUT`. No-op when unset.
     pub fn set(key: &str, value: &impl Display) -> anyhow::Result<()> {
-        let Some(path) = env::var_os("GITHUB_OUTPUT") else { return Ok(()); };
+        let Some(path) = env::var_os("GITHUB_OUTPUT") else {
+            return Ok(());
+        };
         let mut f = fs::OpenOptions::new()
-            .create(true).append(true).open(&path)
+            .create(true)
+            .append(true)
+            .open(&path)
             .with_context(|| format!("open $GITHUB_OUTPUT ({})", Path::new(&path).display()))?;
         writeln!(f, "{key}={value}").context("write $GITHUB_OUTPUT line")?;
         Ok(())
@@ -122,7 +140,9 @@ mod tests {
     fn parses_pull_request_event() {
         let json = include_str!("../tests/fixtures/event_pull_request.json");
         let e = Event::from_str_with_kind("pull_request", json).unwrap();
-        let Event::PullRequest { base, head } = e else { panic!("expected PR") };
+        let Event::PullRequest { base, head } = e else {
+            panic!("expected PR")
+        };
         assert_eq!(base.as_str(), "0000000000000000000000000000000000000001");
         assert_eq!(head.as_str(), "0000000000000000000000000000000000000002");
     }
@@ -131,8 +151,13 @@ mod tests {
     fn parses_push_event() {
         let json = include_str!("../tests/fixtures/event_push.json");
         let e = Event::from_str_with_kind("push", json).unwrap();
-        let Event::Push { before, after } = e else { panic!("expected Push") };
-        assert_eq!(before.unwrap().as_str(), "0000000000000000000000000000000000000003");
+        let Event::Push { before, after } = e else {
+            panic!("expected Push")
+        };
+        assert_eq!(
+            before.unwrap().as_str(),
+            "0000000000000000000000000000000000000003"
+        );
         assert_eq!(after.as_str(), "0000000000000000000000000000000000000004");
     }
 
@@ -140,7 +165,9 @@ mod tests {
     fn parses_push_event_with_zero_before() {
         let json = r#"{"before":"0000000000000000000000000000000000000000","after":"0000000000000000000000000000000000000004"}"#;
         let e = Event::from_str_with_kind("push", json).unwrap();
-        let Event::Push { before, .. } = e else { panic!() };
+        let Event::Push { before, .. } = e else {
+            panic!()
+        };
         assert!(before.is_none());
     }
 
@@ -162,17 +189,23 @@ mod tests {
     fn outputs_set_writes_line() {
         let tmp = NamedTempFile::new().unwrap();
         // SAFETY: single-threaded test (run with --test-threads=1)
-        unsafe { env::set_var("GITHUB_OUTPUT", tmp.path()); }
+        unsafe {
+            env::set_var("GITHUB_OUTPUT", tmp.path());
+        }
         outputs::set("foo", &"bar").unwrap();
         outputs::set("count", &7u32).unwrap();
         let contents = fs::read_to_string(tmp.path()).unwrap();
         assert_eq!(contents, "foo=bar\ncount=7\n");
-        unsafe { env::remove_var("GITHUB_OUTPUT"); }
+        unsafe {
+            env::remove_var("GITHUB_OUTPUT");
+        }
     }
 
     #[test]
     fn outputs_set_is_noop_when_env_unset() {
-        unsafe { env::remove_var("GITHUB_OUTPUT"); }
+        unsafe {
+            env::remove_var("GITHUB_OUTPUT");
+        }
         outputs::set("foo", &"bar").unwrap(); // no panic, no file
     }
 }

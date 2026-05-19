@@ -28,15 +28,23 @@ fn run_inner(prog: &str, args: &[&str], cwd: Option<&Path>) -> anyhow::Result<()
     Ok(())
 }
 
-pub fn git(args: &[&str]) -> anyhow::Result<()> { run("git", args) }
+pub fn git(args: &[&str]) -> anyhow::Result<()> {
+    run("git", args)
+}
 pub fn pixi_run(args: &[&str]) -> anyhow::Result<()> {
     let mut all = vec!["run"];
     all.extend_from_slice(args);
     run("pixi", &all)
 }
-pub fn rattler_build(args: &[&str]) -> anyhow::Result<()> { pixi_run(&[&["rattler-build"], args].concat()) }
-pub fn vinca(args: &[&str]) -> anyhow::Result<()> { pixi_run(&[&["vinca"], args].concat()) }
-pub fn gh_cli(args: &[&str]) -> anyhow::Result<()> { run("gh", args) }
+pub fn rattler_build(args: &[&str]) -> anyhow::Result<()> {
+    pixi_run(&[&["rattler-build"], args].concat())
+}
+pub fn vinca(args: &[&str]) -> anyhow::Result<()> {
+    pixi_run(&[&["vinca"], args].concat())
+}
+pub fn gh_cli(args: &[&str]) -> anyhow::Result<()> {
+    run("gh", args)
+}
 
 #[cfg(test)]
 mod tests {

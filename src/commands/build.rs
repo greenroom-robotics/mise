@@ -46,7 +46,9 @@ impl Build {
         match self {
             Self::Vinca { .. } => anyhow::bail!("build vinca: not implemented"),
             Self::Pixi { .. } => anyhow::bail!("build pixi: not implemented"),
-            Self::DeepstreamContainer { .. } => anyhow::bail!("build deepstream-container: not implemented"),
+            Self::DeepstreamContainer { .. } => {
+                anyhow::bail!("build deepstream-container: not implemented")
+            }
         }
     }
 }

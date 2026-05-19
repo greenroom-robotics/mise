@@ -5,15 +5,9 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 pub enum Bump {
     /// Bump a recipe entry's version.
-    Recipe {
-        recipe: String,
-        version: String,
-    },
+    Recipe { recipe: String, version: String },
     /// Bump a pixi-native package entry's rev or ref.
-    Pixi {
-        name: String,
-        rev_or_ref: String,
-    },
+    Pixi { name: String, rev_or_ref: String },
     /// Route a dispatch payload to the appropriate bump subcommand.
     Route {
         #[arg(long)]

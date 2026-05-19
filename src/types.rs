@@ -18,7 +18,9 @@ pub enum Arch {
 pub struct TargetPlatform(Arch);
 
 impl TargetPlatform {
-    pub fn arch(&self) -> Arch { self.0 }
+    pub fn arch(&self) -> Arch {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -138,11 +140,15 @@ impl Sha40 {
         Ok(Self(s))
     }
 
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for Sha40 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl<'de> Deserialize<'de> for Sha40 {
@@ -157,11 +163,15 @@ impl<'de> Deserialize<'de> for Sha40 {
 pub struct RecipeName(String);
 
 impl RecipeName {
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for RecipeName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(&self.0) }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -176,7 +186,8 @@ impl GithubRepoUrl {
         let re = RE.get_or_init(|| {
             Regex::new(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$").unwrap()
         });
-        let caps = re.captures(url)
+        let caps = re
+            .captures(url)
             .ok_or_else(|| anyhow::anyhow!("not a GitHub https URL: {url:?}"))?;
         Ok(Self {
             owner: caps[1].to_string(),
@@ -210,8 +221,12 @@ impl GitVersion {
         match (rev, git_ref) {
             (Some(r), None) => Ok(Self::Rev(r)),
             (None, Some(r)) => Ok(Self::Ref(r)),
-            (Some(_), Some(_)) => anyhow::bail!("entry has both `rev` and `ref`; exactly one is required"),
-            (None, None) => anyhow::bail!("entry has neither `rev` nor `ref`; exactly one is required"),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("entry has both `rev` and `ref`; exactly one is required")
+            }
+            (None, None) => {
+                anyhow::bail!("entry has neither `rev` nor `ref`; exactly one is required")
+            }
         }
     }
 }
@@ -327,7 +342,9 @@ pub struct PixiNativeManifest {
 impl PixiNativeManifest {
     pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
         let raw: PixiNativeManifestRaw = serde_yaml::from_str(yaml)?;
-        let packages = raw.packages.into_iter()
+        let packages = raw
+            .packages
+            .into_iter()
             .map(PixiNativeEntry::try_from)
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok(Self { packages })
@@ -366,7 +383,10 @@ packages:
         assert_eq!(m.packages[0].name, "pkg_with_rev");
         assert!(matches!(m.packages[0].version, GitVersion::Rev(_)));
         assert_eq!(m.packages[0].runner_size, RunnerSize::Cpu4);
-        assert_eq!(m.packages[1].subdir.as_deref(), Some(std::path::Path::new("packages/inner")));
+        assert_eq!(
+            m.packages[1].subdir.as_deref(),
+            Some(std::path::Path::new("packages/inner"))
+        );
         assert_eq!(m.packages[1].runner_size, RunnerSize::Cpu8);
     }
 }
@@ -380,9 +400,13 @@ impl FromStr for TargetPlatform {
 
 impl FromStr for RecipeName {
     type Err = std::convert::Infallible;
-    fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Self(s.to_string())) }
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.to_string()))
+    }
 }
 
 impl Default for TargetPlatform {
-    fn default() -> Self { Self(Arch::Linux64) }
+    fn default() -> Self {
+        Self(Arch::Linux64)
+    }
 }
