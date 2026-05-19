@@ -366,9 +366,15 @@ pub(crate) struct UpstreamPackage {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpstreamBuild {
-    /// Defaults to 0 when omitted from the upstream pixi.toml.
     #[serde(default)]
-    pub number: u64,
+    pub config: Option<UpstreamBuildConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpstreamBuildConfig {
+    /// Defaults to 0 when omitted from the upstream pixi.toml.
+    #[serde(default, rename = "build-number")]
+    pub build_number: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,7 +389,12 @@ impl UpstreamPixiToml {
     }
 
     pub fn build_number(&self) -> u64 {
-        self.package.build.as_ref().map(|b| b.number).unwrap_or(0)
+        self.package
+            .build
+            .as_ref()
+            .and_then(|b| b.config.as_ref())
+            .map(|c| c.build_number)
+            .unwrap_or(0)
     }
 
     /// `true` if the workspace's `platforms` list is empty or contains `target`.
@@ -925,8 +936,8 @@ version = "1.2.3"
 name = "foo"
 version = "1.2.3"
 
-[package.build]
-number = 5
+[package.build.config]
+build-number = 5
 "#;
         let p = UpstreamPixiToml::parse(text).unwrap();
         assert_eq!(p.build_number(), 5);
