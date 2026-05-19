@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::gh::ChangedFiles;
 use crate::repo::DeepstreamCfg;
-use crate::types::{Arch, DeepstreamVersion};
+use crate::types::{Arch, DeepstreamVersion, PixiNativeManifest, RunnerSize};
 
 const GLOBAL_VINCA: &[&str] = &[
     "vinca.yaml",
@@ -23,6 +23,33 @@ const GLOBAL_BOTH_PREFIXES: &[&str] = &[
     ".github/actions/",
     "scripts/",
 ];
+
+/// The two archs and their default runner template (used by the vinca pipeline).
+const ARCHS: &[(Arch, &str)] = &[
+    (Arch::Linux64, "runs-on={run_id}/runner=4cpu-linux-x64"),
+    (Arch::LinuxAarch64, "runs-on={run_id}/runner=4cpu-linux-arm64"),
+];
+
+fn ds_runner_family(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Linux64 => "c6id.xlarge",
+        Arch::LinuxAarch64 => "c7gd.xlarge",
+    }
+}
+
+fn ds_arch_tag(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Linux64 => "x64",
+        Arch::LinuxAarch64 => "arm64",
+    }
+}
+
+fn ds_image_for(version: DeepstreamVersion) -> &'static str {
+    match version {
+        DeepstreamVersion::V7_1 => "nvcr.io/nvidia/deepstream:7.1-triton-multiarch",
+        DeepstreamVersion::V8_0 => "nvcr.io/nvidia/deepstream:8.0-triton-multiarch",
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub enum Matrix {
@@ -141,6 +168,78 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
     }
 
     state
+}
+
+#[allow(dead_code)]
+fn build_matrix(
+    state: &MatrixState,
+    manifest: &PixiNativeManifest,
+    run_id: &str,
+) -> Vec<MatrixEntry> {
+    let mut out = Vec::new();
+
+    if state.vinca {
+        for (arch, runner_tmpl) in ARCHS {
+            out.push(MatrixEntry {
+                pipeline: Pipeline::Vinca,
+                target_platform: *arch,
+                ds_version: String::new(),
+                ds_image: String::new(),
+                runner: runner_tmpl.replace("{run_id}", run_id),
+                runner_size: String::new(),
+                artifact_name: format!("build-{arch}"),
+            });
+        }
+    }
+
+    if state.pixi_native {
+        let mut sizes: BTreeSet<RunnerSize> = BTreeSet::new();
+        for entry in &manifest.packages {
+            sizes.insert(entry.runner_size);
+        }
+        for size in sizes {
+            let size_str = runner_size_str(size);
+            for (arch, _) in ARCHS {
+                let tag = ds_arch_tag(*arch);
+                out.push(MatrixEntry {
+                    pipeline: Pipeline::PixiNative,
+                    target_platform: *arch,
+                    ds_version: String::new(),
+                    ds_image: String::new(),
+                    runner: format!("runs-on={run_id}/runner={size_str}-linux-{tag}"),
+                    runner_size: size_str.to_string(),
+                    artifact_name: format!("build-pixi-native-{arch}-{size_str}"),
+                });
+            }
+        }
+    }
+
+    for ver in &state.ds_versions {
+        for (arch, _) in ARCHS {
+            let tag = ds_arch_tag(*arch);
+            let family = ds_runner_family(*arch);
+            out.push(MatrixEntry {
+                pipeline: Pipeline::Vinca,
+                target_platform: *arch,
+                ds_version: ver.to_string(),
+                ds_image: ds_image_for(*ver).to_string(),
+                runner: format!("runs-on={run_id}/family={family}/image=deepstream-{tag}-{ver}"),
+                runner_size: String::new(),
+                artifact_name: format!("build-deepstream-{arch}-ds{ver}"),
+            });
+        }
+    }
+
+    out
+}
+
+fn runner_size_str(size: RunnerSize) -> &'static str {
+    match size {
+        RunnerSize::Cpu4 => "4cpu",
+        RunnerSize::Cpu8 => "8cpu",
+        RunnerSize::Cpu16 => "16cpu",
+        RunnerSize::Cpu32 => "32cpu",
+    }
 }
 
 #[cfg(test)]
@@ -290,5 +389,98 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["README.md", "docs/some-doc.md"]), &ds);
         assert_eq!(s, MatrixState::default());
+    }
+
+    use crate::types::{GitVersion, PixiNativeEntry, PixiNativeManifest, Sha40};
+
+    fn empty_manifest() -> PixiNativeManifest {
+        PixiNativeManifest { packages: vec![] }
+    }
+
+    fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
+        let url = crate::types::GithubRepoUrl::parse("https://github.com/x/y").unwrap();
+        let sha = Sha40::new("4110a9a40736b555c7419119ef6c607951563745").unwrap();
+        let packages = sizes.iter().enumerate().map(|(i, size)| PixiNativeEntry {
+            name: format!("pkg{i}"),
+            url: url.clone(),
+            version: GitVersion::Rev(sha.clone()),
+            subdir: None,
+            runner_size: *size,
+        }).collect();
+        PixiNativeManifest { packages }
+    }
+
+    #[test]
+    fn build_matrix_empty_state_yields_nothing() {
+        let state = MatrixState::default();
+        let out = build_matrix(&state, &empty_manifest(), "RUN");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn build_matrix_vinca_only_produces_two_arches() {
+        let state = MatrixState { vinca: true, ..Default::default() };
+        let out = build_matrix(&state, &empty_manifest(), "RUN");
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|e| e.pipeline == Pipeline::Vinca && e.ds_version.is_empty()));
+        assert!(out.iter().any(|e| e.target_platform == Arch::Linux64));
+        assert!(out.iter().any(|e| e.target_platform == Arch::LinuxAarch64));
+        assert!(out[0].runner.contains("RUN"));
+    }
+
+    #[test]
+    fn build_matrix_pixi_native_groups_by_size() {
+        let state = MatrixState { pixi_native: true, ..Default::default() };
+        let manifest = manifest_with_sizes(&[
+            RunnerSize::Cpu4, RunnerSize::Cpu4, RunnerSize::Cpu8,
+        ]);
+        let out = build_matrix(&state, &manifest, "RUN");
+        // Two unique sizes (4, 8) × 2 arches = 4 entries
+        assert_eq!(out.len(), 4);
+        assert!(out.iter().all(|e| e.pipeline == Pipeline::PixiNative));
+        let mut sizes: Vec<&str> = out.iter().map(|e| e.runner_size.as_str()).collect();
+        sizes.sort();
+        sizes.dedup();
+        assert_eq!(sizes, vec!["4cpu", "8cpu"]);
+    }
+
+    #[test]
+    fn build_matrix_pixi_native_uses_correct_arch_tag() {
+        let state = MatrixState { pixi_native: true, ..Default::default() };
+        let manifest = manifest_with_sizes(&[RunnerSize::Cpu4]);
+        let out = build_matrix(&state, &manifest, "RUN");
+        let x64 = out.iter().find(|e| e.target_platform == Arch::Linux64).unwrap();
+        let arm = out.iter().find(|e| e.target_platform == Arch::LinuxAarch64).unwrap();
+        assert!(x64.runner.contains("4cpu-linux-x64"));
+        assert!(arm.runner.contains("4cpu-linux-arm64"));
+    }
+
+    #[test]
+    fn build_matrix_ds_versions_produce_per_arch_rows() {
+        let mut state = MatrixState::default();
+        state.ds_versions.insert(DeepstreamVersion::V7_1);
+        state.ds_versions.insert(DeepstreamVersion::V8_0);
+        let out = build_matrix(&state, &empty_manifest(), "RUN");
+        assert_eq!(out.len(), 4);
+        let v71_x64 = out.iter().find(|e| e.ds_version == "7.1" && e.target_platform == Arch::Linux64).unwrap();
+        assert_eq!(v71_x64.ds_image, "nvcr.io/nvidia/deepstream:7.1-triton-multiarch");
+        assert!(v71_x64.runner.contains("family=c6id.xlarge"));
+        assert!(v71_x64.runner.contains("deepstream-x64-7.1"));
+        let v80_arm = out.iter().find(|e| e.ds_version == "8.0" && e.target_platform == Arch::LinuxAarch64).unwrap();
+        assert!(v80_arm.runner.contains("family=c7gd.xlarge"));
+        assert!(v80_arm.runner.contains("deepstream-arm64-8.0"));
+    }
+
+    #[test]
+    fn build_matrix_ds_versions_sorted_ascending() {
+        let mut state = MatrixState::default();
+        state.ds_versions.insert(DeepstreamVersion::V8_0);
+        state.ds_versions.insert(DeepstreamVersion::V7_1);
+        let out = build_matrix(&state, &empty_manifest(), "RUN");
+        // First 2 entries should be 7.1, last 2 should be 8.0
+        assert_eq!(out[0].ds_version, "7.1");
+        assert_eq!(out[1].ds_version, "7.1");
+        assert_eq!(out[2].ds_version, "8.0");
+        assert_eq!(out[3].ds_version, "8.0");
     }
 }
