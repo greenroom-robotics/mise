@@ -121,12 +121,17 @@ pub mod outputs {
         let Some(path) = env::var_os("GITHUB_OUTPUT") else {
             return Ok(());
         };
+        let formatted = format!("{value}");
+        anyhow::ensure!(
+            !formatted.contains('\n'),
+            "outputs::set value must not contain newlines (multiline values need the heredoc format); key={key}"
+        );
         let mut f = fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .with_context(|| format!("open $GITHUB_OUTPUT ({})", Path::new(&path).display()))?;
-        writeln!(f, "{key}={value}").context("write $GITHUB_OUTPUT line")?;
+        writeln!(f, "{key}={formatted}").context("write $GITHUB_OUTPUT line")?;
         Ok(())
     }
 }
@@ -207,5 +212,18 @@ mod tests {
             env::remove_var("GITHUB_OUTPUT");
         }
         outputs::set("foo", &"bar").unwrap(); // no panic, no file
+    }
+
+    #[test]
+    fn outputs_set_rejects_multiline_value() {
+        let tmp = NamedTempFile::new().unwrap();
+        unsafe {
+            env::set_var("GITHUB_OUTPUT", tmp.path());
+        }
+        let err = outputs::set("k", &"line1\nline2").unwrap_err();
+        assert!(format!("{err:#}").contains("newlines"));
+        unsafe {
+            env::remove_var("GITHUB_OUTPUT");
+        }
     }
 }
