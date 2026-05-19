@@ -1,0 +1,13 @@
+packages:
+  - name: pkg_with_rev
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+  - name: pkg_with_ref
+    url: https://github.com/example/repo.git
+    ref: main
+    subdir: packages/inner
+    runner-size: 8cpu
+  - name: pkg_with_both
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+    ref: main
