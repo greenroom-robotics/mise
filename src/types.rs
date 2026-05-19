@@ -437,7 +437,9 @@ impl FromStr for RunnerSize {
             "8cpu" => Ok(Self::Cpu8),
             "16cpu" => Ok(Self::Cpu16),
             "32cpu" => Ok(Self::Cpu32),
-            other => anyhow::bail!("unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"),
+            other => anyhow::bail!(
+                "unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"
+            ),
         }
     }
 }

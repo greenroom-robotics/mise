@@ -317,6 +317,66 @@ fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFil
     Ok(tf)
 }
 
+use serde::Deserialize;
+
+/// Subset of `pixi.toml` consumed by build pixi.
+/// Only the fields we read are listed; serde ignores the rest.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)] // wired up in Task 4 (pixi() orchestrator)
+pub(crate) struct UpstreamPixiToml {
+    pub package: UpstreamPackage,
+    #[serde(default)]
+    pub workspace: Option<UpstreamWorkspace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct UpstreamPackage {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub build: Option<UpstreamBuild>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct UpstreamBuild {
+    /// Defaults to 0 when omitted from the upstream pixi.toml.
+    #[serde(default)]
+    pub number: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct UpstreamWorkspace {
+    #[serde(default)]
+    pub platforms: Vec<String>,
+}
+
+#[allow(dead_code)]
+impl UpstreamPixiToml {
+    pub fn parse(text: &str) -> anyhow::Result<Self> {
+        toml::from_str(text).context("parse upstream pixi.toml")
+    }
+
+    pub fn build_number(&self) -> u64 {
+        self.package.build.as_ref().map(|b| b.number).unwrap_or(0)
+    }
+
+    /// `true` if the workspace's `platforms` list is empty or contains `target`.
+    /// Empty list is treated as "no explicit restriction" (build everywhere).
+    pub fn supports_platform(&self, target: TargetPlatform) -> bool {
+        let Some(ws) = &self.workspace else {
+            return true;
+        };
+        if ws.platforms.is_empty() {
+            return true;
+        }
+        let target_str = target.arch().to_string();
+        ws.platforms.iter().any(|p| p == &target_str)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +571,75 @@ mod tests {
             }),
             Some(DeepstreamVersion::V8_0),
         );
+    }
+
+    #[test]
+    fn upstream_pixi_toml_parses_minimal() {
+        let text = r#"
+[package]
+name = "foo"
+version = "1.2.3"
+"#;
+        let p = UpstreamPixiToml::parse(text).unwrap();
+        assert_eq!(p.package.name, "foo");
+        assert_eq!(p.package.version, "1.2.3");
+        assert_eq!(p.build_number(), 0);
+    }
+
+    #[test]
+    fn upstream_pixi_toml_parses_build_number() {
+        let text = r#"
+[package]
+name = "foo"
+version = "1.2.3"
+
+[package.build]
+number = 5
+"#;
+        let p = UpstreamPixiToml::parse(text).unwrap();
+        assert_eq!(p.build_number(), 5);
+    }
+
+    #[test]
+    fn upstream_pixi_toml_supports_platform_when_empty() {
+        let text = r#"
+[package]
+name = "foo"
+version = "1.0"
+"#;
+        let p = UpstreamPixiToml::parse(text).unwrap();
+        assert!(p.supports_platform(TargetPlatform::default()));
+    }
+
+    #[test]
+    fn upstream_pixi_toml_respects_platforms_list() {
+        let text = r#"
+[package]
+name = "foo"
+version = "1.0"
+
+[workspace]
+platforms = ["linux-64"]
+"#;
+        let p = UpstreamPixiToml::parse(text).unwrap();
+        assert!(p.supports_platform(TargetPlatform::default()));
+        let aarch = TargetPlatform::from_str("linux-aarch64").unwrap();
+        assert!(!p.supports_platform(aarch));
+    }
+
+    #[test]
+    fn upstream_pixi_toml_ignores_unknown_keys() {
+        let text = r#"
+[package]
+name = "foo"
+version = "1.0"
+
+[tasks]
+ci = "test"
+
+[dependencies]
+something = "1"
+"#;
+        UpstreamPixiToml::parse(text).unwrap();
     }
 }
