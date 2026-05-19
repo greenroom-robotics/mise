@@ -44,12 +44,109 @@ pub enum Build {
 impl Build {
     pub fn run(self) -> anyhow::Result<()> {
         match self {
-            Self::Vinca { .. } => anyhow::bail!("build vinca: not implemented"),
+            Self::Vinca {
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                ds_recipes,
+                ds_version,
+            } => vinca(
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                ds_recipes,
+                ds_version,
+            ),
             Self::Pixi { .. } => anyhow::bail!("build pixi: not implemented"),
             Self::DeepstreamContainer { .. } => {
                 anyhow::bail!("build deepstream-container: not implemented")
             }
         }
+    }
+}
+
+use crate::process;
+use crate::repo::Repo;
+
+fn vinca(
+    repo_root: Option<PathBuf>,
+    channel_url: String,
+    output_dir: PathBuf,
+    target_platform: TargetPlatform,
+    ds_recipes: Vec<RecipeName>,
+    ds_version: Option<DeepstreamVersion>,
+) -> anyhow::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+    let mode = VincaBuildMode::from_flags(ds_recipes, ds_version)?;
+
+    let abs_output = if output_dir.is_absolute() {
+        output_dir
+    } else {
+        repo.root().join(&output_dir)
+    };
+    fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
+
+    let arch_str = target_platform.arch().to_string();
+
+    // 1. Generate `./recipes/` from vinca.yaml.
+    process::run_in(
+        repo.root(),
+        "pixi",
+        &["run", "vinca", "-m", "--platform", &arch_str],
+    )?;
+
+    // 2. Manipulate recipes/ per mode.
+    apply_recipe_filter(repo.root(), &mode)?;
+
+    // 3. Prepare variants args (and hold any temp file alive for the duration).
+    let mut variant_args: Vec<String> = vec!["-m".into(), "conda_build_config.yaml".into()];
+    let _pin = if let Some(v) = mode_version(&mode) {
+        let tf = write_variants_pin(v)?;
+        variant_args.push("-m".into());
+        variant_args.push(tf.path().to_string_lossy().into_owned());
+        Some(tf)
+    } else {
+        variant_args.push("-m".into());
+        variant_args.push("variants/deepstream.yaml".into());
+        None
+    };
+
+    // 4. Build.
+    let abs_output_str = abs_output.to_string_lossy().into_owned();
+    let mut args: Vec<&str> = vec![
+        "run",
+        "rattler-build",
+        "build",
+        "--recipe-dir",
+        "./recipes",
+        "--target-platform",
+        &arch_str,
+    ];
+    for a in &variant_args {
+        args.push(a);
+    }
+    args.extend_from_slice(&[
+        "-c",
+        &channel_url,
+        "-c",
+        "https://prefix.dev/robostack-kilted",
+        "-c",
+        "https://prefix.dev/conda-forge",
+        "--skip-existing=all",
+        "--output-dir",
+        &abs_output_str,
+    ]);
+    process::run_in(repo.root(), "pixi", &args)?;
+
+    Ok(())
+}
+
+fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
+    match mode {
+        VincaBuildMode::DeepstreamOnly { version, .. } => Some(*version),
+        _ => None,
     }
 }
 
@@ -106,7 +203,6 @@ impl VincaBuildMode {
 ///    - `DropDeepstream { recipes }` → remove each listed recipe dir.
 ///    - `DeepstreamOnly { recipes, .. }` → remove every recipe dir whose name is NOT
 ///      in the listed set.
-#[allow(dead_code)]
 fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Result<()> {
     let recipes_dir = repo_root.join("recipes");
     let vendor_dir = repo_root.join("vendor_recipes");
@@ -190,7 +286,6 @@ use tempfile::NamedTempFile;
 ///
 /// `None` means no pin — the caller should pass `variants/deepstream.yaml`
 /// (the full variants file with both DS versions) to rattler-build instead.
-#[allow(dead_code)]
 fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFile> {
     // rattler-build's `-m` flag takes file paths, not KEY=VALUE. Passing
     // `variants/deepstream.yaml` would expand over every listed version.
@@ -388,6 +483,24 @@ mod tests {
         assert!(
             !content.contains("c_compiler_version"),
             "should not pin gcc for 8.0: {content}"
+        );
+    }
+
+    #[test]
+    fn mode_version_extracts_from_deepstream_only() {
+        assert_eq!(mode_version(&VincaBuildMode::Normal), None);
+        assert_eq!(
+            mode_version(&VincaBuildMode::DropDeepstream {
+                recipes: vec![recipe("a")]
+            }),
+            None,
+        );
+        assert_eq!(
+            mode_version(&VincaBuildMode::DeepstreamOnly {
+                recipes: vec![recipe("a")],
+                version: DeepstreamVersion::V8_0,
+            }),
+            Some(DeepstreamVersion::V8_0),
         );
     }
 }

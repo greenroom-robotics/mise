@@ -96,19 +96,27 @@ fn matrix_compute_workflow_dispatch_produces_matrix() {
 }
 
 #[test]
-fn build_vinca_with_args_stub_bails() {
+fn build_vinca_rejects_ds_version_without_recipe() {
+    // VincaBuildMode::from_flags rejects --ds-version without any --ds-recipe.
+    // The command fails before any subprocess is spawned.
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
     mise()
         .args([
             "build",
             "vinca",
+            "--repo-root",
+            td.path().to_str().unwrap(),
             "--channel-url",
-            "x",
+            "https://example.com/channel",
             "--ds-version",
             "7.1",
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("not implemented"));
+        .stderr(predicate::str::contains(
+            "requires at least one --ds-recipe",
+        ));
 }
 
 #[test]
