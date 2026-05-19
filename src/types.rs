@@ -23,7 +23,7 @@ impl TargetPlatform {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum DeepstreamVersion {
     #[serde(rename = "7.1")]
     V7_1,
@@ -119,6 +119,11 @@ mod enum_tests {
         let v: RunnerSize = serde_yaml_ng::from_str("16cpu").unwrap();
         assert_eq!(v, RunnerSize::Cpu16);
         assert!(serde_yaml_ng::from_str::<RunnerSize>("2cpu").is_err());
+    }
+
+    #[test]
+    fn deepstream_version_ord_is_ascending() {
+        assert!(DeepstreamVersion::V7_1 < DeepstreamVersion::V8_0);
     }
 }
 
