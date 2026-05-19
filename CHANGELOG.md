@@ -1,3 +1,9 @@
+## [1.0.2](https://github.com/greenroom-robotics/mise/compare/mise@1.0.1...mise@1.0.2) (2026-05-19)
+
+### Bug Fixes
+
+* get proper build-number ([0256e66](https://github.com/greenroom-robotics/mise/commit/0256e66941e4da08c536368ac889ff47d00bc25f))
+
 ## [1.0.1](https://github.com/greenroom-robotics/mise/compare/mise@1.0.0...mise@1.0.1) (2026-05-19)
 
 ### Bug Fixes
