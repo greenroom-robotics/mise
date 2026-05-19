@@ -156,6 +156,22 @@ fn invalid_arch_rejected_at_parse_time() {
 }
 
 #[test]
+fn build_deepstream_container_requires_recipe() {
+    mise()
+        .args([
+            "build",
+            "deepstream-container",
+            "--channel-url",
+            "https://example.com/channel",
+            "--ds-version",
+            "7.1",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--ds-recipe"));
+}
+
+#[test]
 fn invalid_deepstream_version_rejected_at_parse_time() {
     mise()
         .args([

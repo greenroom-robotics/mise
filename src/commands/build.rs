@@ -35,12 +35,22 @@ pub enum Build {
         #[arg(long)]
         runner_size: Option<RunnerSize>,
     },
-    /// Build inside a DeepStream container.
+    /// Run a vinca build inside a DeepStream container. Does container-side prep
+    /// (git auth, cache cleanup, `pixi install`) and delegates to `build vinca`
+    /// with `--ds-version` and the recipe list pinned.
     DeepstreamContainer {
         #[arg(long)]
-        ds_version: DeepstreamVersion,
+        repo_root: Option<PathBuf>,
         #[arg(long)]
+        channel_url: String,
+        #[arg(long, default_value = "./conda-bld")]
+        output_dir: PathBuf,
+        #[arg(long, default_value = "linux-64")]
         target_platform: TargetPlatform,
+        #[arg(long = "ds-recipe", required = true)]
+        ds_recipes: Vec<RecipeName>,
+        #[arg(long)]
+        ds_version: DeepstreamVersion,
     },
 }
 
@@ -75,9 +85,21 @@ impl Build {
                 target_platform,
                 runner_size,
             ),
-            Self::DeepstreamContainer { .. } => {
-                anyhow::bail!("build deepstream-container: not implemented")
-            }
+            Self::DeepstreamContainer {
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                ds_recipes,
+                ds_version,
+            } => deepstream_container(
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                ds_recipes,
+                ds_version,
+            ),
         }
     }
 }
@@ -630,6 +652,59 @@ fn pixi(
             ],
         )?;
     }
+
+    Ok(())
+}
+
+fn deepstream_container(
+    repo_root: Option<PathBuf>,
+    channel_url: String,
+    output_dir: PathBuf,
+    target_platform: TargetPlatform,
+    ds_recipes: Vec<RecipeName>,
+    ds_version: DeepstreamVersion,
+) -> anyhow::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+
+    // 1. Configure git to use GH_TOKEN for HTTPS auth (private repo clones).
+    if let Ok(token) = std::env::var("GH_TOKEN") {
+        let insteadof = format!("url.https://x-access-token:{token}@github.com/.insteadOf");
+        process::git(&["config", "--global", &insteadof, "https://github.com/"])?;
+    }
+
+    // 2. Host's .pixi/ has host-absolute shebangs that fail in-container; rebuild.
+    let host_pixi = repo.root().join(".pixi");
+    if host_pixi.exists() {
+        fs::remove_dir_all(&host_pixi)
+            .with_context(|| format!("remove {}", host_pixi.display()))?;
+    }
+    // Workaround for stale-partial-entry errors during run_exports collection.
+    for cache in [
+        "/tmp/.cache/rattler",
+        &format!(
+            "{}/.cache/rattler",
+            std::env::var("HOME").unwrap_or_default()
+        ),
+    ] {
+        let p = Path::new(cache);
+        if p.exists() {
+            // Best-effort: ignore failures cleaning caches.
+            let _ = fs::remove_dir_all(p);
+        }
+    }
+
+    // 3. Install pixi env for the repo.
+    process::run_in(repo.root(), "pixi", &["install"])?;
+
+    // 4. Delegate to build vinca (always DeepstreamOnly mode).
+    vinca(
+        Some(repo.root().to_path_buf()),
+        channel_url,
+        output_dir,
+        target_platform,
+        ds_recipes,
+        Some(ds_version),
+    )?;
 
     Ok(())
 }
