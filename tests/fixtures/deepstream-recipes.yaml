@@ -1,6 +1,3 @@
 recipes:
   - deepstream-test1
   - deepstream-test2
-deepstream_versions:
-  - "7.1"
-  - "8.0"

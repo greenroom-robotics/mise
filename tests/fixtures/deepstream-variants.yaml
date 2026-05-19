@@ -1,0 +1,7 @@
+deepstream_version:
+  - "7.1"
+  - "8.0"
+# Extra keys (c_compiler_version, zip_keys) present in real file are ignored by our loader.
+c_compiler_version:
+  - "13"
+  - "14"

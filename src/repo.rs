@@ -59,13 +59,22 @@ impl Repo {
     }
 
     pub fn deepstream(&self) -> anyhow::Result<DeepstreamCfg> {
-        let path = self.root.join(".github").join("deepstream-recipes.yaml");
-        let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        let raw: DeepstreamRaw =
-            serde_yaml_ng::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+        let recipes_path = self.root.join(".github").join("deepstream-recipes.yaml");
+        let variants_path = self.root.join("variants").join("deepstream.yaml");
+
+        let recipes_text = fs::read_to_string(&recipes_path)
+            .with_context(|| format!("read {}", recipes_path.display()))?;
+        let recipes_raw: RecipesRaw = serde_yaml_ng::from_str(&recipes_text)
+            .with_context(|| format!("parse {}", recipes_path.display()))?;
+
+        let variants_text = fs::read_to_string(&variants_path)
+            .with_context(|| format!("read {}", variants_path.display()))?;
+        let variants_raw: VariantsRaw = serde_yaml_ng::from_str(&variants_text)
+            .with_context(|| format!("parse {}", variants_path.display()))?;
+
         Ok(DeepstreamCfg {
-            recipes: raw.recipes.into_iter().collect(),
-            versions: raw.deepstream_versions.into_iter().collect(),
+            recipes: recipes_raw.recipes.into_iter().collect(),
+            versions: variants_raw.deepstream_version.into_iter().collect(),
         })
     }
 
@@ -84,9 +93,13 @@ pub struct DeepstreamCfg {
 }
 
 #[derive(Deserialize)]
-struct DeepstreamRaw {
+struct RecipesRaw {
     recipes: Vec<RecipeName>,
-    deepstream_versions: Vec<DeepstreamVersion>,
+}
+
+#[derive(Deserialize)]
+struct VariantsRaw {
+    deepstream_version: Vec<DeepstreamVersion>,
 }
 
 #[cfg(test)]
@@ -118,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn deepstream_loader_parses_fixture() {
+    fn deepstream_loader_parses_fixtures() {
         let (td, repo) = make_repo();
         let gh = td.path().join(".github");
         fs::create_dir_all(&gh).unwrap();
@@ -130,10 +143,20 @@ mod tests {
             gh.join("deepstream-recipes.yaml"),
         )
         .unwrap();
+        let variants = td.path().join("variants");
+        fs::create_dir_all(&variants).unwrap();
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/deepstream-variants.yaml"
+            ),
+            variants.join("deepstream.yaml"),
+        )
+        .unwrap();
+
         let cfg = repo.deepstream().unwrap();
         assert_eq!(cfg.recipes.len(), 2);
         assert_eq!(cfg.versions.len(), 2);
-        assert!(cfg.versions.contains(&DeepstreamVersion::V7_1));
         assert!(
             cfg.recipes
                 .contains(&RecipeName::from_str("deepstream-test1").unwrap())
@@ -142,6 +165,8 @@ mod tests {
             cfg.recipes
                 .contains(&RecipeName::from_str("deepstream-test2").unwrap())
         );
+        assert!(cfg.versions.contains(&DeepstreamVersion::V7_1));
+        assert!(cfg.versions.contains(&DeepstreamVersion::V8_0));
     }
 
     #[test]
