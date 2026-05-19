@@ -167,13 +167,127 @@ pub(crate) fn mutate_recipe_entry(
 }
 
 fn pixi(
-    _repo_root: Option<PathBuf>,
-    _name: String,
-    _url: String,
-    _rev: String,
-    _subdir: Option<String>,
+    repo_root: Option<PathBuf>,
+    name: String,
+    url: String,
+    rev: String,
+    subdir: Option<String>,
 ) -> anyhow::Result<()> {
-    anyhow::bail!("bump pixi: not implemented")
+    let repo = Repo::or_discover(repo_root)?;
+    let path = repo.root().join("pixi_native_packages.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let updated = mutate_pixi_entry(&text, &name, &url, &rev, subdir.as_deref())?;
+    std::fs::write(&path, updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// Mutate `pixi_native_packages.yaml` in place.
+///
+/// File shape: top-level `packages:` followed by `- name: <name>` items at
+/// column-2 indent (two-space indent for the dash, and sub-keys at column 4).
+///
+/// Behavior:
+/// - If an item with the given `name` exists: update `url:`, `rev:`,
+///   optionally `subdir:` (insert if absent), delete `ref:` if present.
+/// - If absent: append a new item at the end of the file with the same
+///   indentation conventions.
+pub(crate) fn mutate_pixi_entry(
+    text: &str,
+    name: &str,
+    url: &str,
+    rev: &str,
+    subdir: Option<&str>,
+) -> anyhow::Result<String> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Find `- name: <name>` line.
+    let header = format!("- name: {name}");
+    let header_idx = lines.iter().position(|l| l.trim_start() == header);
+
+    let result = if let Some(idx) = header_idx {
+        // Determine the item's column-position. Sub-keys live at the same
+        // start column as `name` (i.e., 2 chars in from the `-`).
+        let item_indent = lines[idx].len() - lines[idx].trim_start().len();
+        let sub_indent = item_indent + 2;
+        // Block spans idx+1 .. block_end where block_end starts at a line
+        // whose indent is <= item_indent and is not blank.
+        let block_end = lines[idx + 1..]
+            .iter()
+            .position(|l| {
+                if l.trim().is_empty() {
+                    return false;
+                }
+                let li = l.len() - l.trim_start().len();
+                li <= item_indent
+            })
+            .map(|p| idx + 1 + p)
+            .unwrap_or(lines.len());
+
+        let mut out: Vec<String> = lines[..=idx].iter().map(|s| s.to_string()).collect();
+        let mut url_seen = false;
+        let mut rev_seen = false;
+        let mut subdir_seen = false;
+        for line in &lines[idx + 1..block_end] {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("ref:") {
+                // drop
+                continue;
+            }
+            if trimmed.starts_with("url:") {
+                url_seen = true;
+                out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
+                continue;
+            }
+            if trimmed.starts_with("rev:") {
+                rev_seen = true;
+                out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
+                continue;
+            }
+            if trimmed.starts_with("subdir:") {
+                if let Some(s) = subdir {
+                    subdir_seen = true;
+                    out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+                } // else: drop the existing subdir line — caller didn't pass one
+                continue;
+            }
+            out.push(line.to_string());
+        }
+        if !url_seen {
+            out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
+        }
+        if !rev_seen {
+            out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
+        }
+        if !subdir_seen && let Some(s) = subdir {
+            out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+        }
+        for line in &lines[block_end..] {
+            out.push(line.to_string());
+        }
+        out
+    } else {
+        // Append a new entry at end of file.
+        let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+        // Ensure separation from previous content.
+        if out.last().map(|s| !s.is_empty()).unwrap_or(false) {
+            out.push(String::new());
+        }
+        out.push(format!("  - name: {name}"));
+        out.push(format!("    url: {url}"));
+        out.push(format!("    rev: {rev}"));
+        if let Some(s) = subdir {
+            out.push(format!("    subdir: {s}"));
+        }
+        out
+    };
+
+    let has_trailing_newline = text.ends_with('\n');
+    let mut result_str = result.join("\n");
+    if has_trailing_newline {
+        result_str.push('\n');
+    }
+    Ok(result_str)
 }
 
 fn route(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
@@ -275,5 +389,86 @@ bar_pkg:
         )
         .unwrap();
         assert!(result.ends_with('\n'));
+    }
+
+    const PIXI_FIXTURE: &str = "\
+# Header comment must survive.
+packages:
+  - name: alpha
+    url: https://github.com/example/alpha
+    ref: main
+
+  - name: beta
+    url: https://github.com/example/beta.git
+    rev: 1111111111111111111111111111111111111111
+    subdir: packages/beta
+
+  - name: gamma
+    url: https://github.com/example/gamma
+    rev: 2222222222222222222222222222222222222222
+";
+
+    #[test]
+    fn pixi_replaces_ref_with_rev_on_existing_entry() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "alpha",
+            "https://github.com/example/alpha.git",
+            "3333333333333333333333333333333333333333",
+            None,
+        )
+        .unwrap();
+        assert!(!out.contains("ref: main"));
+        assert!(out.contains("rev: 3333333333333333333333333333333333333333"));
+        assert!(out.contains("url: https://github.com/example/alpha.git"));
+        // Other entries untouched.
+        assert!(out.contains("subdir: packages/beta"));
+        assert!(out.contains("# Header comment"));
+    }
+
+    #[test]
+    fn pixi_updates_subdir_when_passed() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "beta",
+            "https://github.com/example/beta.git",
+            "4444444444444444444444444444444444444444",
+            Some("packages/beta-new"),
+        )
+        .unwrap();
+        assert!(out.contains("subdir: packages/beta-new"));
+        assert!(!out.contains("subdir: packages/beta\n"));
+        assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
+    }
+
+    #[test]
+    fn pixi_appends_new_entry_when_absent() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "delta",
+            "https://github.com/example/delta.git",
+            "5555555555555555555555555555555555555555",
+            Some("packages/delta"),
+        )
+        .unwrap();
+        assert!(out.contains("- name: alpha"));
+        assert!(out.contains("- name: delta"));
+        assert!(out.contains("url: https://github.com/example/delta.git"));
+        assert!(out.contains("rev: 5555555555555555555555555555555555555555"));
+        assert!(out.contains("subdir: packages/delta"));
+    }
+
+    #[test]
+    fn pixi_appends_without_subdir() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "epsilon",
+            "https://github.com/example/epsilon",
+            "6666666666666666666666666666666666666666",
+            None,
+        )
+        .unwrap();
+        assert!(out.contains("- name: epsilon"));
+        assert!(!out.lines().any(|l| l.trim() == "subdir:"));
     }
 }
