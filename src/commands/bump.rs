@@ -346,8 +346,87 @@ fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
     }
 }
 
-fn open_pr(_repo_root: Option<PathBuf>, _payload: PathBuf) -> anyhow::Result<()> {
-    anyhow::bail!("bump open-pr: not implemented")
+fn open_pr(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
+    let p = DispatchPayload::load(&payload)?;
+    let repo = Repo::or_discover(repo_root)?;
+    let root = repo.root();
+
+    let branch = format!("bump/{}", p.package);
+    let title = format!("chore(recipes): bump {} to {}", p.package, p.version);
+    let body = format!("Automated bump from {}@{}", p.source_repo, p.sha);
+
+    crate::process::run_in(root, "git", &["checkout", "-B", &branch])?;
+    crate::process::run_in(
+        root,
+        "git",
+        &[
+            "add",
+            "rosdistro_additional_recipes.yaml",
+            "pixi_native_packages.yaml",
+        ],
+    )?;
+
+    // `git diff --cached --quiet` exits 1 if there are staged changes; 0 if not.
+    let diff = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(root)
+        .status()
+        .context("run git diff --cached --quiet")?;
+    if diff.success() {
+        // Nothing staged.
+        eprintln!(
+            "::notice::no changes to commit (recipes already at {})",
+            p.version
+        );
+        return Ok(());
+    }
+
+    crate::process::run_in(root, "git", &["commit", "-m", &title])?;
+    crate::process::run_in(root, "git", &["push", "--force", "origin", &branch])?;
+
+    // Look up an existing open PR with this branch.
+    let out = std::process::Command::new("gh")
+        .args([
+            "pr", "list", "--head", &branch, "--state", "open", "--json", "url", "-q", ".[0].url",
+        ])
+        .current_dir(root)
+        .output()
+        .context("run gh pr list")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "gh pr list failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let pr_url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let pr_url = if pr_url.is_empty() {
+        let out = std::process::Command::new("gh")
+            .args([
+                "pr", "create", "--base", "main", "--head", &branch, "--title", &title, "--body",
+                &body,
+            ])
+            .current_dir(root)
+            .output()
+            .context("run gh pr create")?;
+        if !out.status.success() {
+            anyhow::bail!(
+                "gh pr create failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    } else {
+        crate::process::run_in(
+            root,
+            "gh",
+            &["pr", "edit", &pr_url, "--title", &title, "--body", &body],
+        )?;
+        pr_url
+    };
+
+    crate::process::run_in(root, "gh", &["pr", "merge", &pr_url, "--auto", "--squash"])?;
+    eprintln!("::notice::PR ready and auto-merge enabled: {pr_url}");
+    Ok(())
 }
 
 #[cfg(test)]

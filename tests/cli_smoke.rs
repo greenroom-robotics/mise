@@ -213,3 +213,20 @@ fn invalid_deepstream_version_rejected_at_parse_time() {
                 .or(predicate::str::contains("unknown DeepStream version")),
         );
 }
+
+#[test]
+fn bump_open_pr_fails_when_payload_missing() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    mise()
+        .args([
+            "bump",
+            "open-pr",
+            "--repo-root",
+            td.path().to_str().unwrap(),
+            "--payload",
+            "/nonexistent/payload.json",
+        ])
+        .assert()
+        .failure();
+}
