@@ -3,7 +3,8 @@ use std::process::Command;
 
 use anyhow::Context;
 
-/// Run `prog` with `args`. Bails with stderr captured on non-zero exit.
+/// Run `prog` with `args`, inheriting this process's stderr so subprocess
+/// output is visible in real time. Bails with the exit status on non-zero exit.
 pub fn run(prog: &str, args: &[&str]) -> anyhow::Result<()> {
     run_inner(prog, args, None)
 }
