@@ -63,12 +63,18 @@ impl Build {
                 ds_version,
             ),
             Self::Pixi {
-                repo_root: _,
-                channel_url: _,
-                output_dir: _,
-                target_platform: _,
-                runner_size: _,
-            } => anyhow::bail!("build pixi: not implemented"),
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                runner_size,
+            } => pixi(
+                repo_root,
+                channel_url,
+                output_dir,
+                target_platform,
+                runner_size,
+            ),
             Self::DeepstreamContainer { .. } => {
                 anyhow::bail!("build deepstream-container: not implemented")
             }
@@ -322,7 +328,6 @@ use serde::Deserialize;
 /// Subset of `pixi.toml` consumed by build pixi.
 /// Only the fields we read are listed; serde ignores the rest.
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // wired up in Task 4 (pixi() orchestrator)
 pub(crate) struct UpstreamPixiToml {
     pub package: UpstreamPackage,
     #[serde(default)]
@@ -330,7 +335,6 @@ pub(crate) struct UpstreamPixiToml {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct UpstreamPackage {
     pub name: String,
     pub version: String,
@@ -339,7 +343,6 @@ pub(crate) struct UpstreamPackage {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct UpstreamBuild {
     /// Defaults to 0 when omitted from the upstream pixi.toml.
     #[serde(default)]
@@ -347,13 +350,11 @@ pub(crate) struct UpstreamBuild {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct UpstreamWorkspace {
     #[serde(default)]
     pub platforms: Vec<String>,
 }
 
-#[allow(dead_code)]
 impl UpstreamPixiToml {
     pub fn parse(text: &str) -> anyhow::Result<Self> {
         toml::from_str(text).context("parse upstream pixi.toml")
@@ -375,6 +376,262 @@ impl UpstreamPixiToml {
         let target_str = target.arch().to_string();
         ws.platforms.iter().any(|p| p == &target_str)
     }
+}
+
+use crate::types::{GitVersion, GithubRepoUrl, PixiNativeEntry};
+
+/// Fetch `pixi.toml` for an entry from `raw.githubusercontent.com`. Uses Bearer
+/// auth from `GITHUB_TOKEN` / `GH_TOKEN` when present.
+fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
+    let rev_or_ref = match &entry.version {
+        GitVersion::Rev(sha) => sha.as_str().to_string(),
+        GitVersion::Ref(r) => r.clone(),
+    };
+
+    let subdir = entry
+        .subdir
+        .as_deref()
+        .map(|p| p.to_string_lossy().trim_matches('/').to_string())
+        .filter(|s| !s.is_empty() && s != ".")
+        .map(|s| format!("{s}/pixi.toml"))
+        .unwrap_or_else(|| "pixi.toml".to_string());
+
+    let raw_url = format!(
+        "https://raw.githubusercontent.com/{}/{}/{}/{}",
+        entry.url.owner, entry.url.repo, rev_or_ref, subdir
+    );
+
+    let token = std::env::var("GITHUB_TOKEN")
+        .or_else(|_| std::env::var("GH_TOKEN"))
+        .ok();
+
+    let mut req = ureq::get(&raw_url);
+    if let Some(t) = &token {
+        req = req.set("Authorization", &format!("Bearer {t}"));
+    }
+    match req.call() {
+        Ok(resp) => resp
+            .into_string()
+            .with_context(|| format!("read body of {raw_url}")),
+        Err(ureq::Error::Status(code, _)) => {
+            let hint = if token.is_none() && (code == 401 || code == 403 || code == 404) {
+                " (set GITHUB_TOKEN for private repos)"
+            } else {
+                ""
+            };
+            anyhow::bail!(
+                "entry {}: failed to fetch {raw_url} ({code}){hint}",
+                entry.name
+            )
+        }
+        Err(e) => anyhow::bail!("entry {}: fetch {raw_url}: {e}", entry.name),
+    }
+}
+
+/// Initialize a fresh git repo in `dest`, fetch one commit (`rev_or_ref`),
+/// and check it out. `rev_or_ref` may be a 40-char SHA or a branch/tag name.
+fn fetch_at_rev(url: &GithubRepoUrl, version: &GitVersion, dest: &Path) -> anyhow::Result<()> {
+    let url_str = format!("https://github.com/{}/{}", url.owner, url.repo);
+    let rev_or_ref = match version {
+        GitVersion::Rev(sha) => sha.as_str().to_string(),
+        GitVersion::Ref(r) => r.clone(),
+    };
+
+    process::git(&["init", "--quiet", dest.to_str().unwrap()])?;
+    process::git(&[
+        "-C",
+        dest.to_str().unwrap(),
+        "remote",
+        "add",
+        "origin",
+        &url_str,
+    ])?;
+    process::git(&[
+        "-C",
+        dest.to_str().unwrap(),
+        "fetch",
+        "--depth=1",
+        "--quiet",
+        "origin",
+        &rev_or_ref,
+    ])?;
+    process::git(&[
+        "-C",
+        dest.to_str().unwrap(),
+        "checkout",
+        "--quiet",
+        "FETCH_HEAD",
+    ])?;
+    Ok(())
+}
+
+use std::process::Command;
+
+/// Check whether `name == version` (with `build_number`) is already in `channel_url`
+/// for `target_platform`. Returns `false` on any failure (the caller logs and proceeds
+/// as if not published).
+fn package_published(
+    name: &str,
+    version: &str,
+    build_number: u64,
+    channel_url: &str,
+    target_platform: TargetPlatform,
+) -> bool {
+    let arch = target_platform.arch().to_string();
+    let pkg_spec = format!("{name}=={version}");
+
+    let output = Command::new("pixi")
+        .args([
+            "search",
+            "--json",
+            &pkg_spec,
+            "-c",
+            channel_url,
+            "-p",
+            &arch,
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::info!("pixi search for {pkg_spec} failed to spawn: {e}");
+            return false;
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::info!(
+            "pixi search for {pkg_spec} exited {}: {}",
+            output.status,
+            stderr.trim(),
+        );
+        return false;
+    }
+
+    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::info!("pixi search for {pkg_spec} returned non-JSON stdout: {e}");
+            return false;
+        }
+    };
+
+    let Some(candidates) = parsed.get(&arch).and_then(|v| v.as_array()) else {
+        return false;
+    };
+    tracing::info!(
+        "pixi search for {pkg_spec} build={build_number} on {arch}: {} candidate(s)",
+        candidates.len(),
+    );
+    for pkg in candidates {
+        let pkg_name = pkg.get("name").and_then(|v| v.as_str());
+        let pkg_ver = pkg.get("version").and_then(|v| v.as_str());
+        let pkg_build = pkg.get("build_number").and_then(|v| v.as_u64());
+        if pkg_name == Some(name) && pkg_ver == Some(version) && pkg_build == Some(build_number) {
+            return true;
+        }
+    }
+    false
+}
+
+fn pixi(
+    repo_root: Option<PathBuf>,
+    channel_url: String,
+    output_dir: PathBuf,
+    target_platform: TargetPlatform,
+    runner_size: Option<RunnerSize>,
+) -> anyhow::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+    let manifest = repo.pixi_native_manifest()?;
+
+    let abs_output = if output_dir.is_absolute() {
+        output_dir
+    } else {
+        repo.root().join(&output_dir)
+    };
+    fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
+
+    if manifest.packages.is_empty() {
+        tracing::info!("pixi_native_packages.yaml has no entries; nothing to build");
+        return Ok(());
+    }
+
+    for entry in &manifest.packages {
+        if let Some(filter) = runner_size
+            && entry.runner_size != filter
+        {
+            continue;
+        }
+
+        let pixi_toml_text = fetch_pixi_toml(entry)?;
+        let upstream = UpstreamPixiToml::parse(&pixi_toml_text)
+            .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
+
+        if !upstream.supports_platform(target_platform) {
+            tracing::info!(
+                "skipping {} {}: pixi.toml does not list {}",
+                upstream.package.name,
+                upstream.package.version,
+                target_platform.arch(),
+            );
+            continue;
+        }
+
+        if package_published(
+            &upstream.package.name,
+            &upstream.package.version,
+            upstream.build_number(),
+            &channel_url,
+            target_platform,
+        ) {
+            tracing::info!(
+                "skipping {} {}: already in channel {}",
+                upstream.package.name,
+                upstream.package.version,
+                channel_url,
+            );
+            continue;
+        }
+
+        let tmp = tempfile::Builder::new()
+            .prefix(&format!("pixi-native-{}-", entry.name))
+            .tempdir()
+            .context("create temp workdir")?;
+        let workdir = tmp.path().join("src");
+        fs::create_dir(&workdir)?;
+        fetch_at_rev(&entry.url, &entry.version, &workdir)?;
+
+        let subdir = entry.subdir.as_deref().unwrap_or(Path::new("."));
+        let manifest_path = workdir.join(subdir).join("pixi.toml");
+        if !manifest_path.is_file() {
+            anyhow::bail!(
+                "entry {}: no pixi.toml at {}/pixi.toml in checkout",
+                entry.name,
+                subdir.display(),
+            );
+        }
+
+        // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
+        // the upload-artifact glob.
+        let target_channel = format!("file://{}", abs_output.display());
+        let arch = target_platform.arch().to_string();
+        process::run(
+            "pixi",
+            &[
+                "publish",
+                "--path",
+                manifest_path.to_str().unwrap(),
+                "--target-channel",
+                &target_channel,
+                "--target-platform",
+                &arch,
+            ],
+        )?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

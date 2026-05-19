@@ -120,6 +120,24 @@ fn build_vinca_rejects_ds_version_without_recipe() {
 }
 
 #[test]
+fn build_pixi_fails_when_manifest_missing() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    // No pixi_native_packages.yaml in the temp repo — should fail at load.
+    mise()
+        .args([
+            "build",
+            "pixi",
+            "--repo-root",
+            td.path().to_str().unwrap(),
+            "--channel-url",
+            "https://example.com/channel",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn invalid_arch_rejected_at_parse_time() {
     mise()
         .args([
