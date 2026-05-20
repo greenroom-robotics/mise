@@ -1,3 +1,9 @@
+## [1.2.0](https://github.com/greenroom-robotics/mise/compare/mise@1.1.0...mise@1.2.0) (2026-05-20)
+
+### Features
+
+* add --only flag to build vinca ([011ac36](https://github.com/greenroom-robotics/mise/commit/011ac361c6da76771130fc97ce8076a137a5826c))
+
 ## [1.1.0](https://github.com/greenroom-robotics/mise/compare/mise@1.0.3...mise@1.1.0) (2026-05-19)
 
 ### Features
