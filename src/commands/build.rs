@@ -20,6 +20,11 @@ pub enum Build {
         ds_recipes: Vec<RecipeName>,
         #[arg(long)]
         ds_version: Option<DeepstreamVersion>,
+        /// Build only the listed recipe(s) — for local debugging. Mutually
+        /// exclusive with --ds-recipe. Combine with --ds-version to pin the
+        /// DS axis when debugging a DeepStream recipe.
+        #[arg(long = "only")]
+        only: Vec<RecipeName>,
     },
     /// Build pixi-native packages.
     Pixi {
@@ -64,6 +69,7 @@ impl Build {
                 target_platform,
                 ds_recipes,
                 ds_version,
+                only,
             } => vinca(
                 repo_root,
                 channel_url,
@@ -71,6 +77,7 @@ impl Build {
                 target_platform,
                 ds_recipes,
                 ds_version,
+                only,
             ),
             Self::Pixi {
                 repo_root,
@@ -114,9 +121,10 @@ fn vinca(
     target_platform: TargetPlatform,
     ds_recipes: Vec<RecipeName>,
     ds_version: Option<DeepstreamVersion>,
+    only: Vec<RecipeName>,
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
-    let mode = VincaBuildMode::from_flags(ds_recipes, ds_version)?;
+    let mode = VincaBuildMode::from_flags(ds_recipes, ds_version, only)?;
 
     let abs_output = if output_dir.is_absolute() {
         output_dir
@@ -183,6 +191,7 @@ fn vinca(
 fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
     match mode {
         VincaBuildMode::DeepstreamOnly { version, .. } => Some(*version),
+        VincaBuildMode::Only { version, .. } => *version,
         _ => None,
     }
 }
@@ -192,10 +201,10 @@ use std::fs;
 use std::path::Path;
 
 /// Selects which subset of recipes to build and whether to pin a DeepStream version.
-/// Maps to the three valid combinations of `--ds-recipe` and `--ds-version` flags.
+/// Maps to the valid combinations of `--ds-recipe`, `--ds-version`, and `--only` flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VincaBuildMode {
-    /// No DS flags: build everything in `recipes/` across all DS variants.
+    /// No flags: build everything in `recipes/` across all DS variants.
     Normal,
     /// `--ds-recipe NAME [...]` without `--ds-version`: drop the listed DS recipes,
     /// build everything else across all DS variants.
@@ -206,22 +215,40 @@ pub enum VincaBuildMode {
         recipes: Vec<RecipeName>,
         version: DeepstreamVersion,
     },
+    /// `--only NAME [...]` (with or without `--ds-version`): keep only the listed
+    /// recipes regardless of DS-ness. For local debugging. When `version` is set,
+    /// pin the DS axis (useful when the listed recipe is a DS one).
+    Only {
+        recipes: Vec<RecipeName>,
+        version: Option<DeepstreamVersion>,
+    },
 }
 
 impl VincaBuildMode {
-    /// Construct from the parsed CLI flags. Rejects `--ds-version` without `--ds-recipe`,
-    /// which would build everything against one pinned DS version — meaningless and
-    /// almost certainly a CI misconfiguration.
+    /// Construct from the parsed CLI flags. Rejects `--ds-version` without either
+    /// `--ds-recipe` or `--only` (would build everything against one pinned DS
+    /// version — almost certainly a misconfiguration). Rejects `--only` combined
+    /// with `--ds-recipe` (ambiguous; the two filters mean different things).
     pub fn from_flags(
         recipes: Vec<RecipeName>,
         version: Option<DeepstreamVersion>,
+        only: Vec<RecipeName>,
     ) -> anyhow::Result<Self> {
+        if !only.is_empty() && !recipes.is_empty() {
+            anyhow::bail!("--only and --ds-recipe are mutually exclusive");
+        }
+        if !only.is_empty() {
+            return Ok(Self::Only {
+                recipes: only,
+                version,
+            });
+        }
         match (recipes.is_empty(), version) {
             (true, None) => Ok(Self::Normal),
             (false, None) => Ok(Self::DropDeepstream { recipes }),
             (false, Some(version)) => Ok(Self::DeepstreamOnly { recipes, version }),
             (true, Some(_)) => anyhow::bail!(
-                "--ds-version requires at least one --ds-recipe (matrix compute always pairs them)"
+                "--ds-version requires at least one --ds-recipe or --only recipe"
             ),
         }
     }
@@ -240,6 +267,8 @@ impl VincaBuildMode {
 ///    - `DropDeepstream { recipes }` → remove each listed recipe dir.
 ///    - `DeepstreamOnly { recipes, .. }` → remove every recipe dir whose name is NOT
 ///      in the listed set.
+///    - `Only { recipes, .. }` → same keep-only sweep as `DeepstreamOnly`, but
+///      independent of DS-ness (used for local single-recipe debugging).
 fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Result<()> {
     let recipes_dir = repo_root.join("recipes");
     let vendor_dir = repo_root.join("vendor_recipes");
@@ -276,7 +305,8 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
                 }
             }
         }
-        VincaBuildMode::DeepstreamOnly { recipes, .. } => {
+        VincaBuildMode::DeepstreamOnly { recipes, .. }
+        | VincaBuildMode::Only { recipes, .. } => {
             let keep: std::collections::HashSet<&str> =
                 recipes.iter().map(|r| r.as_str()).collect();
             for entry in fs::read_dir(&recipes_dir)
@@ -779,6 +809,7 @@ fn deepstream_container(
         target_platform,
         ds_recipes,
         Some(ds_version),
+        Vec::new(),
     )?;
 
     Ok(())
@@ -796,13 +827,14 @@ mod tests {
 
     #[test]
     fn vinca_mode_normal_when_no_flags() {
-        let m = VincaBuildMode::from_flags(vec![], None).unwrap();
+        let m = VincaBuildMode::from_flags(vec![], None, vec![]).unwrap();
         assert_eq!(m, VincaBuildMode::Normal);
     }
 
     #[test]
     fn vinca_mode_drop_when_only_recipes() {
-        let m = VincaBuildMode::from_flags(vec![recipe("a"), recipe("b")], None).unwrap();
+        let m =
+            VincaBuildMode::from_flags(vec![recipe("a"), recipe("b")], None, vec![]).unwrap();
         assert_eq!(
             m,
             VincaBuildMode::DropDeepstream {
@@ -812,9 +844,13 @@ mod tests {
     }
 
     #[test]
-    fn vinca_mode_only_when_both_flags() {
-        let m =
-            VincaBuildMode::from_flags(vec![recipe("a")], Some(DeepstreamVersion::V7_1)).unwrap();
+    fn vinca_mode_deepstream_only_when_ds_recipe_and_version() {
+        let m = VincaBuildMode::from_flags(
+            vec![recipe("a")],
+            Some(DeepstreamVersion::V7_1),
+            vec![],
+        )
+        .unwrap();
         assert_eq!(
             m,
             VincaBuildMode::DeepstreamOnly {
@@ -826,8 +862,45 @@ mod tests {
 
     #[test]
     fn vinca_mode_rejects_version_without_recipes() {
-        let err = VincaBuildMode::from_flags(vec![], Some(DeepstreamVersion::V8_0)).unwrap_err();
-        assert!(format!("{err:#}").contains("requires at least one --ds-recipe"));
+        let err =
+            VincaBuildMode::from_flags(vec![], Some(DeepstreamVersion::V8_0), vec![]).unwrap_err();
+        assert!(format!("{err:#}").contains("requires at least one --ds-recipe or --only"));
+    }
+
+    #[test]
+    fn vinca_mode_only_alone_unpinned() {
+        let m = VincaBuildMode::from_flags(vec![], None, vec![recipe("foo")]).unwrap();
+        assert_eq!(
+            m,
+            VincaBuildMode::Only {
+                recipes: vec![recipe("foo")],
+                version: None,
+            }
+        );
+    }
+
+    #[test]
+    fn vinca_mode_only_with_ds_version_pins() {
+        let m = VincaBuildMode::from_flags(
+            vec![],
+            Some(DeepstreamVersion::V8_0),
+            vec![recipe("foo")],
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            VincaBuildMode::Only {
+                recipes: vec![recipe("foo")],
+                version: Some(DeepstreamVersion::V8_0),
+            }
+        );
+    }
+
+    #[test]
+    fn vinca_mode_only_rejects_combined_with_ds_recipe() {
+        let err =
+            VincaBuildMode::from_flags(vec![recipe("a")], None, vec![recipe("b")]).unwrap_err();
+        assert!(format!("{err:#}").contains("mutually exclusive"));
     }
 
     fn write_recipe_dir(parent: &Path, name: &str) {
@@ -931,6 +1004,20 @@ mod tests {
     }
 
     #[test]
+    fn apply_filter_only_keeps_listed_regardless_of_ds() {
+        let td = make_repo_with_recipes(&["foo", "bar", "deepstream-a"], &[]);
+        apply_recipe_filter(
+            td.path(),
+            &VincaBuildMode::Only {
+                recipes: vec![recipe("foo")],
+                version: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(recipe_names_in(&td.path().join("recipes")), vec!["foo"]);
+    }
+
+    #[test]
     fn write_variants_pin_v71_pins_gcc_13() {
         let tf = write_variants_pin(DeepstreamVersion::V7_1).unwrap();
         let content = fs::read_to_string(tf.path()).unwrap();
@@ -977,6 +1064,20 @@ mod tests {
                 version: DeepstreamVersion::V8_0,
             }),
             Some(DeepstreamVersion::V8_0),
+        );
+        assert_eq!(
+            mode_version(&VincaBuildMode::Only {
+                recipes: vec![recipe("a")],
+                version: None,
+            }),
+            None,
+        );
+        assert_eq!(
+            mode_version(&VincaBuildMode::Only {
+                recipes: vec![recipe("a")],
+                version: Some(DeepstreamVersion::V7_1),
+            }),
+            Some(DeepstreamVersion::V7_1),
         );
     }
 
