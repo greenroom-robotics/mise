@@ -5,7 +5,7 @@ use clap::Subcommand;
 use crate::types::{DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
 
 #[derive(Subcommand, Debug)]
-pub enum Build {
+pub enum BuildRecipes {
     /// Build the vinca pipeline.
     Vinca {
         #[arg(long)]
@@ -59,7 +59,7 @@ pub enum Build {
     },
 }
 
-impl Build {
+impl BuildRecipes {
     pub fn run(self) -> anyhow::Result<()> {
         match self {
             Self::Vinca {
