@@ -1,0 +1,75 @@
+name: Run mise ci test
+description: 'Set up the full mise CI environment, run `pixi run mise ci test`, and tear down the conda-channel-proxy. One-liner replacement for inline pixi/proxy/test wiring in pixi-native ROS package repos.'
+author: Greenroom Robotics
+
+inputs:
+  gh-app-id:
+    description: GitHub App id used to mint a token for private deps.
+    required: true
+  gh-app-private-key:
+    description: GitHub App private key (PEM).
+    required: true
+  azure-client-id:
+    description: AZURE_READER_CLIENT_ID — federated identity bound to the calling repo.
+    required: true
+  azure-tenant-id:
+    description: AZURE_TENANT_ID for the channel storage account.
+    required: true
+  azure-subscription-id:
+    description: AZURE_SUBSCRIPTION_ID for the channel storage account.
+    required: true
+  pixi-url:
+    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
+    required: false
+    default: ""
+  pixi-environment:
+    description: pixi environment to install.
+    required: false
+    default: default
+  frozen:
+    description: Whether to use the frozen lockfile (true/false).
+    required: false
+    default: "true"
+  proxy-version:
+    description: conda-channel-proxy release tag.
+    required: false
+    default: v0.3.0
+  package:
+    description: Single package to test (default - all packages under package-dir).
+    required: false
+    default: ""
+  package-dir:
+    description: Directory containing per-package pixi workspaces.
+    required: false
+    default: packages
+  ros-distro:
+    description: ROS distro identifier.
+    required: false
+    default: kilted
+
+runs:
+  using: composite
+  steps:
+    - uses: greenroom-robotics/mise/.github/actions/setup@v2
+      with:
+        gh-app-id: ${{ inputs.gh-app-id }}
+        gh-app-private-key: ${{ inputs.gh-app-private-key }}
+        azure-client-id: ${{ inputs.azure-client-id }}
+        azure-tenant-id: ${{ inputs.azure-tenant-id }}
+        azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        pixi-url: ${{ inputs.pixi-url }}
+        pixi-environment: ${{ inputs.pixi-environment }}
+        frozen: ${{ inputs.frozen }}
+        proxy-version: ${{ inputs.proxy-version }}
+
+    - name: Run mise ci test
+      shell: bash
+      run: |
+        args=(--package-dir "${{ inputs.package-dir }}" --ros-distro "${{ inputs.ros-distro }}")
+        if [ -n "${{ inputs.package }}" ]; then
+          args+=(--package "${{ inputs.package }}")
+        fi
+        pixi run mise ci test "${args[@]}"
+
+    - if: always()
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v1
