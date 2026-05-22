@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    build_recipes::BuildRecipes, bump::Bump, matrix::Matrix, snapshot::Snapshot,
+    build_recipes::BuildRecipes, bump::Bump, ci::Ci, matrix::Matrix, snapshot::Snapshot,
 };
 
 #[derive(Parser, Debug)]
@@ -19,6 +19,9 @@ enum Top {
     /// Recipe builds (vinca, pixi-native, DeepStream container).
     #[command(subcommand)]
     BuildRecipes(BuildRecipes),
+    /// CI helpers for pixi-native ROS package repos.
+    #[command(subcommand)]
+    Ci(Ci),
     /// Version bumps.
     #[command(subcommand)]
     Bump(Bump),
@@ -32,6 +35,7 @@ impl Cli {
         match self.command {
             Top::Matrix(c) => c.run(),
             Top::BuildRecipes(c) => c.run(),
+            Top::Ci(c) => c.run(),
             Top::Bump(c) => c.run(),
             Top::Snapshot(c) => c.run(),
         }
