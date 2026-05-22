@@ -1,5 +1,6 @@
 use clap::Subcommand;
 
+pub mod packages;
 pub mod test;
 
 use test::Test;
