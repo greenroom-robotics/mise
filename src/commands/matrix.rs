@@ -460,7 +460,7 @@ mod tests {
         assert_eq!(s, MatrixState::default());
     }
 
-    use crate::types::{GitVersion, PixiNativeEntry, PixiNativeManifest, Sha40};
+    use crate::types::{PixiNativeEntry, PixiNativeManifest, Sha40};
 
     fn empty_manifest() -> PixiNativeManifest {
         PixiNativeManifest { packages: vec![] }
@@ -475,7 +475,7 @@ mod tests {
             .map(|(i, size)| PixiNativeEntry {
                 name: format!("pkg{i}"),
                 url: url.clone(),
-                version: GitVersion::Rev(sha.clone()),
+                rev: sha.clone(),
                 subdir: None,
                 runner_size: *size,
             })

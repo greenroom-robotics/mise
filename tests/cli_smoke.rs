@@ -230,3 +230,33 @@ fn bump_open_pr_fails_when_payload_missing() {
         .assert()
         .failure();
 }
+
+#[test]
+fn build_pixi_rejects_ref_entries_in_manifest() {
+    let td = tempfile::TempDir::new().unwrap();
+    let root = td.path();
+    std::fs::write(root.join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    std::fs::write(
+        root.join("pixi_native_packages.yaml"),
+        "packages:\n  - name: foo\n    url: https://github.com/x/y.git\n    ref: main\n",
+    )
+    .unwrap();
+
+    mise()
+        .args([
+            "build",
+            "pixi",
+            "--repo-root",
+            root.to_str().unwrap(),
+            "--channel-url",
+            "https://example.invalid/channel",
+            "--output-dir",
+            td.path().join("out").to_str().unwrap(),
+            "--target-platform",
+            "linux-64",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("no longer supported"))
+        .stderr(predicate::str::contains("foo"));
+}
