@@ -312,8 +312,8 @@ fn ci_test_discovers_fixture_package() {
     // Discovery should find `foo`; the actual `pixi run` will fail since the
     // fixture's tests env isn't installed during cargo test, but mise should
     // get past discovery and attempt the run.
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/ci/packages");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci/packages");
     let out = mise()
         .args(["ci", "test", "--package", "foo", "--package-dir"])
         .arg(&fixture)

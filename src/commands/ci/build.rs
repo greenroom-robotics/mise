@@ -19,10 +19,8 @@ pub struct Build {
 
 impl Build {
     pub fn run(self) -> anyhow::Result<()> {
-        let pkgs = crate::commands::ci::packages::discover(
-            &self.package_dir,
-            self.package.as_deref(),
-        )?;
+        let pkgs =
+            crate::commands::ci::packages::discover(&self.package_dir, self.package.as_deref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
