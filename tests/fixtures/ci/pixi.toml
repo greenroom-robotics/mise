@@ -1,0 +1,20 @@
+# Fixture workspace exercised by mise's own CI smoke flow once federation is set
+# up (currently deferred). The structure mirrors the consumer convention from
+# platform_toolbox: a workspace manifest with per-package manifests as path
+# deps under packages/.
+[workspace]
+name = "mise-ci-fixture"
+channels = ["https://prefix.dev/conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+foo = { path = "./packages/foo" }
+
+[feature.tests.dependencies]
+pytest = "*"
+
+[feature.tests.tasks]
+test = "pytest packages/foo"
+
+[environments]
+tests = ["tests"]
