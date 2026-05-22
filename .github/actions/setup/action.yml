@@ -1,0 +1,82 @@
+name: Set up mise CI environment
+description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v1 (if: always()) to clean up the proxy.'
+author: Greenroom Robotics
+
+inputs:
+  gh-app-id:
+    description: GitHub App id used to mint a token for private deps.
+    required: true
+  gh-app-private-key:
+    description: GitHub App private key (PEM) corresponding to gh-app-id.
+    required: true
+  azure-client-id:
+    description: AZURE_READER_CLIENT_ID — federated identity bound to the calling repo.
+    required: true
+  azure-tenant-id:
+    description: AZURE_TENANT_ID for the channel storage account.
+    required: true
+  azure-subscription-id:
+    description: AZURE_SUBSCRIPTION_ID for the channel storage account.
+    required: true
+  pixi-url:
+    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
+    required: false
+    default: ""
+  pixi-environment:
+    description: pixi environment to install.
+    required: false
+    default: default
+  frozen:
+    description: Whether to use the frozen lockfile (true/false).
+    required: false
+    default: "true"
+  proxy-version:
+    description: conda-channel-proxy release tag to install.
+    required: false
+    default: v0.3.0
+
+outputs:
+  proxy-url:
+    description: URL of the running conda-channel-proxy (e.g. http://localhost:8000).
+    value: ${{ steps.proxy.outputs.url }}
+  gh-token:
+    description: GitHub App installation token for downstream steps.
+    value: ${{ steps.app-token.outputs.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate GitHub App token
+      id: app-token
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.gh-app-id }}
+        private-key: ${{ inputs.gh-app-private-key }}
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Start conda-channel-proxy
+      id: proxy
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v1
+      with:
+        version: ${{ inputs.proxy-version }}
+        gh-token: ${{ steps.app-token.outputs.token }}
+
+    - name: Configure git auth for private GitHub deps
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+    - name: Set up pixi
+      uses: prefix-dev/setup-pixi@v0.9.4
+      with:
+        pixi-url: ${{ inputs.pixi-url != '' && inputs.pixi-url || (runner.arch == 'ARM64' && 'https://github.com/greenroom-robotics/pixi/releases/download/v0.68.0-gr1/pixi-aarch64-unknown-linux-musl' || 'https://github.com/greenroom-robotics/pixi/releases/download/v0.68.0-gr1/pixi-x86_64-unknown-linux-musl') }}
+        environments: ${{ inputs.pixi-environment }}
+        frozen: ${{ inputs.frozen }}
