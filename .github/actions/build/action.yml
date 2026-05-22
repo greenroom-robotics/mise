@@ -1,0 +1,82 @@
+name: Run mise ci build
+description: 'Set up the full mise CI environment, run `pixi run mise ci build`, and tear down the conda-channel-proxy. Outputs .conda artifacts under $RUNNER_TEMP/conda-bld.'
+author: Greenroom Robotics
+
+inputs:
+  gh-app-id:
+    description: GitHub App id used to mint a token for private deps.
+    required: true
+  gh-app-private-key:
+    description: GitHub App private key (PEM).
+    required: true
+  azure-client-id:
+    description: AZURE_READER_CLIENT_ID — federated identity bound to the calling repo.
+    required: true
+  azure-tenant-id:
+    description: AZURE_TENANT_ID for the channel storage account.
+    required: true
+  azure-subscription-id:
+    description: AZURE_SUBSCRIPTION_ID for the channel storage account.
+    required: true
+  pixi-url:
+    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
+    required: false
+    default: ""
+  pixi-environment:
+    description: pixi environment to install.
+    required: false
+    default: default
+  frozen:
+    description: Whether to use the frozen lockfile (true/false).
+    required: false
+    default: "true"
+  proxy-version:
+    description: conda-channel-proxy release tag.
+    required: false
+    default: v0.3.0
+  package:
+    description: Single package to build (default - all packages under package-dir).
+    required: false
+    default: ""
+  package-dir:
+    description: Directory containing per-package pixi workspaces.
+    required: false
+    default: packages
+  ros-distro:
+    description: ROS distro identifier.
+    required: false
+    default: kilted
+  target-platform:
+    description: rattler-build target subdir (linux-64 or linux-aarch64). Empty - host arch.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: greenroom-robotics/mise/.github/actions/setup@v2
+      with:
+        gh-app-id: ${{ inputs.gh-app-id }}
+        gh-app-private-key: ${{ inputs.gh-app-private-key }}
+        azure-client-id: ${{ inputs.azure-client-id }}
+        azure-tenant-id: ${{ inputs.azure-tenant-id }}
+        azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        pixi-url: ${{ inputs.pixi-url }}
+        pixi-environment: ${{ inputs.pixi-environment }}
+        frozen: ${{ inputs.frozen }}
+        proxy-version: ${{ inputs.proxy-version }}
+
+    - name: Run mise ci build
+      shell: bash
+      run: |
+        args=(--package-dir "${{ inputs.package-dir }}" --ros-distro "${{ inputs.ros-distro }}")
+        if [ -n "${{ inputs.package }}" ]; then
+          args+=(--package "${{ inputs.package }}")
+        fi
+        if [ -n "${{ inputs.target-platform }}" ]; then
+          args+=(--target-platform "${{ inputs.target-platform }}")
+        fi
+        pixi run mise ci build "${args[@]}"
+
+    - if: always()
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v1
