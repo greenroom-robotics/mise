@@ -1,3 +1,13 @@
+## [2.0.0](https://github.com/greenroom-robotics/mise/compare/mise@1.3.0...mise@2.0.0) (2026-05-22)
+
+### ⚠ BREAKING CHANGES
+
+* rename `mise build` to `mise build-recipes` (#2)
+
+### Code Refactoring
+
+* rename `mise build` to `mise build-recipes` ([#2](https://github.com/greenroom-robotics/mise/issues/2)) ([579e007](https://github.com/greenroom-robotics/mise/commit/579e007716eb8808e2c898d9a85cd71f1437eccb))
+
 ## [1.3.0](https://github.com/greenroom-robotics/mise/compare/mise@1.2.0...mise@1.3.0) (2026-05-22)
 
 ### Features
