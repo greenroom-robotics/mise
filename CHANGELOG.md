@@ -1,3 +1,9 @@
+## [1.3.0](https://github.com/greenroom-robotics/mise/compare/mise@1.2.0...mise@1.3.0) (2026-05-22)
+
+### Features
+
+* require rev: and pre-flight pixi install --locked on pixi-native ([c3c6f19](https://github.com/greenroom-robotics/mise/commit/c3c6f19d5878e2d099d4488d5ae16a599416fb86))
+
 ## [1.2.0](https://github.com/greenroom-robotics/mise/compare/mise@1.1.0...mise@1.2.0) (2026-05-20)
 
 ### Features
