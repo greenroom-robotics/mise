@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{build_recipes::BuildRecipes, bump::Bump, matrix::Matrix, snapshot::Snapshot};
+use crate::commands::{
+    build_recipes::BuildRecipes, bump::Bump, matrix::Matrix, snapshot::Snapshot,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "mise", about = "Build/bump/matrix automation for ros-recipes")]

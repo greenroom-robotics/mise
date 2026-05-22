@@ -263,7 +263,6 @@ mod newtype_tests {
     fn github_url_rejects_http() {
         assert!(GithubRepoUrl::parse("http://github.com/foo/bar").is_err());
     }
-
 }
 
 use std::path::PathBuf;

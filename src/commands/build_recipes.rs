@@ -247,9 +247,9 @@ impl VincaBuildMode {
             (true, None) => Ok(Self::Normal),
             (false, None) => Ok(Self::DropDeepstream { recipes }),
             (false, Some(version)) => Ok(Self::DeepstreamOnly { recipes, version }),
-            (true, Some(_)) => anyhow::bail!(
-                "--ds-version requires at least one --ds-recipe or --only recipe"
-            ),
+            (true, Some(_)) => {
+                anyhow::bail!("--ds-version requires at least one --ds-recipe or --only recipe")
+            }
         }
     }
 }
@@ -305,8 +305,7 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
                 }
             }
         }
-        VincaBuildMode::DeepstreamOnly { recipes, .. }
-        | VincaBuildMode::Only { recipes, .. } => {
+        VincaBuildMode::DeepstreamOnly { recipes, .. } | VincaBuildMode::Only { recipes, .. } => {
             let keep: std::collections::HashSet<&str> =
                 recipes.iter().map(|r| r.as_str()).collect();
             for entry in fs::read_dir(&recipes_dir)
@@ -832,8 +831,7 @@ mod tests {
 
     #[test]
     fn vinca_mode_drop_when_only_recipes() {
-        let m =
-            VincaBuildMode::from_flags(vec![recipe("a"), recipe("b")], None, vec![]).unwrap();
+        let m = VincaBuildMode::from_flags(vec![recipe("a"), recipe("b")], None, vec![]).unwrap();
         assert_eq!(
             m,
             VincaBuildMode::DropDeepstream {
@@ -844,12 +842,9 @@ mod tests {
 
     #[test]
     fn vinca_mode_deepstream_only_when_ds_recipe_and_version() {
-        let m = VincaBuildMode::from_flags(
-            vec![recipe("a")],
-            Some(DeepstreamVersion::V7_1),
-            vec![],
-        )
-        .unwrap();
+        let m =
+            VincaBuildMode::from_flags(vec![recipe("a")], Some(DeepstreamVersion::V7_1), vec![])
+                .unwrap();
         assert_eq!(
             m,
             VincaBuildMode::DeepstreamOnly {
@@ -880,12 +875,9 @@ mod tests {
 
     #[test]
     fn vinca_mode_only_with_ds_version_pins() {
-        let m = VincaBuildMode::from_flags(
-            vec![],
-            Some(DeepstreamVersion::V8_0),
-            vec![recipe("foo")],
-        )
-        .unwrap();
+        let m =
+            VincaBuildMode::from_flags(vec![], Some(DeepstreamVersion::V8_0), vec![recipe("foo")])
+                .unwrap();
         assert_eq!(
             m,
             VincaBuildMode::Only {
