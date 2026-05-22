@@ -12,15 +12,15 @@ fn help_lists_top_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("matrix"))
-        .stdout(predicate::str::contains("build"))
+        .stdout(predicate::str::contains("build-recipes"))
         .stdout(predicate::str::contains("bump"))
         .stdout(predicate::str::contains("snapshot"));
 }
 
 #[test]
-fn build_help_lists_subcommands() {
+fn build_recipes_help_lists_subcommands() {
     mise()
-        .args(["build", "--help"])
+        .args(["build-recipes", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("vinca"))
@@ -96,14 +96,14 @@ fn matrix_compute_workflow_dispatch_produces_matrix() {
 }
 
 #[test]
-fn build_vinca_rejects_ds_version_without_recipe() {
+fn build_recipes_vinca_rejects_ds_version_without_recipe() {
     // VincaBuildMode::from_flags rejects --ds-version without any --ds-recipe.
     // The command fails before any subprocess is spawned.
     let td = tempfile::TempDir::new().unwrap();
     std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
     mise()
         .args([
-            "build",
+            "build-recipes",
             "vinca",
             "--repo-root",
             td.path().to_str().unwrap(),
@@ -120,13 +120,13 @@ fn build_vinca_rejects_ds_version_without_recipe() {
 }
 
 #[test]
-fn build_pixi_fails_when_manifest_missing() {
+fn build_recipes_pixi_fails_when_manifest_missing() {
     let td = tempfile::TempDir::new().unwrap();
     std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
     // No pixi_native_packages.yaml in the temp repo — should fail at load.
     mise()
         .args([
-            "build",
+            "build-recipes",
             "pixi",
             "--repo-root",
             td.path().to_str().unwrap(),
@@ -141,7 +141,7 @@ fn build_pixi_fails_when_manifest_missing() {
 fn invalid_arch_rejected_at_parse_time() {
     mise()
         .args([
-            "build",
+            "build-recipes",
             "vinca",
             "--channel-url",
             "x",
@@ -156,10 +156,10 @@ fn invalid_arch_rejected_at_parse_time() {
 }
 
 #[test]
-fn build_deepstream_container_requires_recipe() {
+fn build_recipes_deepstream_container_requires_recipe() {
     mise()
         .args([
-            "build",
+            "build-recipes",
             "deepstream-container",
             "--channel-url",
             "https://example.com/channel",
@@ -199,7 +199,7 @@ fn bump_recipe_errors_when_package_missing() {
 fn invalid_deepstream_version_rejected_at_parse_time() {
     mise()
         .args([
-            "build",
+            "build-recipes",
             "deepstream-container",
             "--ds-version",
             "9.0",
@@ -232,7 +232,7 @@ fn bump_open_pr_fails_when_payload_missing() {
 }
 
 #[test]
-fn build_pixi_rejects_ref_entries_in_manifest() {
+fn build_recipes_pixi_rejects_ref_entries_in_manifest() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     std::fs::write(root.join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
@@ -244,7 +244,7 @@ fn build_pixi_rejects_ref_entries_in_manifest() {
 
     mise()
         .args([
-            "build",
+            "build-recipes",
             "pixi",
             "--repo-root",
             root.to_str().unwrap(),
