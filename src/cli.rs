@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{build::Build, bump::Bump, matrix::Matrix, snapshot::Snapshot};
+use crate::commands::{build_recipes::BuildRecipes, bump::Bump, matrix::Matrix, snapshot::Snapshot};
 
 #[derive(Parser, Debug)]
 #[command(name = "mise", about = "Build/bump/matrix automation for ros-recipes")]
@@ -14,9 +14,9 @@ enum Top {
     /// Build-matrix computation.
     #[command(subcommand)]
     Matrix(Matrix),
-    /// Package builds.
+    /// Recipe builds (vinca, pixi-native, DeepStream container).
     #[command(subcommand)]
-    Build(Build),
+    BuildRecipes(BuildRecipes),
     /// Version bumps.
     #[command(subcommand)]
     Bump(Bump),
@@ -29,7 +29,7 @@ impl Cli {
     pub fn run(self) -> anyhow::Result<()> {
         match self.command {
             Top::Matrix(c) => c.run(),
-            Top::Build(c) => c.run(),
+            Top::BuildRecipes(c) => c.run(),
             Top::Bump(c) => c.run(),
             Top::Snapshot(c) => c.run(),
         }
