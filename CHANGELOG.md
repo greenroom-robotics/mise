@@ -1,3 +1,9 @@
+## [2.1.1](https://github.com/greenroom-robotics/mise/compare/mise@2.1.0...mise@2.1.1) (2026-05-25)
+
+### Bug Fixes
+
+* commit lockfile ([3b471b9](https://github.com/greenroom-robotics/mise/commit/3b471b9294f88abf44e3af7405ed1b22ed565de2))
+
 ## [2.1.0](https://github.com/greenroom-robotics/mise/compare/mise@2.0.0...mise@2.1.0) (2026-05-25)
 
 ### Features
