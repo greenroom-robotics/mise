@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: greenroom-robotics/mise/.github/actions/release@v1
+      - uses: greenroom-robotics/mise/.github/actions/release@v2
         with:
           package: ${{ inputs.package }}
           gh-app-id: ${{ secrets.GH_APP_ID }}
