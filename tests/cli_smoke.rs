@@ -260,3 +260,69 @@ fn build_recipes_pixi_rejects_ref_entries_in_manifest() {
         .stderr(predicate::str::contains("no longer supported"))
         .stderr(predicate::str::contains("foo"));
 }
+
+#[test]
+fn ci_help_lists_test_and_build() {
+    let out = mise().args(["ci", "--help"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("test"));
+    assert!(stdout.contains("build"));
+}
+
+#[test]
+fn ci_test_help_lists_known_flags() {
+    let out = mise().args(["ci", "test", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--package"));
+    assert!(stdout.contains("--package-dir"));
+    assert!(stdout.contains("--ros-distro"));
+}
+
+#[test]
+fn ci_build_help_lists_known_flags() {
+    let out = mise().args(["ci", "build", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--package"));
+    assert!(stdout.contains("--package-dir"));
+    assert!(stdout.contains("--target-platform"));
+}
+
+#[test]
+fn ci_test_against_empty_dir_errors_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = mise()
+        .args(["ci", "test", "--package-dir"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no packages found") || stderr.contains("reading"));
+}
+
+#[test]
+fn ci_test_discovers_fixture_package() {
+    // Discovery should find `foo`; the actual `pixi run` will fail since the
+    // fixture's tests env isn't installed during cargo test, but mise should
+    // get past discovery and attempt the run.
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci/packages");
+    let out = mise()
+        .args(["ci", "test", "--package", "foo", "--package-dir"])
+        .arg(&fixture)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains("mise ci test :: ") && stdout.contains("foo"),
+        "expected discovery banner in stdout. stdout={stdout} stderr={stderr}"
+    );
+}
