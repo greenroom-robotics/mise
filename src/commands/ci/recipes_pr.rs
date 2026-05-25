@@ -159,7 +159,8 @@ fn clone_recipes_repo(repo: &str, dest: &std::path::Path) -> anyhow::Result<()> 
 }
 
 fn recipes_repo_https_url(repo: &str) -> String {
-    if let Ok(token) = std::env::var("API_TOKEN_GITHUB").or_else(|_| std::env::var("GITHUB_TOKEN")) {
+    if let Ok(token) = std::env::var("API_TOKEN_GITHUB").or_else(|_| std::env::var("GITHUB_TOKEN"))
+    {
         format!("https://x-access-token:{token}@github.com/{repo}.git")
     } else {
         format!("git@github.com:{repo}.git")
@@ -183,7 +184,15 @@ fn run_in(cwd: &std::path::Path, argv: &[&str]) -> anyhow::Result<()> {
 fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
     let out = std::process::Command::new("gh")
         .args([
-            "pr", "list", "--repo", repo, "--head", branch, "--json", "number", "--jq",
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--head",
+            branch,
+            "--json",
+            "number",
+            "--jq",
             ".[0].number",
         ])
         .output()?;

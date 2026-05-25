@@ -22,8 +22,8 @@ struct PackageSection {
 pub fn read(pixi_toml: &Path) -> Result<PixiPackage> {
     let body = std::fs::read_to_string(pixi_toml)
         .with_context(|| format!("reading {}", pixi_toml.display()))?;
-    let parsed: PixiTomlSurface = toml::from_str(&body)
-        .with_context(|| format!("parsing {}", pixi_toml.display()))?;
+    let parsed: PixiTomlSurface =
+        toml::from_str(&body).with_context(|| format!("parsing {}", pixi_toml.display()))?;
     Ok(PixiPackage {
         name: parsed.package.name,
         version: parsed.package.version,
