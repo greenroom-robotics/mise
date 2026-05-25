@@ -54,7 +54,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: greenroom-robotics/mise/.github/actions/setup@v1
+    - uses: greenroom-robotics/mise/.github/actions/setup@v2
       with:
         gh-app-id: ${{ inputs.gh-app-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
