@@ -1,3 +1,9 @@
+## [2.3.0](https://github.com/greenroom-robotics/mise/compare/mise@2.2.1...mise@2.3.0) (2026-05-25)
+
+### Features
+
+* add ability to bump build epock ([e6fe4a4](https://github.com/greenroom-robotics/mise/commit/e6fe4a4ab80f0a3e033e117ad9a4dfcde1910e39))
+
 ## [2.2.1](https://github.com/greenroom-robotics/mise/compare/mise@2.2.0...mise@2.2.1) (2026-05-25)
 
 ### Bug Fixes
