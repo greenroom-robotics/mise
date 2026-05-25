@@ -1,3 +1,9 @@
+## [2.1.0](https://github.com/greenroom-robotics/mise/compare/mise@2.0.0...mise@2.1.0) (2026-05-25)
+
+### Features
+
+* **ci:** add mise ci test/build and composite actions ([#3](https://github.com/greenroom-robotics/mise/issues/3)) ([fa04075](https://github.com/greenroom-robotics/mise/commit/fa04075791d77ccadc0a10f363175bb22356c4ff))
+
 ## [2.0.0](https://github.com/greenroom-robotics/mise/compare/mise@1.3.0...mise@2.0.0) (2026-05-22)
 
 ### ⚠ BREAKING CHANGES
