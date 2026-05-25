@@ -308,6 +308,64 @@ fn ci_test_against_empty_dir_errors_cleanly() {
 }
 
 #[test]
+fn ci_release_help_lists_known_flags() {
+    let out = mise().args(["ci", "release", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--package"));
+    assert!(stdout.contains("--package-dir"));
+    assert!(stdout.contains("--recipes-repo"));
+    assert!(stdout.contains("--changelog"));
+    assert!(stdout.contains("--release-branches"));
+}
+
+#[test]
+fn ci_recipes_pr_help_lists_known_flags() {
+    let out = mise()
+        .args(["ci", "recipes-pr", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--version"));
+    assert!(stdout.contains("--recipes-repo"));
+    assert!(stdout.contains("--package-dir"));
+}
+
+#[test]
+fn ci_bump_pixi_help_lists_known_flags() {
+    let out = mise().args(["ci", "bump-pixi", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--version"));
+    assert!(stdout.contains("--pixi-toml"));
+}
+
+#[test]
+fn ci_release_against_empty_dir_errors_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = mise()
+        .args(["ci", "release", "--package-dir"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("no packages found") || stderr.contains("reading"));
+}
+
+#[test]
+fn ci_recipes_pr_against_empty_dir_errors_cleanly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = mise()
+        .args(["ci", "recipes-pr", "--version", "1.0.0", "--package-dir"])
+        .arg(tmp.path())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}
+
+#[test]
 fn ci_test_discovers_fixture_package() {
     // Discovery should find `foo`; the actual `pixi run` will fail since the
     // fixture's tests env isn't installed during cargo test, but mise should

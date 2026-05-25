@@ -1,0 +1,31 @@
+{
+    "name": "mise-release-tooling",
+    "description": "Pinned semantic-release plugin set shipped with mise/.github/actions/release",
+    "version": "1.0.0",
+    "private": true,
+    "scripts": {
+        "multi-semantic-release": "multi-semantic-release",
+        "semantic-release": "semantic-release"
+    },
+    "author": "Greenroom Robotics Team <team@greenroomrobotics.com.au>",
+    "license": "UNLICENSED",
+    "bugs": {
+        "url": "https://github.com/greenroom-robotics/mise/issues"
+    },
+    "homepage": "https://github.com/greenroom-robotics/mise#readme",
+    "devDependencies": {
+        "@semantic-release/changelog": "^6.0.1",
+        "@semantic-release/commit-analyzer": "^9.0.2",
+        "@semantic-release/git": "^10.0.1",
+        "@semantic-release/github": "https://github.com/Greenroom-Robotics/semantic-release-github#master",
+        "@semantic-release/release-notes-generator": "^10.0.3",
+        "conventional-changelog-conventionalcommits": "^5.0.0",
+        "semantic-release": "https://github.com/Greenroom-Robotics/semantic-release.git#v19.0.5-patched-testing",
+        "@qiwi/multi-semantic-release": "https://github.com/Greenroom-Robotics/multi-semantic-release.git#v6.5.1-patched",
+        "@semantic-release/exec": "^6.0.3"
+    },
+    "resolutions": {
+        "semantic-release": "https://github.com/Greenroom-Robotics/semantic-release.git#v19.0.5-patched-testing",
+        "@semantic-release/github": "https://github.com/Greenroom-Robotics/semantic-release-github#master"
+    }
+}
