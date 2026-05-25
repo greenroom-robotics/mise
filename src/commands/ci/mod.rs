@@ -3,6 +3,7 @@ use clap::Subcommand;
 pub mod build;
 pub mod bump_pixi;
 pub mod packages;
+pub mod pixi_meta;
 pub mod recipes_pr;
 pub mod release;
 pub mod test;
