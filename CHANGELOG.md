@@ -1,3 +1,9 @@
+## [2.2.1](https://github.com/greenroom-robotics/mise/compare/mise@2.2.0...mise@2.2.1) (2026-05-25)
+
+### Bug Fixes
+
+* **actions:** pin nested setup + docs to [@v2](https://github.com/v2) ([#5](https://github.com/greenroom-robotics/mise/issues/5)) ([e3050af](https://github.com/greenroom-robotics/mise/commit/e3050af9102f89e04fa9a388679ec20ba51908f6))
+
 ## [2.2.0](https://github.com/greenroom-robotics/mise/compare/mise@2.1.1...mise@2.2.0) (2026-05-25)
 
 ### Features
