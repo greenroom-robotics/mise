@@ -1,3 +1,9 @@
+## [2.2.0](https://github.com/greenroom-robotics/mise/compare/mise@2.1.1...mise@2.2.0) (2026-05-25)
+
+### Features
+
+* ci release action ([#4](https://github.com/greenroom-robotics/mise/issues/4)) ([8a6f454](https://github.com/greenroom-robotics/mise/commit/8a6f454c94e231202b6e3eb6e0b53b8450db4bfa))
+
 ## [2.1.1](https://github.com/greenroom-robotics/mise/compare/mise@2.1.0...mise@2.1.1) (2026-05-25)
 
 ### Bug Fixes
