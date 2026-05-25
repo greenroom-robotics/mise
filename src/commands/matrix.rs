@@ -463,7 +463,10 @@ mod tests {
     use crate::types::{PixiNativeEntry, PixiNativeManifest, Sha40};
 
     fn empty_manifest() -> PixiNativeManifest {
-        PixiNativeManifest { packages: vec![] }
+        PixiNativeManifest {
+            rebuild_epoch: 0,
+            packages: vec![],
+        }
     }
 
     fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
@@ -480,7 +483,10 @@ mod tests {
                 runner_size: *size,
             })
             .collect();
-        PixiNativeManifest { packages }
+        PixiNativeManifest {
+            rebuild_epoch: 0,
+            packages,
+        }
     }
 
     #[test]

@@ -592,15 +592,27 @@ fn package_published(
 }
 
 enum CheckOutcome {
-    Build { name: String, version: String },
-    SkipPlatformUnsupported { name: String, version: String },
-    SkipAlreadyPublished { name: String, version: String },
+    Build {
+        name: String,
+        version: String,
+        upstream_build: u64,
+        effective_build: u64,
+    },
+    SkipPlatformUnsupported {
+        name: String,
+        version: String,
+    },
+    SkipAlreadyPublished {
+        name: String,
+        version: String,
+    },
 }
 
 fn check_entry(
     entry: &PixiNativeEntry,
     channel_url: &str,
     target_platform: TargetPlatform,
+    rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
     let pixi_toml_text = fetch_pixi_toml(entry)?;
     let upstream = UpstreamPixiToml::parse(&pixi_toml_text)
@@ -613,10 +625,13 @@ fn check_entry(
         });
     }
 
+    let upstream_build = upstream.build_number();
+    let effective_build = upstream_build + rebuild_epoch;
+
     if package_published(
         &upstream.package.name,
         &upstream.package.version,
-        upstream.build_number(),
+        effective_build,
         channel_url,
         target_platform,
     ) {
@@ -629,7 +644,60 @@ fn check_entry(
     Ok(CheckOutcome::Build {
         name: upstream.package.name,
         version: upstream.package.version,
+        upstream_build,
+        effective_build,
     })
+}
+
+/// Rewrite `[package.build.config].build-number` in the given `pixi.toml`
+/// to `value`, creating the intermediate tables if absent. Preserves
+/// comments and formatting of the rest of the file.
+fn rewrite_build_number(manifest_path: &Path, value: u64) -> anyhow::Result<()> {
+    let text = fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parse {} as TOML", manifest_path.display()))?;
+
+    let package = doc
+        .get_mut("package")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or_else(|| anyhow::anyhow!("{}: missing [package] table", manifest_path.display(),))?;
+
+    if !package.contains_key("build") {
+        package.insert("build", toml_edit::table());
+    }
+    let build = package
+        .get_mut("build")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}: [package.build] exists but is not a table",
+                manifest_path.display(),
+            )
+        })?;
+
+    if !build.contains_key("config") {
+        build.insert("config", toml_edit::table());
+    }
+    let config = build
+        .get_mut("config")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{}: [package.build.config] exists but is not a table",
+                manifest_path.display(),
+            )
+        })?;
+
+    config.insert(
+        "build-number",
+        toml_edit::value(i64::try_from(value).context("build-number exceeds i64")?),
+    );
+
+    fs::write(manifest_path, doc.to_string())
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    Ok(())
 }
 
 fn pixi(
@@ -665,13 +733,16 @@ fn pixi(
     }
 
     let channel_url_ref: &str = &channel_url;
+    let rebuild_epoch = manifest.rebuild_epoch;
     let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
             let handles: Vec<_> = filtered
                 .iter()
                 .copied()
                 .map(|entry| {
-                    scope.spawn(move || check_entry(entry, channel_url_ref, target_platform))
+                    scope.spawn(move || {
+                        check_entry(entry, channel_url_ref, target_platform, rebuild_epoch)
+                    })
                 })
                 .collect();
             filtered
@@ -682,13 +753,25 @@ fn pixi(
                 .collect()
         });
 
-    let mut to_build: Vec<&PixiNativeEntry> = Vec::new();
+    let mut to_build: Vec<(&PixiNativeEntry, u64)> = Vec::new();
     let mut build_labels: Vec<String> = Vec::new();
     for (entry, outcome) in outcomes {
         match outcome? {
-            CheckOutcome::Build { name, version } => {
-                build_labels.push(format!("{name} {version}"));
-                to_build.push(entry);
+            CheckOutcome::Build {
+                name,
+                version,
+                upstream_build,
+                effective_build,
+            } => {
+                if rebuild_epoch > 0 {
+                    build_labels.push(format!(
+                        "{name} {version} build={effective_build} \
+                         (upstream={upstream_build}+epoch={rebuild_epoch})"
+                    ));
+                } else {
+                    build_labels.push(format!("{name} {version}"));
+                }
+                to_build.push((entry, effective_build));
             }
             CheckOutcome::SkipPlatformUnsupported { name, version } => {
                 tracing::info!(
@@ -713,7 +796,7 @@ fn pixi(
         build_labels.join(", "),
     );
 
-    for entry in to_build {
+    for (entry, effective_build) in to_build {
         let tmp = tempfile::Builder::new()
             .prefix(&format!("pixi-native-{}-", entry.name))
             .tempdir()
@@ -731,6 +814,15 @@ fn pixi(
                 entry.name,
                 subdir.display(),
             );
+        }
+
+        if rebuild_epoch > 0 {
+            rewrite_build_number(&manifest_path, effective_build).with_context(|| {
+                format!(
+                    "entry {}: rewrite build-number to {effective_build}",
+                    entry.name
+                )
+            })?;
         }
 
         // `pixi publish` does not honour --locked; pre-flight install --locked
@@ -1140,5 +1232,85 @@ ci = "test"
 something = "1"
 "#;
         UpstreamPixiToml::parse(text).unwrap();
+    }
+
+    fn write_tmp_pixi_toml(text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("pixi.toml");
+        std::fs::write(&path, text).unwrap();
+        (tmp, path)
+    }
+
+    #[test]
+    fn rewrite_build_number_updates_existing_field() {
+        let original = r#"[package]
+name = "foo"
+version = "1.0"
+
+[package.build.config]
+build-number = 0
+"#;
+        let (_tmp, path) = write_tmp_pixi_toml(original);
+        rewrite_build_number(&path, 5).unwrap();
+        let updated = std::fs::read_to_string(&path).unwrap();
+        let reparsed = UpstreamPixiToml::parse(&updated).unwrap();
+        assert_eq!(reparsed.build_number(), 5);
+    }
+
+    #[test]
+    fn rewrite_build_number_inserts_when_absent() {
+        let original = r#"[package]
+name = "foo"
+version = "1.0"
+"#;
+        let (_tmp, path) = write_tmp_pixi_toml(original);
+        rewrite_build_number(&path, 2).unwrap();
+        let updated = std::fs::read_to_string(&path).unwrap();
+        let reparsed = UpstreamPixiToml::parse(&updated).unwrap();
+        assert_eq!(reparsed.build_number(), 2);
+    }
+
+    #[test]
+    fn rewrite_build_number_is_idempotent() {
+        let original = r#"[package]
+name = "foo"
+version = "1.0"
+
+[package.build.config]
+build-number = 0
+"#;
+        let (_tmp, path) = write_tmp_pixi_toml(original);
+        rewrite_build_number(&path, 4).unwrap();
+        let first = std::fs::read_to_string(&path).unwrap();
+        rewrite_build_number(&path, 4).unwrap();
+        let second = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn rewrite_build_number_preserves_unrelated_keys_and_comments() {
+        let original = r#"# top-of-file comment
+[package]
+name = "foo"  # inline comment
+version = "1.0"
+
+[tasks]
+ci = "test"
+"#;
+        let (_tmp, path) = write_tmp_pixi_toml(original);
+        rewrite_build_number(&path, 1).unwrap();
+        let updated = std::fs::read_to_string(&path).unwrap();
+        assert!(updated.contains("# top-of-file comment"), "got: {updated}");
+        assert!(updated.contains("# inline comment"), "got: {updated}");
+        assert!(updated.contains("ci = \"test\""), "got: {updated}");
+        assert!(updated.contains("build-number = 1"), "got: {updated}");
+    }
+
+    #[test]
+    fn rewrite_build_number_errors_when_package_missing() {
+        let original = "[tasks]\nci = \"test\"\n";
+        let (_tmp, path) = write_tmp_pixi_toml(original);
+        let err = rewrite_build_number(&path, 1).unwrap_err();
+        assert!(format!("{err:#}").contains("missing [package]"));
     }
 }

@@ -319,11 +319,18 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
 
 #[derive(Deserialize)]
 struct PixiNativeManifestRaw {
+    #[serde(default)]
+    rebuild_epoch: u64,
     packages: Vec<PixiNativeEntryRaw>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PixiNativeManifest {
+    /// Global rebuild salt. Added to each package's upstream `build-number`
+    /// when computing the effective build number used for the channel-skip
+    /// check and the published artifact. Bump to force a fleet-wide rebuild
+    /// (e.g. after a ros2-distro-mutex / fastdds-mutex bump).
+    pub rebuild_epoch: u64,
     pub packages: Vec<PixiNativeEntry>,
 }
 
@@ -335,7 +342,10 @@ impl PixiNativeManifest {
             .into_iter()
             .map(PixiNativeEntry::try_from)
             .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(Self { packages })
+        Ok(Self {
+            rebuild_epoch: raw.rebuild_epoch,
+            packages,
+        })
     }
 }
 
@@ -397,6 +407,55 @@ packages:
             Some(std::path::Path::new("packages/inner"))
         );
         assert_eq!(m.packages[1].runner_size, RunnerSize::Cpu8);
+    }
+
+    #[test]
+    fn rebuild_epoch_defaults_to_zero() {
+        let yaml = r#"
+packages:
+  - name: pkg
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+"#;
+        let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
+        assert_eq!(m.rebuild_epoch, 0);
+    }
+
+    #[test]
+    fn rebuild_epoch_parses_when_present() {
+        let yaml = r#"
+rebuild_epoch: 3
+packages:
+  - name: pkg
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+"#;
+        let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
+        assert_eq!(m.rebuild_epoch, 3);
+    }
+
+    #[test]
+    fn rebuild_epoch_rejects_negative() {
+        let yaml = r#"
+rebuild_epoch: -1
+packages:
+  - name: pkg
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+"#;
+        assert!(PixiNativeManifest::from_yaml_str(yaml).is_err());
+    }
+
+    #[test]
+    fn rebuild_epoch_rejects_string() {
+        let yaml = r#"
+rebuild_epoch: "1"
+packages:
+  - name: pkg
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+"#;
+        assert!(PixiNativeManifest::from_yaml_str(yaml).is_err());
     }
 }
 
