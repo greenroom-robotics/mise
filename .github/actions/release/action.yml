@@ -42,14 +42,6 @@ inputs:
     description: Directory containing per-package pixi workspaces.
     required: false
     default: packages
-  ros-distro:
-    description: ROS distro identifier.
-    required: false
-    default: kilted
-  recipes-repo:
-    description: owner/repo of the conda recipes repository to upsert into.
-    required: false
-    default: greenroom-robotics/ros-kilted-recipes
   changelog:
     description: Whether to commit CHANGELOG.md back to the source repo.
     required: false
@@ -103,8 +95,6 @@ runs:
         API_TOKEN_GITHUB: ${{ steps.setup.outputs.gh-token }}
       run: |
         args=(--package-dir "${{ inputs.package-dir }}"
-              --ros-distro "${{ inputs.ros-distro }}"
-              --recipes-repo "${{ inputs.recipes-repo }}"
               --changelog "${{ inputs.changelog }}"
               --release-branches "${{ inputs.release-branches }}")
         if [ -n "${{ inputs.package }}" ]; then

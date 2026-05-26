@@ -9,7 +9,7 @@ pub struct RecipesPr {
     #[arg(long)]
     pub version: String,
     /// owner/repo of the recipes repository.
-    #[arg(long, default_value = "greenroom-robotics/ros-kilted-recipes")]
+    #[arg(long, default_value = "greenroom-robotics/ros-recipes")]
     pub recipes_repo: String,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]

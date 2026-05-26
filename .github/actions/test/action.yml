@@ -42,10 +42,6 @@ inputs:
     description: Directory containing per-package pixi workspaces.
     required: false
     default: packages
-  ros-distro:
-    description: ROS distro identifier.
-    required: false
-    default: kilted
 
 runs:
   using: composite
@@ -65,7 +61,7 @@ runs:
     - name: Run mise ci test
       shell: bash
       run: |
-        args=(--package-dir "${{ inputs.package-dir }}" --ros-distro "${{ inputs.ros-distro }}")
+        args=(--package-dir "${{ inputs.package-dir }}")
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi

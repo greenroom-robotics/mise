@@ -13,7 +13,7 @@ pub struct Release {
     #[arg(long, default_value = "kilted")]
     pub ros_distro: String,
     /// owner/repo of the conda recipes repository to upsert into.
-    #[arg(long, default_value = "greenroom-robotics/ros-kilted-recipes")]
+    #[arg(long, default_value = "greenroom-robotics/ros-recipes")]
     pub recipes_repo: String,
     /// Whether to commit CHANGELOG.md back to the source repo.
     #[arg(long, default_value_t = true)]

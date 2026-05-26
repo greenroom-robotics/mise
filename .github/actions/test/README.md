@@ -19,7 +19,7 @@ jobs:
           azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 ```
 
-That's the whole workflow. Add `package`, `package-dir`, `ros-distro` inputs to filter or rename defaults.
+That's the whole workflow. Add `package` or `package-dir` inputs to filter or rename defaults.
 
 ## Contract on the consumer
 
