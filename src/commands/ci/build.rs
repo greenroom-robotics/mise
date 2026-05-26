@@ -9,9 +9,6 @@ pub struct Build {
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
-    /// ROS distro identifier.
-    #[arg(long, default_value = "kilted")]
-    pub ros_distro: String,
     /// rattler-build target subdir.
     #[arg(long)]
     pub target_platform: Option<String>,

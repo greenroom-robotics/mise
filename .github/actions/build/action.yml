@@ -42,10 +42,6 @@ inputs:
     description: Directory containing per-package pixi workspaces.
     required: false
     default: packages
-  ros-distro:
-    description: ROS distro identifier.
-    required: false
-    default: kilted
   target-platform:
     description: rattler-build target subdir (linux-64 or linux-aarch64). Empty - host arch.
     required: false
@@ -69,7 +65,7 @@ runs:
     - name: Run mise ci build
       shell: bash
       run: |
-        args=(--package-dir "${{ inputs.package-dir }}" --ros-distro "${{ inputs.ros-distro }}")
+        args=(--package-dir "${{ inputs.package-dir }}")
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi

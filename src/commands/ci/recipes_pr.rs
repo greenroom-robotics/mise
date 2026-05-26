@@ -1,6 +1,8 @@
 use clap::Args;
 use std::path::PathBuf;
 
+const RECIPES_REPO: &str = "greenroom-robotics/ros-recipes";
+
 /// Called by semantic-release's @semantic-release/exec plugin once a new version
 /// has been determined. Opens/updates a PR on the recipes repo with the new pin.
 #[derive(Args, Debug)]
@@ -8,18 +10,12 @@ pub struct RecipesPr {
     /// Release version, no leading 'v' (matches `${nextRelease.version}`).
     #[arg(long)]
     pub version: String,
-    /// owner/repo of the recipes repository.
-    #[arg(long, default_value = "greenroom-robotics/ros-kilted-recipes")]
-    pub recipes_repo: String,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
     /// Single package, used when semantic-release ran in multi-package mode.
     #[arg(long)]
     pub package: Option<String>,
-    /// ROS distro identifier.
-    #[arg(long, default_value = "kilted")]
-    pub ros_distro: String,
 }
 
 impl RecipesPr {
@@ -45,7 +41,7 @@ impl RecipesPr {
         // 3. Clone the recipes repo into a tempdir.
         let tmp = tempfile::TempDir::new()?;
         let recipes_root = tmp.path().join("recipes");
-        clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
+        clone_recipes_repo(RECIPES_REPO, &recipes_root)?;
 
         // 4. Create the release branch.
         let branch = format!("release/{}-v{}", src_short, self.version);
@@ -89,7 +85,7 @@ impl RecipesPr {
             &["git", "push", "--force-with-lease", "origin", &branch],
         )?;
 
-        if pr_exists(&self.recipes_repo, &branch)? {
+        if pr_exists(RECIPES_REPO, &branch)? {
             println!("PR already exists for {branch}; branch updated.");
             return Ok(());
         }
@@ -101,7 +97,7 @@ impl RecipesPr {
                 "pr",
                 "create",
                 "--repo",
-                &self.recipes_repo,
+                RECIPES_REPO,
                 "--base",
                 "main",
                 "--head",

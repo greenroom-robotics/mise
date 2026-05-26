@@ -9,12 +9,6 @@ pub struct Release {
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
-    /// ROS distro identifier.
-    #[arg(long, default_value = "kilted")]
-    pub ros_distro: String,
-    /// owner/repo of the conda recipes repository to upsert into.
-    #[arg(long, default_value = "greenroom-robotics/ros-kilted-recipes")]
-    pub recipes_repo: String,
     /// Whether to commit CHANGELOG.md back to the source repo.
     #[arg(long, default_value_t = true)]
     pub changelog: bool,
@@ -99,10 +93,8 @@ impl Release {
         );
 
         let publish_cmd = format!(
-            "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={}",
-            self.recipes_repo,
+            "mise ci recipes-pr --version=${{nextRelease.version}} --package-dir={} --package={}",
             self.package_dir.display(),
-            self.ros_distro,
             pkg.name,
         );
 
