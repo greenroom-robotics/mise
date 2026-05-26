@@ -1,3 +1,13 @@
+## [3.0.0](https://github.com/greenroom-robotics/mise/compare/mise@2.3.0...mise@3.0.0) (2026-05-26)
+
+### ⚠ BREAKING CHANGES
+
+* **actions:** migrate to conda-channel-proxy v2 (multichannel) (#6)
+
+### Features
+
+* **actions:** migrate to conda-channel-proxy v2 (multichannel) ([#6](https://github.com/greenroom-robotics/mise/issues/6)) ([653e2f0](https://github.com/greenroom-robotics/mise/commit/653e2f0bb5bc0cbe97a9eb6c1d20aecbcd12e687))
+
 ## [2.3.0](https://github.com/greenroom-robotics/mise/compare/mise@2.2.1...mise@2.3.0) (2026-05-25)
 
 ### Features
