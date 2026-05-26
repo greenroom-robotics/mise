@@ -1,3 +1,15 @@
+## [4.0.0](https://github.com/greenroom-robotics/mise/compare/mise@3.0.0...mise@4.0.0) (2026-05-26)
+
+### ⚠ BREAKING CHANGES
+
+* **ci:** the ros-distro and recipes-repo inputs on the
+build/test/release composite actions have been removed. Consumers
+that set these inputs must remove them.
+
+### Features
+
+* **ci:** drop ros-distro/recipes-repo inputs from composite actions ([#7](https://github.com/greenroom-robotics/mise/issues/7)) ([c6650fe](https://github.com/greenroom-robotics/mise/commit/c6650fe85ef6f12d62fadb51130262bda98c8684))
+
 ## [3.0.0](https://github.com/greenroom-robotics/mise/compare/mise@2.3.0...mise@3.0.0) (2026-05-26)
 
 ### ⚠ BREAKING CHANGES
