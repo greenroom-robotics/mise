@@ -33,7 +33,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
-    default: v0.3.0
+    default: v0.4.0
   package:
     description: Single package to test (default - all packages under package-dir).
     required: false
@@ -72,4 +72,4 @@ runs:
         pixi run mise ci test "${args[@]}"
 
     - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v1
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2
