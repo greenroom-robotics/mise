@@ -281,6 +281,7 @@ fn ci_test_help_lists_known_flags() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--package"));
     assert!(stdout.contains("--package-dir"));
+    assert!(stdout.contains("--ros-distro"));
 }
 
 #[test]
@@ -313,6 +314,7 @@ fn ci_release_help_lists_known_flags() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--package"));
     assert!(stdout.contains("--package-dir"));
+    assert!(stdout.contains("--recipes-repo"));
     assert!(stdout.contains("--changelog"));
     assert!(stdout.contains("--release-branches"));
 }
@@ -326,6 +328,7 @@ fn ci_recipes_pr_help_lists_known_flags() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--version"));
+    assert!(stdout.contains("--recipes-repo"));
     assert!(stdout.contains("--package-dir"));
 }
 

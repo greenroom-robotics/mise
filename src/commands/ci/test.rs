@@ -9,6 +9,9 @@ pub struct Test {
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
+    /// ROS distro identifier (passed to pixi-env tasks).
+    #[arg(long, default_value = "kilted")]
+    pub ros_distro: String,
 }
 
 impl Test {
