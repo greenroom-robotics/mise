@@ -365,6 +365,9 @@ pub(crate) fn mutate_vendored_recipe(
 
     let old_version =
         old_version.ok_or_else(|| anyhow::anyhow!("package.version not found in recipe"))?;
+    if old_version.contains("${{") {
+        anyhow::bail!("package.version is templated ({old_version}); refusing to overwrite");
+    }
     let old_rev = old_rev.ok_or_else(|| anyhow::anyhow!("source.rev not found in recipe"))?;
     let number_idx =
         number_idx.ok_or_else(|| anyhow::anyhow!("build.number not found in recipe"))?;
@@ -423,14 +426,16 @@ fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
     // Vendored recipes win over manifest_type routing: vendor_recipes/
     // overlays recipes/ at build time, so a package that exists there gets
     // bumped there regardless of how the source repo describes itself.
-    let repo = Repo::or_discover(repo_root.clone())?;
-    let vendored_path = repo
-        .root()
-        .join("vendor_recipes")
-        .join(&p.package)
-        .join("recipe.yaml");
-    if vendored_path.exists() {
-        return vendored(&vendored_path, &p.version, p.sha.as_str());
+    {
+        let repo = Repo::or_discover(repo_root.clone())?;
+        let vendored_path = repo
+            .root()
+            .join("vendor_recipes")
+            .join(&p.package)
+            .join("recipe.yaml");
+        if vendored_path.exists() {
+            return vendored(&vendored_path, &p.version, p.sha.as_str());
+        }
     }
     match p.manifest_type_or_default() {
         ManifestType::PackageXml => recipe(
@@ -899,6 +904,19 @@ requirements:
         )
         .unwrap_err();
         assert!(err.to_string().contains("build.number"));
+    }
+
+    #[test]
+    fn vendored_errors_on_templated_version() {
+        let templated =
+            VENDORED_FIXTURE.replace("  version: 1.2.3\n", "  version: ${{ some_var }}\n");
+        let err = mutate_vendored_recipe(
+            &templated,
+            "1.3.0",
+            "1111111111111111111111111111111111111111",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("templated"));
     }
 
     #[test]
