@@ -450,8 +450,7 @@ fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
 }
 
 fn vendored(path: &Path, version: &str, rev: &str) -> anyhow::Result<()> {
-    let text =
-        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let updated = mutate_vendored_recipe(&text, version, rev)?;
     std::fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
     Ok(())
@@ -474,6 +473,7 @@ fn open_pr(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
             "add",
             "rosdistro_additional_recipes.yaml",
             "pixi_native_packages.yaml",
+            "vendor_recipes",
         ],
     )?;
 
@@ -869,12 +869,11 @@ requirements:
 
     #[test]
     fn vendored_errors_when_rev_missing() {
-        let no_rev = VENDORED_FIXTURE.replace(
-            "  rev: 4bcfd421c52387b3f7872b23e60059e521176f35\n",
-            "",
-        );
-        let err = mutate_vendored_recipe(&no_rev, "1.3.0", "1111111111111111111111111111111111111111")
-            .unwrap_err();
+        let no_rev =
+            VENDORED_FIXTURE.replace("  rev: 4bcfd421c52387b3f7872b23e60059e521176f35\n", "");
+        let err =
+            mutate_vendored_recipe(&no_rev, "1.3.0", "1111111111111111111111111111111111111111")
+                .unwrap_err();
         assert!(err.to_string().contains("source.rev"));
     }
 
