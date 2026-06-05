@@ -384,3 +384,39 @@ fn ci_test_discovers_fixture_package() {
         "expected discovery banner in stdout. stdout={stdout} stderr={stderr}"
     );
 }
+
+#[test]
+fn bump_route_prefers_vendored_recipe() {
+    let td = tempfile::TempDir::new().unwrap();
+    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
+    let dir = td.path().join("vendor_recipes/foo");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("recipe.yaml"),
+        "package:\n  name: foo\n  version: 1.0.0\n\nsource:\n  git: https://github.com/example/foo.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 3\n",
+    )
+    .unwrap();
+    // manifest_type=package.xml would normally route to
+    // rosdistro_additional_recipes.yaml (absent here) — vendored must win.
+    let payload = td.path().join("payload.json");
+    std::fs::write(
+        &payload,
+        r#"{"package":"foo","version":"1.1.0","source_repo":"example/foo","sha":"1111111111111111111111111111111111111111","manifest_type":"package.xml"}"#,
+    )
+    .unwrap();
+    mise()
+        .args([
+            "bump",
+            "route",
+            "--repo-root",
+            td.path().to_str().unwrap(),
+            "--payload",
+            payload.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let updated = std::fs::read_to_string(dir.join("recipe.yaml")).unwrap();
+    assert!(updated.contains("version: 1.1.0"));
+    assert!(updated.contains("rev: 1111111111111111111111111111111111111111"));
+    assert!(updated.contains("number: 0"));
+}
