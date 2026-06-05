@@ -1,3 +1,9 @@
+## [4.1.0](https://github.com/greenroom-robotics/mise/compare/mise@4.0.0...mise@4.1.0) (2026-06-05)
+
+### Features
+
+* add skip-pixi input to setup action ([#8](https://github.com/greenroom-robotics/mise/issues/8)) ([574c7f1](https://github.com/greenroom-robotics/mise/commit/574c7f1736267a3be9a02259d9d5a03047d80b80))
+
 ## [4.0.0](https://github.com/greenroom-robotics/mise/compare/mise@3.0.0...mise@4.0.0) (2026-05-26)
 
 ### ⚠ BREAKING CHANGES
