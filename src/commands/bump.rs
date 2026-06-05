@@ -420,6 +420,18 @@ impl DispatchPayload {
 
 fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
     let p = DispatchPayload::load(&payload)?;
+    // Vendored recipes win over manifest_type routing: vendor_recipes/
+    // overlays recipes/ at build time, so a package that exists there gets
+    // bumped there regardless of how the source repo describes itself.
+    let repo = Repo::or_discover(repo_root.clone())?;
+    let vendored_path = repo
+        .root()
+        .join("vendor_recipes")
+        .join(&p.package)
+        .join("recipe.yaml");
+    if vendored_path.exists() {
+        return vendored(&vendored_path, &p.version, p.sha.as_str());
+    }
     match p.manifest_type_or_default() {
         ManifestType::PackageXml => recipe(
             repo_root,
@@ -435,6 +447,14 @@ fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
             p.subdir.clone(),
         ),
     }
+}
+
+fn vendored(path: &Path, version: &str, rev: &str) -> anyhow::Result<()> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let updated = mutate_vendored_recipe(&text, version, rev)?;
+    std::fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
 }
 
 fn open_pr(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
