@@ -1,5 +1,5 @@
 name: Set up mise CI environment
-description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2 (if: always()) to clean up the proxy.'
+description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and (unless skip-pixi is set) a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2 (if: always()) to clean up the proxy.'
 author: Greenroom Robotics
 
 inputs:
