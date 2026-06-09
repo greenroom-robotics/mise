@@ -1,3 +1,9 @@
+## [4.2.0](https://github.com/greenroom-robotics/mise/compare/mise@4.1.0...mise@4.2.0) (2026-06-09)
+
+### Features
+
+* bump vendored recipes from package-released dispatch ([#9](https://github.com/greenroom-robotics/mise/issues/9)) ([0705c7f](https://github.com/greenroom-robotics/mise/commit/0705c7fe597cd6194e89e21b9e5cf2fb2f541bcc))
+
 ## [4.1.0](https://github.com/greenroom-robotics/mise/compare/mise@4.0.0...mise@4.1.0) (2026-06-05)
 
 ### Features
