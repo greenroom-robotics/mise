@@ -9,3 +9,48 @@ jobs:
       package: mise
       package_path: .
     secrets: inherit
+
+  # Slides the bare `v<MAJOR>` tag (e.g. `v1`, `v2`) forward whenever the
+  # release job above cuts a new exact `mise@X.Y.Z` tag. Consumers pin
+  # `uses: greenroom-robotics/mise/.github/actions/<name>@v<MAJOR>` and
+  # automatically pick up minor/patch updates to the composite actions.
+  #
+  # This runs as a job here becase detecting a tag push will not trigger
+  # any workflows since the tag is pushed by github app
+  update-major-tag:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Slide major tag to latest mise@ release
+        run: |
+          set -euo pipefail
+          # Newest exact release tag cut by semantic-release, e.g. mise@4.2.0.
+          LATEST="$(git tag -l 'mise@*' | sort -V | tail -1)"
+          if [ -z "$LATEST" ]; then
+            echo "No mise@* tags found; nothing to slide."
+            exit 0
+          fi
+          VERSION="${LATEST#mise@}"
+          MAJOR="${VERSION%%.*}"
+          if ! [[ "$MAJOR" =~ ^[0-9]+$ ]]; then
+            echo "::error::could not parse major version from tag $LATEST" >&2
+            exit 1
+          fi
+          SLIDING="v${MAJOR}"
+          TARGET="$(git rev-list -n1 "$LATEST")"
+          CURRENT="$(git rev-list -n1 "$SLIDING" 2>/dev/null || true)"
+          if [ "$TARGET" = "$CURRENT" ]; then
+            echo "$SLIDING already points at $TARGET ($LATEST); nothing to do."
+            exit 0
+          fi
+          echo "Pointing $SLIDING at $TARGET (from $LATEST)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$SLIDING" "$TARGET"
+          git push origin "$SLIDING" --force
