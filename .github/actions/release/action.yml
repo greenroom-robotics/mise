@@ -33,7 +33,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
-    default: v0.4.0
+    default: v0.5.0
   package:
     description: Single package to release (default - all packages under package-dir).
     required: false
@@ -68,7 +68,7 @@ runs:
   steps:
     - id: setup
       if: inputs.skip-setup != 'true'
-      uses: greenroom-robotics/mise/.github/actions/setup@v2
+      uses: greenroom-robotics/mise/.github/actions/setup@v4
       with:
         gh-app-id: ${{ inputs.gh-app-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
@@ -112,4 +112,4 @@ runs:
         pixi run mise ci release "${args[@]}"
 
     - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3

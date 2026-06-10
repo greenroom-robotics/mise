@@ -4,7 +4,7 @@ Provisions everything a pixi-based ROS package workflow needs to run mise CLI co
 
 1. GitHub App token (so private deps clone)
 2. Azure federated login (so the conda-channel-proxy can reach the storage account)
-3. `conda-channel-proxy` running on `http://localhost:8000`, serving the `general` and `overrides` channels under `/general` and `/overrides`
+3. `conda-channel-proxy` running on `http://localhost:12222`, serving the `general` and `overrides` channels under `/general` and `/overrides`
 4. pixi installed with the workspace lockfile applied
 
 Public action — call it directly from any workflow.
@@ -12,7 +12,7 @@ Public action — call it directly from any workflow.
 ## Usage
 
 ```yaml
-- uses: greenroom-robotics/mise/.github/actions/setup@v2
+- uses: greenroom-robotics/mise/.github/actions/setup@v4
   with:
     gh-app-id: ${{ secrets.GH_APP_ID }}
     gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -23,7 +23,7 @@ Public action — call it directly from any workflow.
 # Do your work here, e.g. `pixi run mise ci test`
 
 - if: always()
-  uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2
+  uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
 ```
 
 **Teardown is your responsibility.** This action does not stop the proxy. Pair it with the CCP `teardown` action under `if: always()` so the proxy is stopped and the log is uploaded on both success and failure.

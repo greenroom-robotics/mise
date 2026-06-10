@@ -1,5 +1,5 @@
 name: Set up mise CI environment
-description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and (unless skip-pixi is set) a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v2 (if: always()) to clean up the proxy.'
+description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and (unless skip-pixi is set) a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3 (if: always()) to clean up the proxy.'
 author: Greenroom Robotics
 
 inputs:
@@ -33,7 +33,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag to install.
     required: false
-    default: v0.4.0
+    default: v0.5.0
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the proxy, App token, Azure login, and git auth still run on the host.
     required: false
@@ -41,13 +41,13 @@ inputs:
 
 outputs:
   proxy-url:
-    description: Base URL of the running conda-channel-proxy (e.g. http://localhost:8000). Channels live under /general and /overrides; prefer the per-channel outputs below for downstream use.
+    description: Base URL of the running conda-channel-proxy (e.g. http://localhost:12222). Channels live under /general and /overrides; prefer the per-channel outputs below for downstream use.
     value: ${{ steps.proxy.outputs.url }}
   proxy-general-url:
-    description: URL of the `general` channel (e.g. http://localhost:8000/general).
+    description: URL of the `general` channel (e.g. http://localhost:12222/general).
     value: ${{ steps.proxy.outputs.general-url }}
   proxy-overrides-url:
-    description: URL of the `overrides` channel (e.g. http://localhost:8000/overrides).
+    description: URL of the `overrides` channel (e.g. http://localhost:12222/overrides).
     value: ${{ steps.proxy.outputs.overrides-url }}
   gh-token:
     description: GitHub App installation token for downstream steps.
@@ -76,7 +76,7 @@ runs:
 
     - name: Start conda-channel-proxy
       id: proxy
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v2
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v3
       with:
         version: ${{ inputs.proxy-version }}
         gh-token: ${{ steps.app-token.outputs.token }}

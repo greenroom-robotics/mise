@@ -10,7 +10,7 @@ jobs:
     runs-on: 2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - uses: greenroom-robotics/mise/.github/actions/build@v2
+      - uses: greenroom-robotics/mise/.github/actions/build@v4
         with:
           gh-app-id: ${{ secrets.GH_APP_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
