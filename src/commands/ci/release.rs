@@ -99,7 +99,7 @@ impl Release {
         );
 
         let publish_cmd = format!(
-            "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={}",
+            "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={} --sha=${{nextRelease.gitHead}}",
             self.recipes_repo,
             self.package_dir.display(),
             self.ros_distro,
