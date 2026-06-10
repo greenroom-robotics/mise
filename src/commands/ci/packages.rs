@@ -6,6 +6,19 @@ use std::path::{Path, PathBuf};
 /// If `filter` is `Some(name)`, returns only that package (errors if missing).
 /// Returns absolute paths to each package's `pixi.toml`.
 pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>> {
+    // Root-package layout: package_dir itself holds the package's pixi.toml
+    // (e.g. a single-package repo with pixi.toml at its root).
+    let root_pixi = package_dir.join("pixi.toml");
+    if root_pixi.exists() {
+        if let Some(name) = filter {
+            let pkg = crate::commands::ci::pixi_meta::read(&root_pixi)?;
+            if pkg.name != name {
+                anyhow::bail!("package {name} not found; root package is {}", pkg.name);
+            }
+        }
+        return Ok(vec![root_pixi]);
+    }
+
     if let Some(name) = filter {
         let pixi = package_dir.join(name).join("pixi.toml");
         if !pixi.exists() {
