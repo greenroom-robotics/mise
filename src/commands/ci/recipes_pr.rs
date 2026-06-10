@@ -59,6 +59,16 @@ impl RecipesPr {
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
+            // Path from the source-repo root to the dir holding this package's
+            // pixi.toml. "" or "." means the package sits at the repo root.
+            let parent = pixi
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let subdir = match parent.as_str() {
+                "" | "." => None,
+                s => Some(s),
+            };
             let rel = recipes_upsert::apply_release(
                 &recipes_root,
                 &pkg.name,
@@ -66,6 +76,7 @@ impl RecipesPr {
                 &tag,
                 &self.version,
                 &self.sha,
+                subdir,
             )?;
             changed.insert(rel);
         }
