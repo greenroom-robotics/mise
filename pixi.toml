@@ -20,4 +20,6 @@ channels = [
     "https://prefix.dev/conda-forge",
 ]
 name = "pixi-build-rust"
-version = "*"
+# Pinned: the 2026-06-10 backend builds changed the build API (MatchSpec
+# params) and break the pinned pixi 0.68-gr1 fork. Bump alongside pixi.
+version = "==0.4.11.20260603.1147.c5d4437"
