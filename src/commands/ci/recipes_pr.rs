@@ -61,9 +61,18 @@ impl RecipesPr {
             let pkg = pixi_meta::read(pixi)?;
             // Path from the source-repo root to the dir holding this package's
             // pixi.toml. "" or "." means the package sits at the repo root.
+            // recipes-pr runs at the source repo root (cwd); when --package-dir
+            // was passed as an absolute path the discovered pixi path is also
+            // absolute, so strip the cwd to keep the subdir repo-root-relative.
             let parent = pixi
                 .parent()
-                .map(|p| p.to_string_lossy().into_owned())
+                .map(|p| {
+                    let rel = std::env::current_dir()
+                        .ok()
+                        .and_then(|cwd| p.strip_prefix(&cwd).ok().map(|r| r.to_owned()))
+                        .unwrap_or_else(|| p.to_owned());
+                    rel.to_string_lossy().into_owned()
+                })
                 .unwrap_or_default();
             let subdir = match parent.as_str() {
                 "" | "." => None,

@@ -352,7 +352,7 @@ pub(crate) fn apply_release(
             package,
         );
 
-    // 3. Existing rosdistro entry (and not already pixi-native) -> update there.
+    // Arm 3: existing rosdistro entry (and not already pixi-native) -> update there.
     if in_rosdistro && !in_pixi_native {
         upsert(
             &rosdistro_abs,
@@ -366,7 +366,7 @@ pub(crate) fn apply_release(
         return Ok(rosdistro_rel);
     }
 
-    // 2 & 4. Existing pixi-native entry, or brand-new -> pixi-native.
+    // Arms 2 & 4: existing pixi-native entry, or brand-new package -> pixi-native.
     if !pixi_native_abs.exists() {
         anyhow::bail!(
             "{} not found in recipes repo; cannot add pixi-native entry for {package}",
@@ -853,5 +853,24 @@ packages:
         assert!(out.contains("- name: newpkg"));
         assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
         assert!(out.contains("subdir: packages/newpkg"));
+    }
+
+    #[test]
+    fn apply_release_errors_when_pixi_native_absent() {
+        // Brand-new package, no vendored recipe, and no pixi_native_packages.yaml
+        // to append to -> loud error rather than silently writing nothing.
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        let err = apply_release(
+            root,
+            "newpkg",
+            "https://github.com/example/newpkg.git",
+            "v1.0.0",
+            "1.0.0",
+            "5555555555555555555555555555555555555555",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("pixi_native_packages.yaml"));
     }
 }
