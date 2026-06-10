@@ -1,3 +1,9 @@
+## [4.4.0](https://github.com/greenroom-robotics/mise/compare/mise@4.3.0...mise@4.4.0) (2026-06-10)
+
+### Features
+
+* route pixi-native packages in ci recipes-pr ([#11](https://github.com/greenroom-robotics/mise/issues/11)) ([5a9ba95](https://github.com/greenroom-robotics/mise/commit/5a9ba95dc8f2398aaa55c00d70dcc79625f908fa))
+
 ## [4.3.0](https://github.com/greenroom-robotics/mise/compare/mise@4.2.0...mise@4.3.0) (2026-06-10)
 
 ### Features
