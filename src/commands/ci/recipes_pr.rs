@@ -117,32 +117,61 @@ impl RecipesPr {
 
         if pr_exists(&self.recipes_repo, &branch)? {
             println!("PR already exists for {branch}; branch updated.");
-            return Ok(());
+        } else {
+            let create_args = pr_create_args(
+                &self.recipes_repo,
+                &branch,
+                &format!("release: {} {}", src_short, tag),
+            );
+            run_in(
+                &recipes_root,
+                &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?;
         }
 
+        // Enable GitHub native auto-merge so the PR lands once CI passes
+        // (mirrors `mise bump`'s behavior).
+        let automerge_args = pr_automerge_args(&self.recipes_repo, &branch);
         run_in(
             &recipes_root,
-            &[
-                "gh",
-                "pr",
-                "create",
-                "--repo",
-                &self.recipes_repo,
-                "--base",
-                "main",
-                "--head",
-                &branch,
-                "--title",
-                &format!("release: {} {}", src_short, tag),
-                "--body",
-                "Automated by `mise ci recipes-pr`.",
-                "--label",
-                "automerge",
-            ],
+            &automerge_args
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
         )?;
 
         Ok(())
     }
+}
+
+fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
+    [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        repo,
+        "--base",
+        "main",
+        "--head",
+        branch,
+        "--title",
+        title,
+        "--body",
+        "Automated by `mise ci recipes-pr`.",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn pr_automerge_args(repo: &str, branch: &str) -> Vec<String> {
+    [
+        "gh", "pr", "merge", "--repo", repo, branch, "--auto", "--squash",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
 }
 
 fn source_repo_https_url() -> anyhow::Result<String> {
@@ -227,4 +256,25 @@ fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
         return Ok(false);
     }
     Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
+    // label — `--label automerge` only attaches a literal label and the PR
+    // never merges.
+    #[test]
+    fn create_args_do_not_use_automerge_label() {
+        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise-v4.5.0", "t");
+        assert!(!args.iter().any(|a| a == "--label"));
+    }
+
+    #[test]
+    fn automerge_args_enable_native_auto_squash_merge() {
+        let args = pr_automerge_args("greenroom-robotics/ros-recipes", "release/mise-v4.5.0");
+        assert!(args.contains(&"--auto".to_string()));
+        assert!(args.contains(&"--squash".to_string()));
+    }
 }
