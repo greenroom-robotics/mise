@@ -170,6 +170,9 @@ pub(crate) fn mutate_vendored_recipe(
 /// `mutate_vendored_recipe`. Otherwise upsert the package's entry into
 /// `rosdistro_additional_recipes.yaml`. Returns the repo-relative path of the
 /// file that changed, for staging.
+///
+/// Note: for the vendored path, `url` and `tag` are unused — the recipe keeps
+/// its own `source.git` url; only `version` and `sha` (as `source.rev`) change.
 pub(crate) fn apply_release(
     recipes_root: &Path,
     package: &str,
