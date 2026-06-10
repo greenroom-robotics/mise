@@ -29,39 +29,14 @@ pub struct Release {
     pub github_release: bool,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use clap::Parser;
-
-    // Minimal parser wrapper so we can exercise Release's arg definitions.
-    #[derive(Parser, Debug)]
-    struct TestCli {
-        #[command(flatten)]
-        release: Release,
-    }
-
-    #[test]
-    fn changelog_accepts_explicit_bool_value() {
-        // Matches what the release composite action passes.
-        let cli = TestCli::parse_from(["x", "--package-dir", ".", "--changelog", "true"]);
-        assert!(cli.release.changelog);
-
-        let cli = TestCli::parse_from(["x", "--changelog", "false"]);
-        assert!(!cli.release.changelog);
-    }
-
-    #[test]
-    fn bool_flags_default_to_true_when_omitted() {
-        let cli = TestCli::parse_from(["x"]);
-        assert!(cli.release.changelog);
-        assert!(cli.release.github_release);
-    }
-
-    #[test]
-    fn github_release_accepts_explicit_bool_value() {
-        let cli = TestCli::parse_from(["x", "--github-release", "false"]);
-        assert!(!cli.release.github_release);
+/// semantic-release tag format. Both modes tag `<package>@<version>` — in
+/// multi-package mode multi-semantic-release substitutes `${name}` itself; in
+/// single-package mode the resolved package name is embedded literally.
+fn tag_format(multi: bool, single_pkg_name: &str) -> String {
+    if multi {
+        "${name}@${version}".to_string()
+    } else {
+        format!("{single_pkg_name}@${{version}}")
     }
 }
 
@@ -88,11 +63,10 @@ impl Release {
         // package) → bare `semantic-release`. Multi-package mode → `multi-
         // semantic-release` walks workspaces and runs each one independently.
         let multi = self.package.is_none() && pixis.len() > 1;
-        let tag_format = if multi {
-            "${name}@${version}"
-        } else {
-            "${version}"
-        };
+        // In single-package mode `pixis` holds exactly the package being
+        // released, so its name can be embedded literally in the tag format.
+        let single_pkg = crate::commands::ci::pixi_meta::read(&pixis[0])?;
+        let tag_format = tag_format(multi, &single_pkg.name);
 
         let bin = if multi {
             "multi-semantic-release"
@@ -173,5 +147,54 @@ impl Release {
             "plugins": plugins,
         });
         Ok(serde_json::to_string_pretty(&releaserc)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // Minimal parser wrapper so we can exercise Release's arg definitions.
+    #[derive(Parser, Debug)]
+    struct TestCli {
+        #[command(flatten)]
+        release: Release,
+    }
+
+    #[test]
+    fn changelog_accepts_explicit_bool_value() {
+        // Matches what the release composite action passes.
+        let cli = TestCli::parse_from(["x", "--package-dir", ".", "--changelog", "true"]);
+        assert!(cli.release.changelog);
+
+        let cli = TestCli::parse_from(["x", "--changelog", "false"]);
+        assert!(!cli.release.changelog);
+    }
+
+    #[test]
+    fn bool_flags_default_to_true_when_omitted() {
+        let cli = TestCli::parse_from(["x"]);
+        assert!(cli.release.changelog);
+        assert!(cli.release.github_release);
+    }
+
+    #[test]
+    fn github_release_accepts_explicit_bool_value() {
+        let cli = TestCli::parse_from(["x", "--github-release", "false"]);
+        assert!(!cli.release.github_release);
+    }
+
+    // Single-package mode must keep the same `<name>@<version>` tag convention
+    // as multi-package mode; a bare `${version}` format makes semantic-release
+    // ignore all existing `<name>@X.Y.Z` tags and restart at 1.0.0.
+    #[test]
+    fn single_package_tag_format_embeds_package_name() {
+        assert_eq!(tag_format(false, "mise"), "mise@${version}");
+    }
+
+    #[test]
+    fn multi_package_tag_format_uses_msr_name_placeholder() {
+        assert_eq!(tag_format(true, "mise"), "${name}@${version}");
     }
 }
