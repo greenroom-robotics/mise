@@ -315,78 +315,6 @@ pub(crate) fn mutate_pixi_entry(
     Ok(result_str)
 }
 
-/// Mutate a hand-authored `vendor_recipes/<pkg>/recipe.yaml` in place. Returns
-/// the new content.
-///
-/// Behavior:
-/// - Replaces `version:` inside the top-level `package:` block.
-/// - Replaces `rev:` inside the top-level `source:` block.
-/// - Resets `number:` inside the top-level `build:` block to 0, but only when
-///   the version actually changed — manual rebuild bumps stay increment-only.
-/// - Returns the input unchanged when version and rev already match, so
-///   `open-pr` stages nothing and exits as a no-op.
-/// - Errors if any of the three fields is missing — never a silent no-op.
-/// - Every other line (comments, deps, formatting) passes through untouched.
-pub(crate) fn mutate_vendored_recipe(
-    text: &str,
-    version: &str,
-    rev: &str,
-) -> anyhow::Result<String> {
-    let mut section: Option<&str> = None;
-    let mut out: Vec<String> = Vec::new();
-    let mut old_version: Option<String> = None;
-    let mut old_rev: Option<String> = None;
-    let mut number_idx: Option<usize> = None;
-
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
-            // `package:` → Some("package"); `key: value` → None (no bare-key suffix).
-            section = trimmed.strip_suffix(':');
-        }
-        let replacement = match section {
-            Some("package") if indent > 0 && trimmed.starts_with("version:") => {
-                old_version = Some(trimmed["version:".len()..].trim().to_string());
-                Some(format!("{}version: {}", " ".repeat(indent), version))
-            }
-            Some("source") if indent > 0 && trimmed.starts_with("rev:") => {
-                old_rev = Some(trimmed["rev:".len()..].trim().to_string());
-                Some(format!("{}rev: {}", " ".repeat(indent), rev))
-            }
-            Some("build") if indent > 0 && trimmed.starts_with("number:") => {
-                number_idx = Some(out.len());
-                None
-            }
-            _ => None,
-        };
-        out.push(replacement.unwrap_or_else(|| line.to_string()));
-    }
-
-    let old_version =
-        old_version.ok_or_else(|| anyhow::anyhow!("package.version not found in recipe"))?;
-    if old_version.contains("${{") {
-        anyhow::bail!("package.version is templated ({old_version}); refusing to overwrite");
-    }
-    let old_rev = old_rev.ok_or_else(|| anyhow::anyhow!("source.rev not found in recipe"))?;
-    let number_idx =
-        number_idx.ok_or_else(|| anyhow::anyhow!("build.number not found in recipe"))?;
-
-    if old_version == version && old_rev == rev {
-        return Ok(text.to_string());
-    }
-    if old_version != version {
-        let indent = out[number_idx].len() - out[number_idx].trim_start().len();
-        out[number_idx] = format!("{}number: 0", " ".repeat(indent));
-    }
-
-    let mut result = out.join("\n");
-    if text.ends_with('\n') {
-        result.push('\n');
-    }
-    Ok(result)
-}
-
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct DispatchPayload {
     pub package: String,
@@ -423,20 +351,6 @@ impl DispatchPayload {
 
 fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
     let p = DispatchPayload::load(&payload)?;
-    // Vendored recipes win over manifest_type routing: vendor_recipes/
-    // overlays recipes/ at build time, so a package that exists there gets
-    // bumped there regardless of how the source repo describes itself.
-    {
-        let repo = Repo::or_discover(repo_root.clone())?;
-        let vendored_path = repo
-            .root()
-            .join("vendor_recipes")
-            .join(&p.package)
-            .join("recipe.yaml");
-        if vendored_path.exists() {
-            return vendored(&vendored_path, &p.version, p.sha.as_str());
-        }
-    }
     match p.manifest_type_or_default() {
         ManifestType::PackageXml => recipe(
             repo_root,
@@ -452,13 +366,6 @@ fn route(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
             p.subdir.clone(),
         ),
     }
-}
-
-fn vendored(path: &Path, version: &str, rev: &str) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let updated = mutate_vendored_recipe(&text, version, rev)?;
-    std::fs::write(path, updated).with_context(|| format!("write {}", path.display()))?;
-    Ok(())
 }
 
 fn open_pr(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
@@ -478,7 +385,6 @@ fn open_pr(repo_root: Option<PathBuf>, payload: PathBuf) -> anyhow::Result<()> {
             "add",
             "rosdistro_additional_recipes.yaml",
             "pixi_native_packages.yaml",
-            "vendor_recipes",
         ],
     )?;
 
@@ -807,127 +713,6 @@ packages:
         }"#;
         let p: DispatchPayload = serde_json::from_str(json).unwrap();
         assert_eq!(p.manifest_type_or_default(), ManifestType::PackageXml);
-    }
-
-    const VENDORED_FIXTURE: &str = r#"# yaml-language-server: $schema=https://example.com/schema.json
-#
-# Vendor recipe for foo — header comment must survive.
-
-package:
-  name: foo
-  version: 1.2.3
-
-source:
-  git: https://github.com/example/foo.git
-  rev: 4bcfd421c52387b3f7872b23e60059e521176f35
-
-build:
-  number: 2
-  script: ${{ '$RECIPE_DIR/build.sh' }}
-
-requirements:
-  host:
-    - bar ==1.1.3
-"#;
-
-    #[test]
-    fn vendored_updates_version_rev_and_resets_build_number() {
-        let out = mutate_vendored_recipe(
-            VENDORED_FIXTURE,
-            "1.3.0",
-            "1111111111111111111111111111111111111111",
-        )
-        .unwrap();
-        assert!(out.contains("  version: 1.3.0"));
-        assert!(out.contains("  rev: 1111111111111111111111111111111111111111"));
-        assert!(out.contains("  number: 0"));
-        // Everything else untouched.
-        assert!(out.contains("# Vendor recipe for foo — header comment must survive."));
-        assert!(out.contains("  script: ${{ '$RECIPE_DIR/build.sh' }}"));
-        assert!(out.contains("    - bar ==1.1.3"));
-        assert!(out.contains("  name: foo"));
-    }
-
-    #[test]
-    fn vendored_noop_when_version_and_rev_match() {
-        let out = mutate_vendored_recipe(
-            VENDORED_FIXTURE,
-            "1.2.3",
-            "4bcfd421c52387b3f7872b23e60059e521176f35",
-        )
-        .unwrap();
-        assert_eq!(out, VENDORED_FIXTURE);
-    }
-
-    #[test]
-    fn vendored_keeps_build_number_when_version_unchanged() {
-        // Same version, new rev (re-tag): rev updates, number stays manual.
-        let out = mutate_vendored_recipe(
-            VENDORED_FIXTURE,
-            "1.2.3",
-            "2222222222222222222222222222222222222222",
-        )
-        .unwrap();
-        assert!(out.contains("  rev: 2222222222222222222222222222222222222222"));
-        assert!(out.contains("  number: 2"));
-    }
-
-    #[test]
-    fn vendored_errors_when_rev_missing() {
-        let no_rev =
-            VENDORED_FIXTURE.replace("  rev: 4bcfd421c52387b3f7872b23e60059e521176f35\n", "");
-        let err =
-            mutate_vendored_recipe(&no_rev, "1.3.0", "1111111111111111111111111111111111111111")
-                .unwrap_err();
-        assert!(err.to_string().contains("source.rev"));
-    }
-
-    #[test]
-    fn vendored_errors_when_version_missing() {
-        let no_version = VENDORED_FIXTURE.replace("  version: 1.2.3\n", "");
-        let err = mutate_vendored_recipe(
-            &no_version,
-            "1.3.0",
-            "1111111111111111111111111111111111111111",
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("package.version"));
-    }
-
-    #[test]
-    fn vendored_errors_when_build_number_missing() {
-        let no_number = VENDORED_FIXTURE.replace("  number: 2\n", "");
-        let err = mutate_vendored_recipe(
-            &no_number,
-            "1.3.0",
-            "1111111111111111111111111111111111111111",
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("build.number"));
-    }
-
-    #[test]
-    fn vendored_errors_on_templated_version() {
-        let templated =
-            VENDORED_FIXTURE.replace("  version: 1.2.3\n", "  version: ${{ some_var }}\n");
-        let err = mutate_vendored_recipe(
-            &templated,
-            "1.3.0",
-            "1111111111111111111111111111111111111111",
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("templated"));
-    }
-
-    #[test]
-    fn vendored_preserves_trailing_newline() {
-        let out = mutate_vendored_recipe(
-            VENDORED_FIXTURE,
-            "1.3.0",
-            "1111111111111111111111111111111111111111",
-        )
-        .unwrap();
-        assert!(out.ends_with('\n'));
     }
 
     #[test]
