@@ -16,14 +16,53 @@ pub struct Release {
     #[arg(long, default_value = "greenroom-robotics/ros-recipes")]
     pub recipes_repo: String,
     /// Whether to commit CHANGELOG.md back to the source repo.
-    #[arg(long, default_value_t = true)]
+    // ArgAction::Set so the flag takes an explicit value (`--changelog false`);
+    // a bare bool flag would reject the `--changelog true` the release action
+    // passes.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub changelog: bool,
     /// Comma-separated branch list passed to semantic-release.
     #[arg(long, default_value = "main,master,alpha")]
     pub release_branches: String,
     /// Whether to create a GitHub release.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub github_release: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    // Minimal parser wrapper so we can exercise Release's arg definitions.
+    #[derive(Parser, Debug)]
+    struct TestCli {
+        #[command(flatten)]
+        release: Release,
+    }
+
+    #[test]
+    fn changelog_accepts_explicit_bool_value() {
+        // Matches what the release composite action passes.
+        let cli = TestCli::parse_from(["x", "--package-dir", ".", "--changelog", "true"]);
+        assert!(cli.release.changelog);
+
+        let cli = TestCli::parse_from(["x", "--changelog", "false"]);
+        assert!(!cli.release.changelog);
+    }
+
+    #[test]
+    fn bool_flags_default_to_true_when_omitted() {
+        let cli = TestCli::parse_from(["x"]);
+        assert!(cli.release.changelog);
+        assert!(cli.release.github_release);
+    }
+
+    #[test]
+    fn github_release_accepts_explicit_bool_value() {
+        let cli = TestCli::parse_from(["x", "--github-release", "false"]);
+        assert!(!cli.release.github_release);
+    }
 }
 
 impl Release {
