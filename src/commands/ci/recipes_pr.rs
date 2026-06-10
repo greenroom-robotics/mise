@@ -20,6 +20,9 @@ pub struct RecipesPr {
     /// ROS distro identifier.
     #[arg(long, default_value = "kilted")]
     pub ros_distro: String,
+    /// Tagged commit SHA (matches ${nextRelease.gitHead}). Used as source.rev for vendored recipes.
+    #[arg(long)]
+    pub sha: String,
 }
 
 impl RecipesPr {
@@ -51,25 +54,28 @@ impl RecipesPr {
         let branch = format!("release/{}-v{}", src_short, self.version);
         run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
 
-        // 5. Upsert each package's entry.
-        let recipes_yaml = recipes_root.join("rosdistro_additional_recipes.yaml");
+        // 5. Apply each package's release (vendored recipe or rosdistro upsert).
+        use std::collections::BTreeSet;
+        let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
-            recipes_upsert::upsert(
-                &recipes_yaml,
-                &recipes_upsert::Entry {
-                    package: &pkg.name,
-                    url: &src_url,
-                    tag: &tag,
-                    version: &self.version,
-                },
+            let rel = recipes_upsert::apply_release(
+                &recipes_root,
+                &pkg.name,
+                &src_url,
+                &tag,
+                &self.version,
+                &self.sha,
             )?;
+            changed.insert(rel);
         }
 
         // 6. Commit + push + open PR.
+        let mut add_args: Vec<String> = vec!["git".into(), "add".into()];
+        add_args.extend(changed.iter().map(|p| p.to_string_lossy().into_owned()));
         run_in(
             &recipes_root,
-            &["git", "add", "rosdistro_additional_recipes.yaml"],
+            &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
         run_in(
             &recipes_root,
