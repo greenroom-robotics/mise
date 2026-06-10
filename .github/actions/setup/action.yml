@@ -62,6 +62,10 @@ runs:
       with:
         app-id: ${{ inputs.gh-app-id }}
         private-key: ${{ inputs.gh-app-private-key }}
+        # Scope the token to the whole installation, not just the calling
+        # repo, so the proxy step can `gh release download` from the private
+        # conda-channel-proxy repo.
+        owner: ${{ github.repository_owner }}
 
     - name: Azure login (OIDC)
       uses: azure/login@v3
