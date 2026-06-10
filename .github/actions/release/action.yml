@@ -54,11 +54,20 @@ inputs:
     description: Node major version for semantic-release.
     required: false
     default: "20"
+  skip-setup:
+    description: Skip the bundled mise/setup step. The caller must have already run setup and pass its gh-token. mise's own release.yml uses this to dogfood the in-repo setup action and avoid a v<MAJOR>-tag chicken-and-egg when the fix lives in setup itself.
+    required: false
+    default: "false"
+  gh-token:
+    description: GitHub App token to use when skip-setup is true (the gh-token output of the caller's setup step). Ignored when skip-setup is false.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
     - id: setup
+      if: inputs.skip-setup != 'true'
       uses: greenroom-robotics/mise/.github/actions/setup@v2
       with:
         gh-app-id: ${{ inputs.gh-app-id }}
@@ -90,9 +99,9 @@ runs:
     - name: Run mise ci release
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.setup.outputs.gh-token }}
-        GITHUB_TOKEN: ${{ steps.setup.outputs.gh-token }}
-        API_TOKEN_GITHUB: ${{ steps.setup.outputs.gh-token }}
+        GH_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
+        GITHUB_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
+        API_TOKEN_GITHUB: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
       run: |
         args=(--package-dir "${{ inputs.package-dir }}"
               --changelog "${{ inputs.changelog }}"
