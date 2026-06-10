@@ -1,3 +1,18 @@
+## [4.5.0](https://github.com/greenroom-robotics/mise/compare/mise@4.4.0...mise@4.5.0) (2026-06-10)
+
+
+### Features
+
+* trigger CI ([6753b77](https://github.com/greenroom-robotics/mise/commit/6753b77c83a88b18a053c0997347f6b0e8fc8195))
+
+
+### Bug Fixes
+
+* ci release --changelog/--github-release accept explicit bool value ([#16](https://github.com/greenroom-robotics/mise/issues/16)) ([a2580a0](https://github.com/greenroom-robotics/mise/commit/a2580a0946545444e34cb824554014cb6eb04267))
+* dogfood in-repo setup in release workflow to break v-tag deadlock ([#15](https://github.com/greenroom-robotics/mise/issues/15)) ([cdca58f](https://github.com/greenroom-robotics/mise/commit/cdca58faa36e52fabaa6753f9f7a8a01ebe0fcbf))
+* release tag format and recipes PR auto-merge ([#17](https://github.com/greenroom-robotics/mise/issues/17)) ([c759e3d](https://github.com/greenroom-robotics/mise/commit/c759e3d822fedce0684d81231d71d378f8188b85))
+* scope app token to installation owner for private proxy access ([#14](https://github.com/greenroom-robotics/mise/issues/14)) ([1563cdf](https://github.com/greenroom-robotics/mise/commit/1563cdf40efa12f0f181dcbc9309fbed058ed1e9))
+
 ## 1.0.0 (2026-06-10)
 
 
