@@ -10,7 +10,7 @@ inputs:
     description: GitHub App private key (PEM).
     required: true
   azure-client-id:
-    description: AZURE_READER_CLIENT_ID — federated identity bound to the calling repo.
+    description: AZURE_CLIENT_ID — federated identity bound to the calling repo.
     required: true
   azure-tenant-id:
     description: AZURE_TENANT_ID for the channel storage account.
