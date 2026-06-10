@@ -4,11 +4,26 @@ on:
     branches: [main]
 jobs:
   release:
-    uses: greenroom-robotics/ros_semantic_release_action/.github/workflows/recipes-release.yml@main
-    with:
-      package: mise
-      package_path: .
-    secrets: inherit
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Azure OIDC login in the release action
+      contents: write # semantic-release commits CHANGELOG + cuts tags
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # mise releases itself through its own action (the path it provides to
+      # other pixi-native repos), not the deprecated recipes-release.yml.
+      # package-dir "." -> the root pixi.toml is the package (see ci discover).
+      - uses: ./.github/actions/release
+        with:
+          gh-app-id: ${{ secrets.GH_APP_ID }}
+          gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          azure-client-id: ${{ vars.AZURE_READER_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          package-dir: "."
 
   # Slides the bare `v<MAJOR>` tag (e.g. `v1`, `v2`) forward whenever the
   # release job above cuts a new exact `mise@X.Y.Z` tag. Consumers pin
