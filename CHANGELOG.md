@@ -1,3 +1,9 @@
+## [4.3.0](https://github.com/greenroom-robotics/mise/compare/mise@4.2.0...mise@4.3.0) (2026-06-10)
+
+### Features
+
+* re-home vendored recipe handling into ci recipes-pr ([#10](https://github.com/greenroom-robotics/mise/issues/10)) ([dd1c22c](https://github.com/greenroom-robotics/mise/commit/dd1c22cc26c04677d24b9fdd73cbb40a67910cdf))
+
 ## [4.2.0](https://github.com/greenroom-robotics/mise/compare/mise@4.1.0...mise@4.2.0) (2026-06-09)
 
 ### Features
