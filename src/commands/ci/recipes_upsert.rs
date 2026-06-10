@@ -163,16 +163,154 @@ pub(crate) fn mutate_vendored_recipe(
     Ok(result)
 }
 
-/// Apply a release for one package to the cloned recipes repo.
+/// Mutate `pixi_native_packages.yaml` in place.
 ///
-/// If `vendor_recipes/<package>/recipe.yaml` exists, patch it in place
-/// (version + source.rev, resetting build.number on a version change) via
-/// `mutate_vendored_recipe`. Otherwise upsert the package's entry into
-/// `rosdistro_additional_recipes.yaml`. Returns the repo-relative path of the
-/// file that changed, for staging.
+/// File shape: top-level `packages:` followed by `- name: <name>` items at
+/// column-2 indent (two-space indent for the dash, and sub-keys at column 4).
 ///
-/// Note: for the vendored path, `url` and `tag` are unused — the recipe keeps
-/// its own `source.git` url; only `version` and `sha` (as `source.rev`) change.
+/// Behavior:
+/// - If an item with the given `name` exists: update `url:`, `rev:`,
+///   optionally `subdir:` (insert if absent), delete `ref:` if present.
+/// - If absent: append a new item at the end of the file with the same
+///   indentation conventions.
+pub(crate) fn mutate_pixi_entry(
+    text: &str,
+    name: &str,
+    url: &str,
+    rev: &str,
+    subdir: Option<&str>,
+) -> anyhow::Result<String> {
+    let lines: Vec<&str> = text.lines().collect();
+
+    // Find `- name: <name>` line.
+    let header = format!("- name: {name}");
+    let header_idx = lines.iter().position(|l| l.trim_start() == header);
+
+    let result = if let Some(idx) = header_idx {
+        // Determine the item's column-position. Sub-keys live at the same
+        // start column as `name` (i.e., 2 chars in from the `-`).
+        let item_indent = lines[idx].len() - lines[idx].trim_start().len();
+        let sub_indent = item_indent + 2;
+        // Block spans idx+1 .. block_end where block_end starts at a line
+        // whose indent is <= item_indent and is not blank.
+        let block_end = lines[idx + 1..]
+            .iter()
+            .position(|l| {
+                if l.trim().is_empty() {
+                    return false;
+                }
+                let li = l.len() - l.trim_start().len();
+                li <= item_indent
+            })
+            .map(|p| idx + 1 + p)
+            .unwrap_or(lines.len());
+
+        // Trailing blank lines in the range belong to the gap *between* entries.
+        // Walk back so the mutation doesn't absorb them into this item.
+        let mut block_actual_end = block_end;
+        while block_actual_end > idx + 1 && lines[block_actual_end - 1].trim().is_empty() {
+            block_actual_end -= 1;
+        }
+
+        let mut out: Vec<String> = lines[..=idx].iter().map(|s| s.to_string()).collect();
+        let mut url_seen = false;
+        let mut rev_seen = false;
+        let mut subdir_seen = false;
+        for line in &lines[idx + 1..block_actual_end] {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("ref:") {
+                // drop
+                continue;
+            }
+            if trimmed.starts_with("url:") {
+                url_seen = true;
+                out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
+                continue;
+            }
+            if trimmed.starts_with("rev:") {
+                rev_seen = true;
+                out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
+                continue;
+            }
+            if trimmed.starts_with("subdir:") {
+                if let Some(s) = subdir {
+                    subdir_seen = true;
+                    out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+                } // else: drop the existing subdir line — caller didn't pass one
+                continue;
+            }
+            out.push(line.to_string());
+        }
+        if !url_seen {
+            out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
+        }
+        if !rev_seen {
+            out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
+        }
+        if !subdir_seen && let Some(s) = subdir {
+            out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+        }
+        // Preserve original between-entry blank lines.
+        for line in &lines[block_actual_end..block_end] {
+            out.push(line.to_string());
+        }
+        for line in &lines[block_end..] {
+            out.push(line.to_string());
+        }
+        out
+    } else {
+        // Append a new entry at end of file.
+        let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+        // Ensure separation from previous content.
+        if out.last().map(|s| !s.is_empty()).unwrap_or(false) {
+            out.push(String::new());
+        }
+        out.push(format!("  - name: {name}"));
+        out.push(format!("    url: {url}"));
+        out.push(format!("    rev: {rev}"));
+        if let Some(s) = subdir {
+            out.push(format!("    subdir: {s}"));
+        }
+        out
+    };
+
+    let has_trailing_newline = text.ends_with('\n');
+    let mut result_str = result.join("\n");
+    if has_trailing_newline {
+        result_str.push('\n');
+    }
+    Ok(result_str)
+}
+
+/// True if `pixi_native_packages.yaml` text already has a `- name: <package>` item.
+fn pixi_native_has_entry(text: &str, package: &str) -> bool {
+    text.lines().any(|l| {
+        l.trim_start()
+            .strip_prefix("- name:")
+            .map(|v| v.trim() == package)
+            .unwrap_or(false)
+    })
+}
+
+/// True if `rosdistro_additional_recipes.yaml` text has a top-level `<package>:` key.
+fn rosdistro_has_entry(text: &str, package: &str) -> bool {
+    let header = format!("{package}:");
+    text.lines()
+        .any(|l| !l.starts_with([' ', '\t']) && l.trim_end() == header)
+}
+
+/// Apply a release for one package to the cloned recipes repo. Returns the
+/// repo-relative path of the file that changed, for staging.
+///
+/// Routing (first match wins):
+///  1. `vendor_recipes/<package>/recipe.yaml` exists -> patch it (version + rev).
+///  2. package already has an entry in `pixi_native_packages.yaml` -> update there.
+///  3. package already has an entry in `rosdistro_additional_recipes.yaml` -> update there.
+///  4. otherwise (brand-new) -> default to `pixi_native_packages.yaml`.
+///
+/// For the vendored path, `url`/`tag`/`subdir` are unused (the recipe keeps its
+/// own source.git; only version + sha change). For the rosdistro path, `sha`/
+/// `subdir` are unused. For the pixi-native path, `tag` is unused (`sha` -> rev).
 pub(crate) fn apply_release(
     recipes_root: &Path,
     package: &str,
@@ -180,7 +318,9 @@ pub(crate) fn apply_release(
     tag: &str,
     version: &str,
     sha: &str,
+    subdir: Option<&str>,
 ) -> anyhow::Result<PathBuf> {
+    // 1. Vendored.
     let vendored_rel = Path::new("vendor_recipes")
         .join(package)
         .join("recipe.yaml");
@@ -191,11 +331,31 @@ pub(crate) fn apply_release(
         let updated = mutate_vendored_recipe(&text, version, sha)?;
         std::fs::write(&vendored_abs, updated)
             .with_context(|| format!("writing {}", vendored_abs.display()))?;
-        Ok(vendored_rel)
-    } else {
-        let recipes_yaml_rel = PathBuf::from("rosdistro_additional_recipes.yaml");
+        return Ok(vendored_rel);
+    }
+
+    let pixi_native_rel = PathBuf::from("pixi_native_packages.yaml");
+    let rosdistro_rel = PathBuf::from("rosdistro_additional_recipes.yaml");
+    let pixi_native_abs = recipes_root.join(&pixi_native_rel);
+    let rosdistro_abs = recipes_root.join(&rosdistro_rel);
+
+    let in_pixi_native = pixi_native_abs.exists()
+        && pixi_native_has_entry(
+            &std::fs::read_to_string(&pixi_native_abs)
+                .with_context(|| format!("reading {}", pixi_native_abs.display()))?,
+            package,
+        );
+    let in_rosdistro = rosdistro_abs.exists()
+        && rosdistro_has_entry(
+            &std::fs::read_to_string(&rosdistro_abs)
+                .with_context(|| format!("reading {}", rosdistro_abs.display()))?,
+            package,
+        );
+
+    // Arm 3: existing rosdistro entry (and not already pixi-native) -> update there.
+    if in_rosdistro && !in_pixi_native {
         upsert(
-            &recipes_root.join(&recipes_yaml_rel),
+            &rosdistro_abs,
             &Entry {
                 package,
                 url,
@@ -203,8 +363,22 @@ pub(crate) fn apply_release(
                 version,
             },
         )?;
-        Ok(recipes_yaml_rel)
+        return Ok(rosdistro_rel);
     }
+
+    // Arms 2 & 4: existing pixi-native entry, or brand-new package -> pixi-native.
+    if !pixi_native_abs.exists() {
+        anyhow::bail!(
+            "{} not found in recipes repo; cannot add pixi-native entry for {package}",
+            pixi_native_abs.display()
+        );
+    }
+    let text = std::fs::read_to_string(&pixi_native_abs)
+        .with_context(|| format!("reading {}", pixi_native_abs.display()))?;
+    let updated = mutate_pixi_entry(&text, package, url, sha, subdir)?;
+    std::fs::write(&pixi_native_abs, updated)
+        .with_context(|| format!("writing {}", pixi_native_abs.display()))?;
+    Ok(pixi_native_rel)
 }
 
 #[cfg(test)]
@@ -437,16 +611,145 @@ requirements:
         assert!(out.ends_with('\n'));
     }
 
+    const PIXI_FIXTURE: &str = "\
+# Header comment must survive.
+packages:
+  - name: alpha
+    url: https://github.com/example/alpha
+    ref: main
+
+  - name: beta
+    url: https://github.com/example/beta.git
+    rev: 1111111111111111111111111111111111111111
+    subdir: packages/beta
+
+  - name: gamma
+    url: https://github.com/example/gamma
+    rev: 2222222222222222222222222222222222222222
+";
+
+    #[test]
+    fn pixi_replaces_ref_with_rev_on_existing_entry() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "alpha",
+            "https://github.com/example/alpha.git",
+            "3333333333333333333333333333333333333333",
+            None,
+        )
+        .unwrap();
+        assert!(!out.contains("ref: main"));
+        assert!(out.contains("rev: 3333333333333333333333333333333333333333"));
+        assert!(out.contains("url: https://github.com/example/alpha.git"));
+        // Other entries untouched.
+        assert!(out.contains("subdir: packages/beta"));
+        assert!(out.contains("# Header comment"));
+    }
+
+    #[test]
+    fn pixi_updates_subdir_when_passed() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "beta",
+            "https://github.com/example/beta.git",
+            "4444444444444444444444444444444444444444",
+            Some("packages/beta-new"),
+        )
+        .unwrap();
+        assert!(out.contains("subdir: packages/beta-new"));
+        assert!(!out.contains("subdir: packages/beta\n"));
+        assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
+    }
+
+    #[test]
+    fn pixi_appends_new_entry_when_absent() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "delta",
+            "https://github.com/example/delta.git",
+            "5555555555555555555555555555555555555555",
+            Some("packages/delta"),
+        )
+        .unwrap();
+        assert!(out.contains("- name: alpha"));
+        assert!(out.contains("- name: delta"));
+        assert!(out.contains("url: https://github.com/example/delta.git"));
+        assert!(out.contains("rev: 5555555555555555555555555555555555555555"));
+        assert!(out.contains("subdir: packages/delta"));
+    }
+
+    #[test]
+    fn pixi_appends_without_subdir() {
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "epsilon",
+            "https://github.com/example/epsilon",
+            "6666666666666666666666666666666666666666",
+            None,
+        )
+        .unwrap();
+        assert!(out.contains("- name: epsilon"));
+        assert!(!out.lines().any(|l| l.trim() == "subdir:"));
+    }
+
+    #[test]
+    fn pixi_preserves_blank_line_between_items() {
+        // After mutating `alpha`, the blank line that originally separated it
+        // from the next item must remain between items, NOT migrate inside
+        // alpha's block.
+        let out = mutate_pixi_entry(
+            PIXI_FIXTURE,
+            "alpha",
+            "https://github.com/example/alpha.git",
+            "7777777777777777777777777777777777777777",
+            None,
+        )
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        let alpha_idx = lines
+            .iter()
+            .position(|l| l.trim() == "- name: alpha")
+            .unwrap();
+        let beta_idx = lines
+            .iter()
+            .position(|l| l.trim() == "- name: beta")
+            .unwrap();
+        // Inside alpha's block (from header to next blank/item) there must be NO blank line.
+        let alpha_block_end = lines[alpha_idx + 1..beta_idx]
+            .iter()
+            .position(|l| l.trim().is_empty())
+            .map(|p| alpha_idx + 1 + p)
+            .unwrap_or(beta_idx);
+        for line in &lines[alpha_idx + 1..alpha_block_end] {
+            assert!(
+                !line.trim().is_empty(),
+                "alpha block should be contiguous, got blank inside: {out}"
+            );
+        }
+        // And the blank between alpha and beta must still exist.
+        assert!(
+            lines[alpha_block_end..beta_idx]
+                .iter()
+                .any(|l| l.trim().is_empty()),
+            "blank line between items lost: {out}"
+        );
+    }
+
+    fn write(root: &std::path::Path, rel: &str, body: &str) {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, body).unwrap();
+    }
+
     #[test]
     fn apply_release_patches_vendored_recipe_when_present() {
         let td = tempfile::TempDir::new().unwrap();
         let root = td.path();
-        let dir = root.join("vendor_recipes/is-core");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            dir.join("recipe.yaml"),
+        write(
+            root,
+            "vendor_recipes/is-core/recipe.yaml",
             "package:\n  name: is-core\n  version: 1.0.0\n\nsource:\n  git: https://github.com/example/is-core.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 2\n",
-        ).unwrap();
+        );
         let changed = apply_release(
             root,
             "is-core",
@@ -454,31 +757,68 @@ requirements:
             "v1.1.0",
             "1.1.0",
             "1111111111111111111111111111111111111111",
+            None,
         )
         .unwrap();
         assert_eq!(
             changed,
             std::path::Path::new("vendor_recipes/is-core/recipe.yaml")
         );
-        let out = std::fs::read_to_string(dir.join("recipe.yaml")).unwrap();
-        assert!(out.contains("version: 1.1.0"));
-        assert!(out.contains("rev: 1111111111111111111111111111111111111111"));
-        assert!(out.contains("number: 0"));
-        // rosdistro file must NOT have been created
+        let out = std::fs::read_to_string(root.join("vendor_recipes/is-core/recipe.yaml")).unwrap();
+        assert!(
+            out.contains("version: 1.1.0")
+                && out.contains("rev: 1111111111111111111111111111111111111111")
+                && out.contains("number: 0")
+        );
+    }
+
+    #[test]
+    fn apply_release_updates_existing_pixi_native_entry() {
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        write(
+            root,
+            "pixi_native_packages.yaml",
+            "rebuild_epoch: 0\n\npackages:\n  - name: mise\n    url: https://github.com/greenroom-robotics/mise\n    rev: 0000000000000000000000000000000000000000\n",
+        );
+        let changed = apply_release(
+            root,
+            "mise",
+            "https://github.com/greenroom-robotics/mise",
+            "v4.4.0",
+            "4.4.0",
+            "2222222222222222222222222222222222222222",
+            None,
+        )
+        .unwrap();
+        assert_eq!(changed, std::path::Path::new("pixi_native_packages.yaml"));
+        let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
+        assert!(out.contains("rev: 2222222222222222222222222222222222222222"));
         assert!(!root.join("rosdistro_additional_recipes.yaml").exists());
     }
 
     #[test]
-    fn apply_release_upserts_rosdistro_when_not_vendored() {
+    fn apply_release_updates_existing_rosdistro_entry() {
         let td = tempfile::TempDir::new().unwrap();
         let root = td.path();
+        write(
+            root,
+            "pixi_native_packages.yaml",
+            "rebuild_epoch: 0\n\npackages:\n",
+        );
+        write(
+            root,
+            "rosdistro_additional_recipes.yaml",
+            "foo_pkg:\n  url: https://github.com/example/foo_pkg.git\n  tag: 0.1.0\n  version: 0.1.0\n",
+        );
         let changed = apply_release(
             root,
             "foo_pkg",
             "https://github.com/example/foo_pkg.git",
-            "v2.0.0",
-            "2.0.0",
-            "2222222222222222222222222222222222222222",
+            "v0.2.0",
+            "0.2.0",
+            "3333333333333333333333333333333333333333",
+            Some("packages/foo_pkg"),
         )
         .unwrap();
         assert_eq!(
@@ -486,8 +826,51 @@ requirements:
             std::path::Path::new("rosdistro_additional_recipes.yaml")
         );
         let out = std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml")).unwrap();
-        assert!(out.contains("foo_pkg:"));
-        assert!(out.contains("tag: v2.0.0"));
-        assert!(out.contains("version: 2.0.0"));
+        assert!(out.contains("tag: v0.2.0") && out.contains("version: 0.2.0"));
+    }
+
+    #[test]
+    fn apply_release_defaults_brand_new_package_to_pixi_native() {
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        write(
+            root,
+            "pixi_native_packages.yaml",
+            "rebuild_epoch: 0\n\npackages:\n  - name: existing\n    url: https://example.invalid/existing\n    rev: 0000000000000000000000000000000000000000\n",
+        );
+        let changed = apply_release(
+            root,
+            "newpkg",
+            "https://github.com/example/newpkg.git",
+            "v1.0.0",
+            "1.0.0",
+            "4444444444444444444444444444444444444444",
+            Some("packages/newpkg"),
+        )
+        .unwrap();
+        assert_eq!(changed, std::path::Path::new("pixi_native_packages.yaml"));
+        let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
+        assert!(out.contains("- name: newpkg"));
+        assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
+        assert!(out.contains("subdir: packages/newpkg"));
+    }
+
+    #[test]
+    fn apply_release_errors_when_pixi_native_absent() {
+        // Brand-new package, no vendored recipe, and no pixi_native_packages.yaml
+        // to append to -> loud error rather than silently writing nothing.
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        let err = apply_release(
+            root,
+            "newpkg",
+            "https://github.com/example/newpkg.git",
+            "v1.0.0",
+            "1.0.0",
+            "5555555555555555555555555555555555555555",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("pixi_native_packages.yaml"));
     }
 }
