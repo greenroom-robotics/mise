@@ -13,11 +13,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Dogfood the in-repo setup via a workflow-level local path. A relative
+      # `uses: ./` inside a composite action resolves against the *consumer's*
+      # workspace, so the release action can't reference local setup without
+      # breaking external consumers — but at the workflow level `./` is this
+      # repo's checkout. Running setup here (not the release action's pinned
+      # setup@v2) means a fix living in setup itself takes effect on the same
+      # run, instead of being stuck behind the v2 tag this job later slides.
+      - id: setup
+        uses: ./.github/actions/setup
+        with:
+          gh-app-id: ${{ secrets.GH_APP_ID }}
+          gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       # mise releases itself through its own action (the path it provides to
       # other pixi-native repos), not the deprecated recipes-release.yml.
       # package-dir "." -> the root pixi.toml is the package (see ci discover).
+      # skip-setup -> reuse the setup above instead of the action's setup@v2.
       - uses: ./.github/actions/release
         with:
+          skip-setup: "true"
+          gh-token: ${{ steps.setup.outputs.gh-token }}
           gh-app-id: ${{ secrets.GH_APP_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
