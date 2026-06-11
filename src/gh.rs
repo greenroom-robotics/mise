@@ -220,7 +220,8 @@ mod tests {
     #[test]
     fn outputs_set_writes_line() {
         let tmp = NamedTempFile::new().unwrap();
-        // SAFETY: single-threaded test (run with --test-threads=1)
+        // SAFETY: mutates process-global env; nextest runs each test in its
+        // own process so this cannot race other tests.
         unsafe {
             env::set_var("GITHUB_OUTPUT", tmp.path());
         }

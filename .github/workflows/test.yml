@@ -32,5 +32,14 @@ jobs:
       - name: Build
         run: cargo build --all-targets --locked
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Test
-        run: cargo test --locked
+        # nextest runs each test in its own process, isolating tests that
+        # mutate process-global state (e.g. the $GITHUB_OUTPUT env var).
+        run: cargo nextest run --locked
+
+      - name: Doc tests
+        # nextest does not run doctests; cover them separately.
+        run: cargo test --doc --locked
