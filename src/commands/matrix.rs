@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use clap::Subcommand;
@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::gh::{self, ChangedFiles};
 use crate::repo::{DeepstreamCfg, Repo};
-use crate::types::{Arch, DeepstreamVersion, PixiNativeManifest, RunnerSize};
+use crate::types::{Arch, DeepstreamVersion, PixiNativeEntry, PixiNativeManifest, RunnerSize};
 
 const GLOBAL_VINCA: &[&str] = &[
     "vinca.yaml",
@@ -149,6 +149,41 @@ struct MatrixState {
     vinca: bool,
     pixi_native: bool,
     ds_versions: BTreeSet<DeepstreamVersion>,
+}
+
+/// Names of packages added or whose url/rev/subdir/runner-size changed between
+/// `base_yaml` (None when the manifest did not exist at the base ref) and
+/// `head_yaml`. Removed packages are ignored (nothing to build).
+fn diff_changed_packages(
+    base_yaml: Option<&str>,
+    head_yaml: &str,
+) -> anyhow::Result<BTreeSet<String>> {
+    let head = PixiNativeManifest::from_yaml_str(head_yaml)?;
+    let Some(base_yaml) = base_yaml else {
+        return Ok(head.packages.iter().map(|e| e.name.clone()).collect());
+    };
+    let base = PixiNativeManifest::from_yaml_str(base_yaml)?;
+    let base_by_name: BTreeMap<&str, &PixiNativeEntry> =
+        base.packages.iter().map(|e| (e.name.as_str(), e)).collect();
+
+    let mut changed = BTreeSet::new();
+    for e in &head.packages {
+        match base_by_name.get(e.name.as_str()) {
+            None => {
+                changed.insert(e.name.clone());
+            }
+            Some(b) => {
+                if b.url != e.url
+                    || b.rev.as_str() != e.rev.as_str()
+                    || b.subdir != e.subdir
+                    || b.runner_size != e.runner_size
+                {
+                    changed.insert(e.name.clone());
+                }
+            }
+        }
+    }
+    Ok(changed)
 }
 
 fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
@@ -594,5 +629,75 @@ mod tests {
         assert_eq!(e.pipeline, Pipeline::ShouldNotRun);
         assert_eq!(e.artifact_name, "should-not-run");
         assert!(e.runner.contains("RUN"));
+    }
+
+    #[test]
+    fn diff_detects_added_changed_and_ignores_removed() {
+        let base = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 2222222222222222222222222222222222222222
+  - name: gone
+    url: https://github.com/org/gone
+    rev: 3333333333333333333333333333333333333333
+"#;
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 9999999999999999999999999999999999999999
+  - name: added
+    url: https://github.com/org/added
+    rev: 4444444444444444444444444444444444444444
+"#;
+        let changed = diff_changed_packages(Some(base), head).unwrap();
+        assert_eq!(
+            changed,
+            ["added".to_string(), "beta".to_string()].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn diff_detects_runner_size_change() {
+        let base = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+"#;
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+    runner-size: 16cpu
+"#;
+        let changed = diff_changed_packages(Some(base), head).unwrap();
+        assert_eq!(changed, ["alpha".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn diff_none_base_means_all_head_packages() {
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 2222222222222222222222222222222222222222
+"#;
+        let changed = diff_changed_packages(None, head).unwrap();
+        assert_eq!(
+            changed,
+            ["alpha".to_string(), "beta".to_string()].into_iter().collect()
+        );
     }
 }
