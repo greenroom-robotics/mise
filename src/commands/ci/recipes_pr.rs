@@ -50,8 +50,13 @@ impl RecipesPr {
         let recipes_root = tmp.path().join("recipes");
         clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
 
-        // 4. Create the release branch.
-        let branch = format!("release/{}-v{}", src_short, self.version);
+        // 4. Create the release branch. The branch name is intentionally
+        //    version-independent so every release of this source repo lands on
+        //    the SAME rolling PR (force-pushed each time) rather than opening a
+        //    fresh PR per version. A per-version branch leaves superseded PRs
+        //    open, and an older one merging after a newer one downgrades the
+        //    pin. Mirrors `mise bump`'s `bump/<pkg>` branch.
+        let branch = release_branch(&src_short);
         run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
@@ -110,19 +115,26 @@ impl RecipesPr {
                 &format!("release: {} {}", src_short, tag),
             ],
         )?;
+        // Plain --force, not --force-with-lease: the recipes repo is cloned
+        // shallow on `main` only, so there's no remote-tracking ref for the
+        // rolling branch and --force-with-lease would reject the push.
         run_in(
             &recipes_root,
-            &["git", "push", "--force-with-lease", "origin", &branch],
+            &["git", "push", "--force", "origin", &branch],
         )?;
 
+        let title = format!("release: {} {}", src_short, tag);
         if pr_exists(&self.recipes_repo, &branch)? {
-            println!("PR already exists for {branch}; branch updated.");
+            // The rolling PR already exists from a previous release; refresh its
+            // title to the new version so it doesn't show a stale version.
+            let edit_args = pr_edit_args(&self.recipes_repo, &branch, &title);
+            run_in(
+                &recipes_root,
+                &edit_args.iter().map(String::as_str).collect::<Vec<_>>(),
+            )?;
+            println!("PR already exists for {branch}; branch and title updated.");
         } else {
-            let create_args = pr_create_args(
-                &self.recipes_repo,
-                &branch,
-                &format!("release: {} {}", src_short, tag),
-            );
+            let create_args = pr_create_args(&self.recipes_repo, &branch, &title);
             run_in(
                 &recipes_root,
                 &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -142,6 +154,18 @@ impl RecipesPr {
 
         Ok(())
     }
+}
+
+/// Version-independent branch for a source repo's rolling release PR.
+fn release_branch(src_short: &str) -> String {
+    format!("release/{src_short}")
+}
+
+fn pr_edit_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
+    ["gh", "pr", "edit", "--repo", repo, branch, "--title", title]
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
@@ -267,14 +291,36 @@ mod tests {
     // never merges.
     #[test]
     fn create_args_do_not_use_automerge_label() {
-        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise-v4.5.0", "t");
+        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise", "t");
         assert!(!args.iter().any(|a| a == "--label"));
     }
 
     #[test]
     fn automerge_args_enable_native_auto_squash_merge() {
-        let args = pr_automerge_args("greenroom-robotics/ros-recipes", "release/mise-v4.5.0");
+        let args = pr_automerge_args("greenroom-robotics/ros-recipes", "release/mise");
         assert!(args.contains(&"--auto".to_string()));
         assert!(args.contains(&"--squash".to_string()));
+    }
+
+    // The rolling-PR contract: the branch name must NOT embed the version, so
+    // every release of a source repo force-pushes onto the same branch and
+    // updates one PR. A per-version branch leaves superseded PRs open and lets
+    // an older release merge over a newer one.
+    #[test]
+    fn release_branch_is_version_independent() {
+        let a = release_branch("mise");
+        assert_eq!(a, "release/mise");
+        assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
+    }
+
+    #[test]
+    fn edit_args_refresh_pr_title() {
+        let args = pr_edit_args(
+            "greenroom-robotics/ros-recipes",
+            "release/mise",
+            "release: mise v4.5.2",
+        );
+        assert!(args.contains(&"--title".to_string()));
+        assert!(args.contains(&"release: mise v4.5.2".to_string()));
     }
 }
