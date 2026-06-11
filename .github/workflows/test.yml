@@ -11,6 +11,10 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # Retry crates.io fetches — registry reads occasionally drop with an SSL
+      # eof on the runners; without this a single blip fails the whole job.
+      CARGO_NET_RETRY: "5"
     steps:
       - uses: actions/checkout@v6
 
