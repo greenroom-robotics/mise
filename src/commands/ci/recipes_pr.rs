@@ -102,17 +102,25 @@ impl RecipesPr {
             &recipes_root,
             &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
+        // Commit as the App bot. The release action exports its identity via
+        // GIT_AUTHOR_*/GIT_COMMITTER_*, which git honours natively; we mirror
+        // it onto -c so a standalone run still has a usable identity, falling
+        // back to the greenroom-bot label only when the env is unset.
+        let (git_name, git_email) = git_identity();
+        let name_cfg = format!("user.name={git_name}");
+        let email_cfg = format!("user.email={git_email}");
+        let commit_msg = format!("release: {} {}", src_short, tag);
         run_in(
             &recipes_root,
             &[
                 "git",
                 "-c",
-                "user.name=greenroom-bot",
+                &name_cfg,
                 "-c",
-                "user.email=greenroom-bot@users.noreply.github.com",
+                &email_cfg,
                 "commit",
                 "-m",
-                &format!("release: {} {}", src_short, tag),
+                &commit_msg,
             ],
         )?;
         // Plain --force, not --force-with-lease: the recipes repo is cloned
@@ -166,6 +174,22 @@ fn pr_edit_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
         .into_iter()
         .map(String::from)
         .collect()
+}
+
+/// Git author/committer identity for the recipes commit. Prefers the App bot
+/// identity the release action exports via GIT_AUTHOR_NAME/EMAIL, falling back
+/// to the greenroom-bot label for standalone runs where those aren't set.
+fn git_identity() -> (String, String) {
+    fn env_or(var: &str, fallback: &str) -> String {
+        std::env::var(var)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+    (
+        env_or("GIT_AUTHOR_NAME", "greenroom-bot"),
+        env_or("GIT_AUTHOR_EMAIL", "greenroom-bot@users.noreply.github.com"),
+    )
 }
 
 fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {

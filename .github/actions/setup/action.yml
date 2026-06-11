@@ -67,6 +67,30 @@ runs:
         # conda-channel-proxy repo.
         owner: ${{ github.repository_owner }}
 
+    # Export the App's bot git identity into the job env so every later step
+    # in this job — including the release action's semantic-release run, in
+    # both the bundled-setup and skip-setup paths — commits as the App rather
+    # than semantic-release-bot, with no per-value input plumbing. The numeric
+    # user id makes the noreply email link the commit to the App account so
+    # GitHub renders it as the App (avatar + Verified badge), instead of the
+    # free-text label a hardcoded name would produce.
+    - name: Export App git identity
+      shell: bash
+      env:
+        APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        set -euo pipefail
+        user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+        name="${APP_SLUG}[bot]"
+        email="${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+        {
+          echo "GIT_AUTHOR_NAME=${name}"
+          echo "GIT_AUTHOR_EMAIL=${email}"
+          echo "GIT_COMMITTER_NAME=${name}"
+          echo "GIT_COMMITTER_EMAIL=${email}"
+        } >> "$GITHUB_ENV"
+
     - name: Azure login (OIDC)
       uses: azure/login@v3
       with:

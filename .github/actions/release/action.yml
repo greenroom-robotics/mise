@@ -99,6 +99,10 @@ runs:
     - name: Run mise ci release
       shell: bash
       env:
+        # GIT_AUTHOR_*/GIT_COMMITTER_* are exported into the job env by setup
+        # (bundled or workflow-level), so semantic-release and the recipes-pr
+        # exec step commit as the App bot rather than semantic-release-bot —
+        # no per-value input plumbing needed here.
         GH_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
         GITHUB_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
         API_TOKEN_GITHUB: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
