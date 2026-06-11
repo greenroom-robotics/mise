@@ -1,12 +1,13 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Subcommand;
 use serde::Serialize;
 
 use crate::gh::{self, ChangedFiles};
 use crate::repo::{DeepstreamCfg, Repo};
-use crate::types::{Arch, DeepstreamVersion, PixiNativeManifest, RunnerSize};
+use crate::types::{Arch, DeepstreamVersion, PixiNativeEntry, PixiNativeManifest, RunnerSize};
 
 const GLOBAL_VINCA: &[&str] = &[
     "vinca.yaml",
@@ -75,7 +76,10 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     let changed = gh::changed_files(&repo, &event)?;
 
     let run_id = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into());
-    let state = classify(&changed, &ds);
+    let mut state = classify(&changed, &ds);
+    if state.pixi_native == PixiScope::ManifestScoped {
+        state.pixi_native = resolve_pixi_scope(&repo, &event)?;
+    }
     let entries = build_matrix(&state, &manifest, &run_id);
 
     let has_work = !entries.is_empty();
@@ -93,9 +97,15 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
         .collect::<Vec<_>>()
         .join(",");
 
+    let pixi_only = match &state.pixi_native {
+        PixiScope::Only(names) => names.iter().cloned().collect::<Vec<_>>().join(","),
+        _ => String::new(),
+    };
+
     gh::outputs::set("matrix-json", &matrix_json)?;
     gh::outputs::set("recipes-csv", &recipes_csv)?;
     gh::outputs::set("has-work", &has_work)?;
+    gh::outputs::set("pixi-only", &pixi_only)?;
 
     // Always print matrix_json to stdout — matches the Python script for log visibility.
     println!("{matrix_json}");
@@ -145,10 +155,76 @@ pub struct MatrixEntry {
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
+enum PixiScope {
+    /// No pixi-native work.
+    #[default]
+    None,
+    /// Build every package (dispatch, or a global file changed).
+    All,
+    /// `pixi_native_packages.yaml` changed; specific names resolved by `compute()`.
+    ManifestScoped,
+    /// Build only the named packages.
+    Only(BTreeSet<String>),
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
 struct MatrixState {
     vinca: bool,
-    pixi_native: bool,
+    pixi_native: PixiScope,
     ds_versions: BTreeSet<DeepstreamVersion>,
+}
+
+/// Names of packages added or whose url/rev/subdir/runner-size changed between
+/// `base_yaml` (None when the manifest did not exist at the base ref) and
+/// `head_yaml`. Removed packages are ignored (nothing to build).
+fn diff_changed_packages(
+    base_yaml: Option<&str>,
+    head_yaml: &str,
+) -> anyhow::Result<BTreeSet<String>> {
+    let head = PixiNativeManifest::from_yaml_str(head_yaml)?;
+    let Some(base_yaml) = base_yaml else {
+        return Ok(head.packages.iter().map(|e| e.name.clone()).collect());
+    };
+    let base = PixiNativeManifest::from_yaml_str(base_yaml)?;
+    let base_by_name: BTreeMap<&str, &PixiNativeEntry> =
+        base.packages.iter().map(|e| (e.name.as_str(), e)).collect();
+
+    let mut changed = BTreeSet::new();
+    for e in &head.packages {
+        match base_by_name.get(e.name.as_str()) {
+            None => {
+                changed.insert(e.name.clone());
+            }
+            Some(b) => {
+                if b.url != e.url
+                    || b.rev.as_str() != e.rev.as_str()
+                    || b.subdir != e.subdir
+                    || b.runner_size != e.runner_size
+                {
+                    changed.insert(e.name.clone());
+                }
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// Resolve a `ManifestScoped` state into the concrete set of changed package
+/// names by diffing `pixi_native_packages.yaml` against the base ref.
+fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScope> {
+    let Some(base) = event.base_sha() else {
+        // No base ref to diff against — fail safe by building everything.
+        return Ok(PixiScope::All);
+    };
+    let head_yaml = std::fs::read_to_string(repo.root().join("pixi_native_packages.yaml"))
+        .context("read pixi_native_packages.yaml")?;
+    let base_yaml = gh::file_at_rev(repo, base, "pixi_native_packages.yaml")?;
+    let changed = diff_changed_packages(base_yaml.as_deref(), &head_yaml)?;
+    if changed.is_empty() {
+        Ok(PixiScope::None)
+    } else {
+        Ok(PixiScope::Only(changed))
+    }
 }
 
 fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
@@ -157,7 +233,7 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
     let paths: &[std::path::PathBuf] = match changed {
         ChangedFiles::All => {
             state.vinca = true;
-            state.pixi_native = true;
+            state.pixi_native = PixiScope::All;
             state.ds_versions = ds.versions.iter().copied().collect();
             return state;
         }
@@ -178,7 +254,7 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
                 .any(|prefix| p.starts_with(prefix))
         {
             state.vinca = true;
-            state.pixi_native = true;
+            state.pixi_native = PixiScope::All;
             state.ds_versions.extend(ds.versions.iter().copied());
             continue;
         }
@@ -196,7 +272,9 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
             continue;
         }
         if p == "pixi_native_packages.yaml" {
-            state.pixi_native = true;
+            if state.pixi_native != PixiScope::All {
+                state.pixi_native = PixiScope::ManifestScoped;
+            }
             continue;
         }
         if let Some(rest) = p.strip_prefix("vendor_recipes/") {
@@ -239,25 +317,29 @@ fn build_matrix(
         }
     }
 
-    if state.pixi_native {
-        let mut sizes: BTreeSet<RunnerSize> = BTreeSet::new();
-        for entry in &manifest.packages {
-            sizes.insert(entry.runner_size);
-        }
-        for size in sizes {
-            let size_str = runner_size_str(size);
-            for (arch, _) in ARCHS {
-                let tag = ds_arch_tag(*arch);
-                out.push(MatrixEntry {
-                    pipeline: Pipeline::PixiNative,
-                    target_platform: *arch,
-                    ds_version: String::new(),
-                    ds_image: String::new(),
-                    runner: format!("runs-on={run_id}/runner={size_str}-linux-{tag}"),
-                    runner_size: size_str.to_string(),
-                    artifact_name: format!("build-pixi-native-{arch}-{size_str}"),
-                });
-            }
+    let pixi_sizes: BTreeSet<RunnerSize> = match &state.pixi_native {
+        PixiScope::All => manifest.packages.iter().map(|e| e.runner_size).collect(),
+        PixiScope::Only(names) => manifest
+            .packages
+            .iter()
+            .filter(|e| names.contains(&e.name))
+            .map(|e| e.runner_size)
+            .collect(),
+        PixiScope::None | PixiScope::ManifestScoped => BTreeSet::new(),
+    };
+    for size in pixi_sizes {
+        let size_str = runner_size_str(size);
+        for (arch, _) in ARCHS {
+            let tag = ds_arch_tag(*arch);
+            out.push(MatrixEntry {
+                pipeline: Pipeline::PixiNative,
+                target_platform: *arch,
+                ds_version: String::new(),
+                ds_image: String::new(),
+                runner: format!("runs-on={run_id}/runner={size_str}-linux-{tag}"),
+                runner_size: size_str.to_string(),
+                artifact_name: format!("build-pixi-native-{arch}-{size_str}"),
+            });
         }
     }
 
@@ -358,7 +440,7 @@ mod tests {
         );
         let s = classify(&ChangedFiles::All, &ds);
         assert!(s.vinca);
-        assert!(s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::All);
         assert_eq!(s.ds_versions.len(), 2);
     }
 
@@ -367,7 +449,7 @@ mod tests {
         let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["vinca.yaml"]), &ds);
         assert!(s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.contains(&DeepstreamVersion::V7_1));
     }
 
@@ -379,7 +461,7 @@ mod tests {
         );
         let s = classify(&paths(&["pixi.toml"]), &ds);
         assert!(s.vinca);
-        assert!(s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::All);
         assert_eq!(s.ds_versions.len(), 2);
     }
 
@@ -388,7 +470,7 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&[".github/workflows/build.yml"]), &ds);
         assert!(s.vinca);
-        assert!(s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::All);
         assert!(!s.ds_versions.is_empty());
     }
 
@@ -397,7 +479,7 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&[".github/deepstream-recipes.yaml"]), &ds);
         assert!(s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.contains(&DeepstreamVersion::V7_1));
     }
 
@@ -406,7 +488,7 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V8_0]);
         let s = classify(&paths(&["variants/deepstream.yaml"]), &ds);
         assert!(!s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.contains(&DeepstreamVersion::V8_0));
     }
 
@@ -415,7 +497,7 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["rosdistro_additional_recipes.yaml"]), &ds);
         assert!(s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.is_empty());
     }
 
@@ -424,7 +506,7 @@ mod tests {
         let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["pixi_native_packages.yaml"]), &ds);
         assert!(!s.vinca);
-        assert!(s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::ManifestScoped);
         assert!(s.ds_versions.is_empty());
     }
 
@@ -433,7 +515,7 @@ mod tests {
         let ds = cfg(&["my-ds-recipe"], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["vendor_recipes/my-ds-recipe/recipe.yaml"]), &ds);
         assert!(!s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.contains(&DeepstreamVersion::V7_1));
     }
 
@@ -442,7 +524,7 @@ mod tests {
         let ds = cfg(&["other-recipe"], &[DeepstreamVersion::V7_1]);
         let s = classify(&paths(&["vendor_recipes/regular-recipe/recipe.yaml"]), &ds);
         assert!(s.vinca);
-        assert!(!s.pixi_native);
+        assert_eq!(s.pixi_native, PixiScope::None);
         assert!(s.ds_versions.is_empty());
     }
 
@@ -516,7 +598,7 @@ mod tests {
     #[test]
     fn build_matrix_pixi_native_groups_by_size() {
         let state = MatrixState {
-            pixi_native: true,
+            pixi_native: PixiScope::All,
             ..Default::default()
         };
         let manifest = manifest_with_sizes(&[RunnerSize::Cpu4, RunnerSize::Cpu4, RunnerSize::Cpu8]);
@@ -533,7 +615,7 @@ mod tests {
     #[test]
     fn build_matrix_pixi_native_uses_correct_arch_tag() {
         let state = MatrixState {
-            pixi_native: true,
+            pixi_native: PixiScope::All,
             ..Default::default()
         };
         let manifest = manifest_with_sizes(&[RunnerSize::Cpu4]);
@@ -594,5 +676,115 @@ mod tests {
         assert_eq!(e.pipeline, Pipeline::ShouldNotRun);
         assert_eq!(e.artifact_name, "should-not-run");
         assert!(e.runner.contains("RUN"));
+    }
+
+    #[test]
+    fn diff_detects_added_changed_and_ignores_removed() {
+        let base = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 2222222222222222222222222222222222222222
+  - name: gone
+    url: https://github.com/org/gone
+    rev: 3333333333333333333333333333333333333333
+"#;
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 9999999999999999999999999999999999999999
+  - name: added
+    url: https://github.com/org/added
+    rev: 4444444444444444444444444444444444444444
+"#;
+        let changed = diff_changed_packages(Some(base), head).unwrap();
+        assert_eq!(
+            changed,
+            ["added".to_string(), "beta".to_string()]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn diff_detects_runner_size_change() {
+        let base = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+"#;
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+    runner-size: 16cpu
+"#;
+        let changed = diff_changed_packages(Some(base), head).unwrap();
+        assert_eq!(changed, ["alpha".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn diff_none_base_means_all_head_packages() {
+        let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 2222222222222222222222222222222222222222
+"#;
+        let changed = diff_changed_packages(None, head).unwrap();
+        assert_eq!(
+            changed,
+            ["alpha".to_string(), "beta".to_string()]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn classify_manifest_only_is_scoped() {
+        let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
+        let s = classify(&paths(&["pixi_native_packages.yaml"]), &ds);
+        assert_eq!(s.pixi_native, PixiScope::ManifestScoped);
+        assert!(!s.vinca);
+    }
+
+    #[test]
+    fn classify_global_both_forces_pixi_all() {
+        let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
+        let s = classify(&paths(&["pixi.toml", "pixi_native_packages.yaml"]), &ds);
+        assert_eq!(s.pixi_native, PixiScope::All);
+    }
+
+    #[test]
+    fn classify_changedfiles_all_is_pixi_all() {
+        let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
+        let s = classify(&ChangedFiles::All, &ds);
+        assert_eq!(s.pixi_native, PixiScope::All);
+    }
+
+    #[test]
+    fn build_matrix_only_prunes_to_changed_sizes() {
+        // manifest_with_sizes names entries pkg0, pkg1, ... in order.
+        let manifest = manifest_with_sizes(&[RunnerSize::Cpu4, RunnerSize::Cpu16]);
+        let state = MatrixState {
+            pixi_native: PixiScope::Only(["pkg0".to_string()].into_iter().collect()),
+            ..Default::default()
+        };
+        let out = build_matrix(&state, &manifest, "RUN");
+        // pkg0 is 4cpu only → 1 size × 2 arches = 2 rows, no 16cpu row.
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|e| e.runner_size == "4cpu"));
     }
 }

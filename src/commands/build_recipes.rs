@@ -39,6 +39,9 @@ pub enum BuildRecipes {
         /// Optional filter: only build entries with this runner-size.
         #[arg(long)]
         runner_size: Option<RunnerSize>,
+        /// Build only the listed package(s) by name. Empty = build all.
+        #[arg(long = "only")]
+        only: Vec<String>,
     },
     /// Run a vinca build inside a DeepStream container. Does container-side prep
     /// (git auth, cache cleanup, `pixi install`) and delegates to `build vinca`
@@ -85,12 +88,14 @@ impl BuildRecipes {
                 output_dir,
                 target_platform,
                 runner_size,
+                only,
             } => pixi(
                 repo_root,
                 channel_url,
                 output_dir,
                 target_platform,
                 runner_size,
+                &only,
             ),
             Self::DeepstreamContainer {
                 repo_root,
@@ -700,12 +705,27 @@ fn rewrite_build_number(manifest_path: &Path, value: u64) -> anyhow::Result<()> 
     Ok(())
 }
 
+/// Select entries to build: keep those matching `runner_size` (when set) and,
+/// when `only` is non-empty, only those whose name is listed.
+fn select_entries<'a>(
+    packages: &'a [PixiNativeEntry],
+    runner_size: Option<RunnerSize>,
+    only: &[String],
+) -> Vec<&'a PixiNativeEntry> {
+    packages
+        .iter()
+        .filter(|e| runner_size.is_none_or(|s| e.runner_size == s))
+        .filter(|e| only.is_empty() || only.iter().any(|n| n == &e.name))
+        .collect()
+}
+
 fn pixi(
     repo_root: Option<PathBuf>,
     channel_url: String,
     output_dir: PathBuf,
     target_platform: TargetPlatform,
     runner_size: Option<RunnerSize>,
+    only: &[String],
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let manifest = repo.pixi_native_manifest()?;
@@ -722,11 +742,7 @@ fn pixi(
         return Ok(());
     }
 
-    let filtered: Vec<&PixiNativeEntry> = manifest
-        .packages
-        .iter()
-        .filter(|e| runner_size.is_none_or(|s| e.runner_size == s))
-        .collect();
+    let filtered = select_entries(&manifest.packages, runner_size, only);
 
     if filtered.is_empty() {
         return Ok(());
@@ -1312,5 +1328,44 @@ ci = "test"
         let (_tmp, path) = write_tmp_pixi_toml(original);
         let err = rewrite_build_number(&path, 1).unwrap_err();
         assert!(format!("{err:#}").contains("missing [package]"));
+    }
+
+    #[test]
+    fn select_entries_filters_by_only_and_size() {
+        let yaml = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+    runner-size: 4cpu
+  - name: beta
+    url: https://github.com/org/beta
+    rev: 2222222222222222222222222222222222222222
+    runner-size: 8cpu
+  - name: gamma
+    url: https://github.com/org/gamma
+    rev: 3333333333333333333333333333333333333333
+    runner-size: 4cpu
+"#;
+        let m = crate::types::PixiNativeManifest::from_yaml_str(yaml).unwrap();
+
+        // --only alpha,beta with no size filter → alpha, beta
+        let sel = select_entries(&m.packages, None, &["alpha".into(), "beta".into()]);
+        let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta"]);
+
+        // --only alpha,beta + runner-size 4cpu → alpha only
+        let sel = select_entries(
+            &m.packages,
+            Some(crate::types::RunnerSize::Cpu4),
+            &["alpha".into(), "beta".into()],
+        );
+        let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha"]);
+
+        // empty --only → size filter only (all 4cpu)
+        let sel = select_entries(&m.packages, Some(crate::types::RunnerSize::Cpu4), &[]);
+        let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "gamma"]);
     }
 }
