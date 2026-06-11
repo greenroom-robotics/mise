@@ -1,3 +1,11 @@
+## [4.5.1](https://github.com/greenroom-robotics/mise/compare/mise@4.5.0...mise@4.5.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* bump conda-channel-proxy to v3/v0.5.0 (port 12222), pin internal action refs to v4 ([#18](https://github.com/greenroom-robotics/mise/issues/18)) ([ff9701b](https://github.com/greenroom-robotics/mise/commit/ff9701b4b9da830a73cd67b9cd1df6a7f22bf2da))
+* pin pixi-build-rust backend, 2026-06-10 builds break pixi 0.68-gr1 ([#19](https://github.com/greenroom-robotics/mise/issues/19)) ([4f8b9d5](https://github.com/greenroom-robotics/mise/commit/4f8b9d520681725a746ba1b5b0fd48d4f552aeb8))
+
 ## [4.5.0](https://github.com/greenroom-robotics/mise/compare/mise@4.4.0...mise@4.5.0) (2026-06-10)
 
 
