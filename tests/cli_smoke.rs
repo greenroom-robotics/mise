@@ -13,7 +13,6 @@ fn help_lists_top_subcommands() {
         .success()
         .stdout(predicate::str::contains("matrix"))
         .stdout(predicate::str::contains("build-recipes"))
-        .stdout(predicate::str::contains("bump"))
         .stdout(predicate::str::contains("snapshot"));
 }
 
@@ -26,18 +25,6 @@ fn build_recipes_help_lists_subcommands() {
         .stdout(predicate::str::contains("vinca"))
         .stdout(predicate::str::contains("pixi"))
         .stdout(predicate::str::contains("deepstream-container"));
-}
-
-#[test]
-fn bump_help_lists_subcommands() {
-    mise()
-        .args(["bump", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("recipe"))
-        .stdout(predicate::str::contains("pixi"))
-        .stdout(predicate::str::contains("route"))
-        .stdout(predicate::str::contains("open-pr"));
 }
 
 #[test]
@@ -172,30 +159,6 @@ fn build_recipes_deepstream_container_requires_recipe() {
 }
 
 #[test]
-fn bump_recipe_errors_when_package_missing() {
-    let td = tempfile::TempDir::new().unwrap();
-    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
-    std::fs::write(
-        td.path().join("rosdistro_additional_recipes.yaml"),
-        "foo:\n  tag: 1.0\n  version: 1.0\n",
-    )
-    .unwrap();
-    mise()
-        .args([
-            "bump",
-            "recipe",
-            "--repo-root",
-            td.path().to_str().unwrap(),
-            "missing-pkg",
-            "1.0.0",
-            "0000000000000000000000000000000000000000",
-        ])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("missing-pkg"));
-}
-
-#[test]
 fn invalid_deepstream_version_rejected_at_parse_time() {
     mise()
         .args([
@@ -212,23 +175,6 @@ fn invalid_deepstream_version_rejected_at_parse_time() {
             predicate::str::contains("invalid value")
                 .or(predicate::str::contains("unknown DeepStream version")),
         );
-}
-
-#[test]
-fn bump_open_pr_fails_when_payload_missing() {
-    let td = tempfile::TempDir::new().unwrap();
-    std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
-    mise()
-        .args([
-            "bump",
-            "open-pr",
-            "--repo-root",
-            td.path().to_str().unwrap(),
-            "--payload",
-            "/nonexistent/payload.json",
-        ])
-        .assert()
-        .failure();
 }
 
 #[test]
