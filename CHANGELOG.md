@@ -1,3 +1,10 @@
+## [4.7.0](https://github.com/greenroom-robotics/mise/compare/mise@4.6.0...mise@4.7.0) (2026-06-11)
+
+
+### Features
+
+* use github identity from gh-token ([#25](https://github.com/greenroom-robotics/mise/issues/25)) ([77d949b](https://github.com/greenroom-robotics/mise/commit/77d949bc7266751b7ef460bbc64451774e1fb1e4))
+
 ## [4.6.0](https://github.com/greenroom-robotics/mise/compare/mise@4.5.3...mise@4.6.0) (2026-06-11)
 
 
