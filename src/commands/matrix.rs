@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Subcommand;
 use serde::Serialize;
 
@@ -75,7 +76,10 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     let changed = gh::changed_files(&repo, &event)?;
 
     let run_id = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into());
-    let state = classify(&changed, &ds);
+    let mut state = classify(&changed, &ds);
+    if state.pixi_native == PixiScope::ManifestScoped {
+        state.pixi_native = resolve_pixi_scope(&repo, &event)?;
+    }
     let entries = build_matrix(&state, &manifest, &run_id);
 
     let has_work = !entries.is_empty();
@@ -93,9 +97,15 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
         .collect::<Vec<_>>()
         .join(",");
 
+    let pixi_only = match &state.pixi_native {
+        PixiScope::Only(names) => names.iter().cloned().collect::<Vec<_>>().join(","),
+        _ => String::new(),
+    };
+
     gh::outputs::set("matrix-json", &matrix_json)?;
     gh::outputs::set("recipes-csv", &recipes_csv)?;
     gh::outputs::set("has-work", &has_work)?;
+    gh::outputs::set("pixi-only", &pixi_only)?;
 
     // Always print matrix_json to stdout — matches the Python script for log visibility.
     println!("{matrix_json}");
@@ -154,7 +164,6 @@ enum PixiScope {
     /// `pixi_native_packages.yaml` changed; specific names resolved by `compute()`.
     ManifestScoped,
     /// Build only the named packages.
-    #[allow(dead_code)] // consumed in a later task
     Only(BTreeSet<String>),
 }
 
@@ -168,7 +177,6 @@ struct MatrixState {
 /// Names of packages added or whose url/rev/subdir/runner-size changed between
 /// `base_yaml` (None when the manifest did not exist at the base ref) and
 /// `head_yaml`. Removed packages are ignored (nothing to build).
-#[allow(dead_code)] // consumed in a later task
 fn diff_changed_packages(
     base_yaml: Option<&str>,
     head_yaml: &str,
@@ -199,6 +207,24 @@ fn diff_changed_packages(
         }
     }
     Ok(changed)
+}
+
+/// Resolve a `ManifestScoped` state into the concrete set of changed package
+/// names by diffing `pixi_native_packages.yaml` against the base ref.
+fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScope> {
+    let Some(base) = event.base_sha() else {
+        // No base ref to diff against — fail safe by building everything.
+        return Ok(PixiScope::All);
+    };
+    let head_yaml = std::fs::read_to_string(repo.root().join("pixi_native_packages.yaml"))
+        .context("read pixi_native_packages.yaml")?;
+    let base_yaml = gh::file_at_rev(repo, base, "pixi_native_packages.yaml")?;
+    let changed = diff_changed_packages(base_yaml.as_deref(), &head_yaml)?;
+    if changed.is_empty() {
+        Ok(PixiScope::None)
+    } else {
+        Ok(PixiScope::Only(changed))
+    }
 }
 
 fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {

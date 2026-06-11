@@ -23,6 +23,15 @@ pub enum Event {
 }
 
 impl Event {
+    /// The SHA to diff the working tree against for change detection.
+    pub fn base_sha(&self) -> Option<&Sha40> {
+        match self {
+            Event::PullRequest { base, .. } => Some(base),
+            Event::Push { before: Some(b), .. } => Some(b),
+            _ => None,
+        }
+    }
+
     /// Load using `GITHUB_EVENT_NAME` + `GITHUB_EVENT_PATH`.
     pub fn load() -> anyhow::Result<Self> {
         let name = env::var("GITHUB_EVENT_NAME").unwrap_or_default();
@@ -111,6 +120,22 @@ pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles>
         .map(PathBuf::from)
         .collect();
     Ok(ChangedFiles::Paths(paths))
+}
+
+/// `git show <rev>:<path>` → file content, or `None` if the path did not exist
+/// at that rev (e.g. a newly added file).
+pub fn file_at_rev(repo: &Repo, rev: &Sha40, path: &str) -> anyhow::Result<Option<String>> {
+    let spec = format!("{}:{path}", rev.as_str());
+    let out = Command::new("git")
+        .args(["show", &spec])
+        .current_dir(repo.root())
+        .output()
+        .context("run git show")?;
+    if out.status.success() {
+        Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    } else {
+        Ok(None)
+    }
 }
 
 pub mod outputs {
