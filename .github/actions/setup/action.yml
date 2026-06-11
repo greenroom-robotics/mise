@@ -33,7 +33,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag to install.
     required: false
-    default: v0.5.0
+    default: v0.5.1
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the proxy, App token, Azure login, and git auth still run on the host.
     required: false
