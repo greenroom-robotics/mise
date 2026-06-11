@@ -1,3 +1,10 @@
+## [4.6.0](https://github.com/greenroom-robotics/mise/compare/mise@4.5.3...mise@4.6.0) (2026-06-11)
+
+
+### Features
+
+* diff-aware pixi-native builds + runner-size pruning ([#24](https://github.com/greenroom-robotics/mise/issues/24)) ([c8290fd](https://github.com/greenroom-robotics/mise/commit/c8290fd2738a8708772876191a611005070a61b2))
+
 ## [4.5.3](https://github.com/greenroom-robotics/mise/compare/mise@4.5.2...mise@4.5.3) (2026-06-11)
 
 
