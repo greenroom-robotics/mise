@@ -37,8 +37,6 @@ jobs:
         with:
           skip-setup: "true"
           gh-token: ${{ steps.setup.outputs.gh-token }}
-          git-user-name: ${{ steps.setup.outputs.git-user-name }}
-          git-user-email: ${{ steps.setup.outputs.git-user-email }}
           gh-app-id: ${{ secrets.GH_APP_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
