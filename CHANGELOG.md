@@ -1,3 +1,10 @@
+## [4.5.2](https://github.com/greenroom-robotics/mise/compare/mise@4.5.1...mise@4.5.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* bump conda-channel-proxy to v0.5.1 (defaults to dev azure creds on RunsOn) ([#20](https://github.com/greenroom-robotics/mise/issues/20)) ([ba1f807](https://github.com/greenroom-robotics/mise/commit/ba1f8073d00f8fc0cc4ea7d03481db36c6ffa4be))
+
 ## [4.5.1](https://github.com/greenroom-robotics/mise/compare/mise@4.5.0...mise@4.5.1) (2026-06-11)
 
 
