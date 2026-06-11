@@ -707,7 +707,9 @@ packages:
         let changed = diff_changed_packages(Some(base), head).unwrap();
         assert_eq!(
             changed,
-            ["added".to_string(), "beta".to_string()].into_iter().collect()
+            ["added".to_string(), "beta".to_string()]
+                .into_iter()
+                .collect()
         );
     }
 
@@ -744,7 +746,9 @@ packages:
         let changed = diff_changed_packages(None, head).unwrap();
         assert_eq!(
             changed,
-            ["alpha".to_string(), "beta".to_string()].into_iter().collect()
+            ["alpha".to_string(), "beta".to_string()]
+                .into_iter()
+                .collect()
         );
     }
 

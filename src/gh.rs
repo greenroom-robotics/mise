@@ -27,7 +27,9 @@ impl Event {
     pub fn base_sha(&self) -> Option<&Sha40> {
         match self {
             Event::PullRequest { base, .. } => Some(base),
-            Event::Push { before: Some(b), .. } => Some(b),
+            Event::Push {
+                before: Some(b), ..
+            } => Some(b),
             _ => None,
         }
     }
