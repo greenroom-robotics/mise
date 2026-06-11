@@ -52,6 +52,12 @@ outputs:
   gh-token:
     description: GitHub App installation token for downstream steps.
     value: ${{ steps.app-token.outputs.token }}
+  git-user-name:
+    description: 'Git author/committer name for the App bot identity (`<app-slug>[bot]`). Feed to semantic-release / commit steps so release commits are attributed to the App, not semantic-release-bot.'
+    value: ${{ steps.git-identity.outputs.name }}
+  git-user-email:
+    description: 'Git author/committer email for the App bot identity (`<user-id>+<app-slug>[bot]@users.noreply.github.com`). Pairs with git-user-name to produce Verified, App-attributed commits.'
+    value: ${{ steps.git-identity.outputs.email }}
 
 runs:
   using: composite
@@ -66,6 +72,22 @@ runs:
         # repo, so the proxy step can `gh release download` from the private
         # conda-channel-proxy repo.
         owner: ${{ github.repository_owner }}
+
+    # Resolve the App's bot git identity from the minted token. The numeric
+    # user id makes the noreply email link the commit to the App account so
+    # GitHub renders it as the App (avatar + Verified badge), instead of the
+    # free-text label a hardcoded name would produce.
+    - name: Resolve App git identity
+      id: git-identity
+      shell: bash
+      env:
+        APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        set -euo pipefail
+        user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+        echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+        echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
 
     - name: Azure login (OIDC)
       uses: azure/login@v3
