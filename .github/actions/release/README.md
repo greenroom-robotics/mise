@@ -48,7 +48,7 @@ jobs:
 
 ## Recipes-repo contract
 
-The recipes repo must accept PRs from greenroom-bot. `mise ci recipes-pr` clones the repo using `API_TOKEN_GITHUB`, creates a branch `release/<source-repo>-v<version>`, upserts the package's entry in `rosdistro_additional_recipes.yaml`, and opens (or force-pushes onto an existing) PR.
+The recipes repo must accept PRs from greenroom-bot. `mise ci recipes-pr` clones the repo using `API_TOKEN_GITHUB`, creates a version-independent branch `release/<source-repo>`, upserts the package's entry in `rosdistro_additional_recipes.yaml`, and opens (or force-pushes onto an existing) PR. The branch name omits the version on purpose: every release of a source repo lands on the same rolling PR, so a newer release always supersedes an older one instead of leaving stale per-version PRs open.
 
 ## Caller responsibilities
 
