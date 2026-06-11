@@ -1,3 +1,10 @@
+## [4.5.3](https://github.com/greenroom-robotics/mise/compare/mise@4.5.2...mise@4.5.3) (2026-06-11)
+
+
+### Bug Fixes
+
+* use rolling version-independent branch for recipes-pr ([#22](https://github.com/greenroom-robotics/mise/issues/22)) ([ad076be](https://github.com/greenroom-robotics/mise/commit/ad076be208edd7831e7b5c001cd7f4c1d5919438))
+
 ## [4.5.2](https://github.com/greenroom-robotics/mise/compare/mise@4.5.1...mise@4.5.2) (2026-06-11)
 
 
