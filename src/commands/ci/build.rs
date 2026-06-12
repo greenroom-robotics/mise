@@ -34,7 +34,7 @@ impl Build {
             println!("==> mise ci build :: {}", pkg_dir.display());
             let mut cmd = std::process::Command::new("pixi");
             cmd.arg("build")
-                .arg("--manifest-path")
+                .arg("--path")
                 .arg(&pixi)
                 .arg("--output-dir")
                 .arg(&out_dir);
