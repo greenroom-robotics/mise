@@ -42,6 +42,14 @@ inputs:
     description: Directory containing per-package pixi workspaces.
     required: false
     default: packages
+  report-dir:
+    description: Directory to collect JUnit XML test reports into.
+    required: false
+    default: test-reports
+  check-name:
+    description: Name of the rendered test-report check (kept distinct from the legacy deb path's "Test Report").
+    required: false
+    default: Test Report (pixi)
 
 runs:
   using: composite
@@ -61,11 +69,40 @@ runs:
     - name: Run mise ci test
       shell: bash
       run: |
-        args=(--package-dir "${{ inputs.package-dir }}")
+        args=(--package-dir "${{ inputs.package-dir }}" --report-dir "${{ inputs.report-dir }}")
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi
         pixi run mise ci test "${args[@]}"
+
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: pixi-test-reports
+        path: ${{ inputs.report-dir }}
+        if-no-files-found: ignore
+
+    # Skip the report step entirely when the test task emits no JUnit XML
+    # (e.g. cargo nextest) so the action doesn't fail on a missing report.
+    - name: Check for test reports
+      id: reports
+      if: always()
+      shell: bash
+      run: |
+        if [ -d "${{ inputs.report-dir }}" ] && [ -n "$(find "${{ inputs.report-dir }}" -name '*.xml' -print -quit)" ]; then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          echo "No JUnit XML under ${{ inputs.report-dir }}; skipping report publish."
+        fi
+
+    - name: Publish test report
+      if: always() && steps.reports.outputs.found == 'true'
+      uses: Greenroom-Robotics/action-junit-report@main
+      with:
+        report_paths: ${{ inputs.report-dir }}/**/*.xml
+        check_name: ${{ inputs.check-name }}
 
     - if: always()
       uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
