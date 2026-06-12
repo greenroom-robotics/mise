@@ -1,3 +1,10 @@
+## [4.8.1](https://github.com/greenroom-robotics/mise/compare/mise@4.8.0...mise@4.8.1) (2026-06-12)
+
+
+### Bug Fixes
+
+* update for new pixi version ([86312e6](https://github.com/greenroom-robotics/mise/commit/86312e6501c70a095757bb02bc550708dce68a4f))
+
 ## [4.8.0](https://github.com/greenroom-robotics/mise/compare/mise@4.7.0...mise@4.8.0) (2026-06-12)
 
 
