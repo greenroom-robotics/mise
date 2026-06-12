@@ -116,6 +116,6 @@ runs:
       if: inputs.skip-pixi != 'true'
       uses: prefix-dev/setup-pixi@v0.9.4
       with:
-        pixi-url: ${{ inputs.pixi-url != '' && inputs.pixi-url || (runner.arch == 'ARM64' && 'https://github.com/greenroom-robotics/pixi/releases/download/v0.68.0-gr1/pixi-aarch64-unknown-linux-musl' || 'https://github.com/greenroom-robotics/pixi/releases/download/v0.68.0-gr1/pixi-x86_64-unknown-linux-musl') }}
+        pixi-version: v0.70.1
         environments: ${{ inputs.pixi-environment }}
         frozen: ${{ inputs.frozen }}
