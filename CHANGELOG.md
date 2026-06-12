@@ -1,3 +1,10 @@
+## [4.8.0](https://github.com/greenroom-robotics/mise/compare/mise@4.7.0...mise@4.8.0) (2026-06-12)
+
+
+### Features
+
+* collect junit test reports from ci test ([#26](https://github.com/greenroom-robotics/mise/issues/26)) ([e345497](https://github.com/greenroom-robotics/mise/commit/e345497ccf8ac677391940e821acc321934c0915))
+
 ## [4.7.0](https://github.com/greenroom-robotics/mise/compare/mise@4.6.0...mise@4.7.0) (2026-06-11)
 
 
