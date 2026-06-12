@@ -83,8 +83,22 @@ runs:
         path: ${{ inputs.report-dir }}
         if-no-files-found: ignore
 
-    - name: Publish test report
+    # Skip the report step entirely when the test task emits no JUnit XML
+    # (e.g. cargo nextest) so the action doesn't fail on a missing report.
+    - name: Check for test reports
+      id: reports
       if: always()
+      shell: bash
+      run: |
+        if [ -d "${{ inputs.report-dir }}" ] && [ -n "$(find "${{ inputs.report-dir }}" -name '*.xml' -print -quit)" ]; then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          echo "No JUnit XML under ${{ inputs.report-dir }}; skipping report publish."
+        fi
+
+    - name: Publish test report
+      if: always() && steps.reports.outputs.found == 'true'
       uses: Greenroom-Robotics/action-junit-report@main
       with:
         report_paths: ${{ inputs.report-dir }}/**/*.xml

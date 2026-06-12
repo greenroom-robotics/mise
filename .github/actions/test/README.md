@@ -4,6 +4,8 @@ One-liner CI step for pixi-native ROS package repos. Sets up the environment (Gi
 
 `mise ci test` runs every package's `tests` task (failing at the end, not fail-fast) and collects each package's JUnit XML from the standard colcon `build/` location into `report-dir`. The action then uploads that directory as the `pixi-test-reports` artifact and publishes a rendered test-report check named `Test Report (pixi)` — distinct from the legacy deb path's `Test Report` check so the two coexist on the same commit.
 
+If the test task emits no JUnit XML (e.g. `cargo nextest`), report collection and the publish step are skipped silently — the action's success still reflects whether the tests passed.
+
 ## Usage
 
 ```yaml
