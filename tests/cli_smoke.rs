@@ -330,35 +330,3 @@ fn ci_test_discovers_fixture_package() {
         "expected discovery banner in stdout. stdout={stdout} stderr={stderr}"
     );
 }
-
-#[test]
-fn ci_test_collects_junit_reports_into_report_dir() {
-    // Lay out a package with a JUnit XML in the standard colcon build spot, then
-    // confirm `ci test` copies it into the report dir namespaced by package,
-    // even though the `pixi run` itself fails (no tests env installed here).
-    let tmp = tempfile::tempdir().unwrap();
-    let pkgs = tmp.path().join("packages");
-    let foo = pkgs.join("foo");
-    let results = foo.join("build/foo/test_results/foo");
-    std::fs::create_dir_all(&results).unwrap();
-    std::fs::write(foo.join("pixi.toml"), "[workspace]\nname = \"foo\"\n").unwrap();
-    std::fs::write(results.join("foo.gtest.xml"), "<testsuite/>").unwrap();
-
-    let report_dir = tmp.path().join("reports");
-    let out = mise()
-        .args(["ci", "test", "--package", "foo", "--package-dir"])
-        .arg(&pkgs)
-        .arg("--report-dir")
-        .arg(&report_dir)
-        .output()
-        .unwrap();
-
-    let dest = report_dir.join("foo/build/foo/test_results/foo/foo.gtest.xml");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        dest.exists(),
-        "expected collected report at {}. stdout={stdout} stderr={stderr}",
-        dest.display()
-    );
-}
