@@ -5,7 +5,8 @@ Provisions everything a pixi-based ROS package workflow needs to run mise CLI co
 1. GitHub App token (so private deps clone)
 2. Azure federated login (so the conda-channel-proxy can reach the storage account)
 3. `conda-channel-proxy` running on `http://localhost:12222`, serving the `general` and `overrides` channels under `/general` and `/overrides`
-4. pixi installed with the workspace lockfile applied
+4. the pixi binary
+5. a dedicated pixi tool manifest depending solely on `mise`, pinned to this action's version (read from this repo's root `pixi.toml`) and installed — so the calling repo does **not** need a root `pixi.toml` carrying `mise` as a dependency. The manifest path is exported as `$MISE_MANIFEST`; run mise with `pixi run --manifest-path "$MISE_MANIFEST" mise …`
 
 Public action — call it directly from any workflow.
 
@@ -20,13 +21,13 @@ Public action — call it directly from any workflow.
     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
     azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-# Do your work here, e.g. `pixi run mise ci test`
+# Do your work here, e.g. `pixi run --manifest-path "$MISE_MANIFEST" mise ci test`
 
 - if: always()
   uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
 ```
 
-**Teardown is your responsibility.** This action does not stop the proxy. Pair it with the CCP `teardown` action under `if: always()` so the proxy is stopped and the log is uploaded on both success and failure.
+**Teardown is your responsibility.** This action does not stop the proxy. Pair it with the conda-channel-proxy `teardown` action under `if: always()` so the proxy is stopped and the log is uploaded on both success and failure.
 
 ## Outputs
 

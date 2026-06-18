@@ -1,5 +1,5 @@
 name: Run mise ci release
-description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `pixi run mise ci release`, and tear down the conda-channel-proxy. Replaces the platform_cli release path for pixi-native ROS packages.'
+description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `mise ci release`, and tear down the conda-channel-proxy. Replaces the platform_cli release path for pixi-native ROS packages.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,18 +18,6 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  pixi-url:
-    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
-    required: false
-    default: ""
-  pixi-environment:
-    description: pixi environment to install.
-    required: false
-    default: default
-  frozen:
-    description: Whether to use the frozen lockfile (true/false).
-    required: false
-    default: "true"
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
@@ -75,9 +63,6 @@ runs:
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
-        pixi-url: ${{ inputs.pixi-url }}
-        pixi-environment: ${{ inputs.pixi-environment }}
-        frozen: ${{ inputs.frozen }}
         proxy-version: ${{ inputs.proxy-version }}
 
     - uses: actions/setup-node@v4
@@ -113,7 +98,7 @@ runs:
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi
-        pixi run mise ci release "${args[@]}"
+        pixi run --manifest-path "$MISE_MANIFEST" mise ci release "${args[@]}"
 
     - if: always()
       uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3

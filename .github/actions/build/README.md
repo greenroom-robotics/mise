@@ -1,6 +1,6 @@
 # mise/.github/actions/build
 
-One-liner CI step for pixi-native ROS package repos. Sets up the environment, runs `pixi run mise ci build`, stages outputs at `$RUNNER_TEMP/conda-bld`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos. Sets up the environment, runs `mise ci build`, stages outputs at `$RUNNER_TEMP/conda-bld`, and tears down the proxy.
 
 ## Usage
 
