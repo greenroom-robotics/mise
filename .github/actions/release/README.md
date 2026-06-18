@@ -1,6 +1,6 @@
 # mise/.github/actions/release
 
-One-liner CI step for pixi-native ROS package repos to run their release process. Sets up the environment (gh-app-token, Azure login, CCP, pixi, Node, semantic-release deps), runs `pixi run mise ci release`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos to run their release process. Sets up the environment (gh-app-token, Azure login, CCP, pixi, Node, semantic-release deps), runs `mise ci release`, and tears down the proxy.
 
 ## Usage
 
@@ -42,7 +42,7 @@ jobs:
 2. Node 20 is installed alongside `yarn` (via `actions/setup-node`).
 3. `release-tooling/package.json` and `release-tooling/yarn.lock` are copied into the workspace root.
 4. `yarn install --frozen-lockfile` brings in semantic-release + plugins.
-5. `pixi run mise ci release ...` writes a `.releaserc` for each package, then runs semantic-release (or multi-semantic-release for the multi-package case).
+5. `mise ci release ...` writes a `.releaserc` for each package, then runs semantic-release (or multi-semantic-release for the multi-package case).
 6. semantic-release's `@semantic-release/exec` plugin calls back into `mise ci recipes-pr` to open/update the recipes-repo PR.
 7. The conda-channel-proxy teardown action runs unconditionally.
 

@@ -1,5 +1,5 @@
 name: Set up mise CI environment
-description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, and (unless skip-pixi is set) a pixi environment. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3 (if: always()) to clean up the proxy.'
+description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, the pixi binary, and (unless skip-pixi is set) the mise CLI pinned to this action version. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3 (if: always()) to clean up the proxy.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,18 +18,6 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  pixi-url:
-    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
-    required: false
-    default: ""
-  pixi-environment:
-    description: pixi environment to install.
-    required: false
-    default: default
-  frozen:
-    description: Whether to use the frozen lockfile (true/false).
-    required: false
-    default: "true"
   proxy-version:
     description: conda-channel-proxy release tag to install.
     required: false
@@ -112,10 +100,48 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
+    # Install only the pixi binary, we do not use a consumers environment for the CI
+    # orchestration tools (e.g. pixi/mise).
     - name: Set up pixi
       if: inputs.skip-pixi != 'true'
       uses: prefix-dev/setup-pixi@v0.9.4
       with:
         pixi-version: v0.70.1
-        environments: ${{ inputs.pixi-environment }}
-        frozen: ${{ inputs.frozen }}
+        run-install: false
+
+    # Write a dedicated pixi manifest that depends solely on mise, pinned to the
+    # exact version this action ships, then install it. Downstream actions run
+    # mise via `pixi run --manifest-path "$MISE_MANIFEST"` (exported below)
+    #
+    # The version is read from THIS repo's root pixi.toml [package].version —
+    # bumped on every release, with the major tag (v<MAJOR>) slid onto that
+    # commit — so `setup@vN` always installs the mise built at vN. The channel
+    # is the proxy's private `general` channel (dynamic localhost port, hence a
+    # generated rather than committed manifest), where mise is published.
+    - name: Install mise
+      if: inputs.skip-pixi != 'true'
+      shell: bash
+      env:
+        GENERAL_URL: ${{ steps.proxy.outputs.general-url }}
+      run: |
+        set -euo pipefail
+        version="$(python3 -c 'import tomllib; print(tomllib.load(open("'"${GITHUB_ACTION_PATH}"'/../../../pixi.toml","rb"))["package"]["version"])')"
+        if [ -z "$version" ]; then
+          echo "::error::could not read [package].version from the action's pixi.toml" >&2
+          exit 1
+        fi
+        manifest_dir="${RUNNER_TEMP}/mise-tool"
+        mkdir -p "$manifest_dir"
+        cat > "${manifest_dir}/pixi.toml" <<EOF
+        [workspace]
+        name = "mise-tool"
+        channels = ["${GENERAL_URL}", "https://prefix.dev/conda-forge"]
+        platforms = ["linux-64", "linux-aarch64"]
+
+        [dependencies]
+        mise = "==${version}"
+        EOF
+        echo "Installing mise==${version} from a dedicated tool manifest"
+        pixi install --manifest-path "${manifest_dir}/pixi.toml"
+        # Export the manifest path so downstream actions invoke mise from it.
+        echo "MISE_MANIFEST=${manifest_dir}/pixi.toml" >> "$GITHUB_ENV"

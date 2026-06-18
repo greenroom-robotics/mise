@@ -1,6 +1,6 @@
 # mise/.github/actions/test
 
-One-liner CI step for pixi-native ROS package repos. Sets up the environment (GitHub App token, Azure login, CCP, pixi), runs `pixi run mise ci test`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos. Sets up the environment (GitHub App token, Azure login, CCP, pixi), runs `mise ci test`, and tears down the proxy.
 
 `mise ci test` runs every package's `tests` task (failing at the end, not fail-fast) and collects each package's JUnit XML from the standard colcon `build/` location into `report-dir`. The action then uploads that directory as the `pixi-test-reports` artifact and publishes a rendered test-report check named `Test Report (pixi)` — distinct from the legacy deb path's `Test Report` check so the two coexist on the same commit.
 

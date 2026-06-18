@@ -1,5 +1,5 @@
 name: Run mise ci test
-description: 'Set up the full mise CI environment, run `pixi run mise ci test`, and tear down the conda-channel-proxy. One-liner replacement for inline pixi/proxy/test wiring in pixi-native ROS package repos.'
+description: 'Set up the full mise CI environment, run `mise ci test`, and tear down the conda-channel-proxy. One-liner replacement for inline pixi/proxy/test wiring in pixi-native ROS package repos.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,18 +18,6 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  pixi-url:
-    description: URL of the pixi binary to use (defaults to greenroom-robotics fork pin).
-    required: false
-    default: ""
-  pixi-environment:
-    description: pixi environment to install.
-    required: false
-    default: default
-  frozen:
-    description: Whether to use the frozen lockfile (true/false).
-    required: false
-    default: "true"
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
@@ -61,9 +49,6 @@ runs:
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
-        pixi-url: ${{ inputs.pixi-url }}
-        pixi-environment: ${{ inputs.pixi-environment }}
-        frozen: ${{ inputs.frozen }}
         proxy-version: ${{ inputs.proxy-version }}
 
     - name: Run mise ci test
@@ -73,7 +58,7 @@ runs:
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi
-        pixi run mise ci test "${args[@]}"
+        pixi run --manifest-path "$MISE_MANIFEST" mise ci test "${args[@]}"
 
     - name: Upload test reports
       if: always()
