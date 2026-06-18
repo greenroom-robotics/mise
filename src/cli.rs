@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::{build_recipes::BuildRecipes, ci::Ci, matrix::Matrix, snapshot::Snapshot};
 
 #[derive(Parser, Debug)]
-#[command(name = "mise", about = "Build/matrix automation for ros-recipes")]
+#[command(name = "mise", version, about = "Build/matrix automation for ros-recipes")]
 pub struct Cli {
     #[command(subcommand)]
     command: Top,

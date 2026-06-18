@@ -44,6 +44,64 @@ jobs:
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           package-dir: "."
 
+  # Keeps Cargo.toml/Cargo.lock in step with the version semantic-release just
+  # wrote into the root pixi.toml [package], so `mise --version` (which reports
+  # CARGO_PKG_VERSION) tracks the released package. This is a mise-specific
+  # follow-up — it deliberately lives here rather than in the shared
+  # `mise ci bump-pixi` path, which stays generic for non-Rust pixi packages.
+  # Runs after release so it picks up the bumped pixi.toml; commits with
+  # [skip ci] so it doesn't re-trigger the release.
+  sync-cargo-version:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # App token so the commit can land on the protected main branch (the
+      # default GITHUB_TOKEN can't push there), matching how semantic-release
+      # itself commits in the release job.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Sync Cargo version to released pixi version
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          # Version semantic-release wrote into the root pixi.toml [package].
+          VERSION="$(python3 -c 'import tomllib,sys; print(tomllib.load(open("pixi.toml","rb"))["package"]["version"])')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read [package].version from pixi.toml" >&2
+            exit 1
+          fi
+          # Cargo.toml: only the version line inside the leading [package]
+          # table (range stops at the next table header).
+          sed -i '/^\[package\]/,/^\[/ s/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          # Cargo.lock: the version line immediately following the mise
+          # [[package]] name entry.
+          sed -i '/^name = "mise"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/}' Cargo.lock
+          if git diff --quiet -- Cargo.toml Cargo.lock; then
+            echo "Cargo.toml/Cargo.lock already at ${VERSION}; nothing to do."
+            exit 0
+          fi
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: sync Cargo version to ${VERSION} [skip ci]"
+          git push origin HEAD:main
+
   # Slides the bare `v<MAJOR>` tag (e.g. `v1`, `v2`) forward whenever the
   # release job above cuts a new exact `mise@X.Y.Z` tag. Consumers pin
   # `uses: greenroom-robotics/mise/.github/actions/<name>@v<MAJOR>` and
