@@ -1,3 +1,10 @@
+## [4.9.1](https://github.com/greenroom-robotics/mise/compare/mise@4.9.0...mise@4.9.1) (2026-06-19)
+
+
+### Bug Fixes
+
+* use --locked for test runs ([344ac5b](https://github.com/greenroom-robotics/mise/commit/344ac5b21784f6c2fa981c31181b096c58f9efd2))
+
 ## [4.9.0](https://github.com/greenroom-robotics/mise/compare/mise@4.8.1...mise@4.9.0) (2026-06-19)
 
 
