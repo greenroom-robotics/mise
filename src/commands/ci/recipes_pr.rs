@@ -56,7 +56,12 @@ impl RecipesPr {
         //    fresh PR per version. A per-version branch leaves superseded PRs
         //    open, and an older one merging after a newer one downgrades the
         //    pin. Mirrors `mise bump`'s `bump/<pkg>` branch.
-        let branch = release_branch(&src_short);
+        //
+        //    Multi-package repos get a per-package rolling branch
+        //    (release/<repo>/<package>) so each package's release lands on its
+        //    own PR. Single-package repos (where --package matches the repo
+        //    name, or is absent) stay at release/<repo>.
+        let branch = release_branch(&src_short, self.package.as_deref());
         run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
@@ -109,7 +114,7 @@ impl RecipesPr {
         let (git_name, git_email) = git_identity();
         let name_cfg = format!("user.name={git_name}");
         let email_cfg = format!("user.email={git_email}");
-        let commit_msg = format!("release: {} {}", src_short, tag);
+        let commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
         run_in(
             &recipes_root,
             &[
@@ -131,7 +136,7 @@ impl RecipesPr {
             &["git", "push", "--force", "origin", &branch],
         )?;
 
-        let title = format!("release: {} {}", src_short, tag);
+        let title = release_title(&src_short, self.package.as_deref(), &tag);
         if pr_exists(&self.recipes_repo, &branch)? {
             // The rolling PR already exists from a previous release; refresh its
             // title to the new version so it doesn't show a stale version.
@@ -165,8 +170,25 @@ impl RecipesPr {
 }
 
 /// Version-independent branch for a source repo's rolling release PR.
-fn release_branch(src_short: &str) -> String {
-    format!("release/{src_short}")
+///
+/// Multi-package repos get a per-package branch (`release/<repo>/<package>`) so
+/// each package lands on its own rolling PR. Single-package repos — where no
+/// `--package` is passed, or it matches the repo name — stay at
+/// `release/<repo>` and avoid a redundant `release/mise/mise`.
+fn release_branch(src_short: &str, package: Option<&str>) -> String {
+    match package {
+        Some(pkg) if pkg != src_short => format!("release/{src_short}/{pkg}"),
+        _ => format!("release/{src_short}"),
+    }
+}
+
+/// PR title / commit message, mirroring `release_branch`: per-package repos read
+/// `release: <repo>/<package> v<ver>`; single-package repos `release: <repo> v<ver>`.
+fn release_title(src_short: &str, package: Option<&str>, tag: &str) -> String {
+    match package {
+        Some(pkg) if pkg != src_short => format!("release: {src_short}/{pkg} {tag}"),
+        _ => format!("release: {src_short} {tag}"),
+    }
 }
 
 fn pr_edit_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
@@ -332,9 +354,43 @@ mod tests {
     // an older release merge over a newer one.
     #[test]
     fn release_branch_is_version_independent() {
-        let a = release_branch("mise");
+        let a = release_branch("mise", None);
         assert_eq!(a, "release/mise");
         assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
+    }
+
+    // Multi-package repos get a per-package rolling branch so each package's
+    // release lands on its own PR instead of sharing one repo-level PR.
+    #[test]
+    fn release_branch_is_per_package_when_package_differs() {
+        assert_eq!(
+            release_branch("platform_toolbox", Some("topic_utils")),
+            "release/platform_toolbox/topic_utils"
+        );
+    }
+
+    // Single-package repos pass --package == repo name; don't produce a
+    // redundant release/mise/mise.
+    #[test]
+    fn release_branch_collapses_when_package_matches_repo() {
+        assert_eq!(release_branch("mise", Some("mise")), "release/mise");
+    }
+
+    // Title mirrors the branch: per-package vs repo-level.
+    #[test]
+    fn release_title_mirrors_branch() {
+        assert_eq!(
+            release_title("platform_toolbox", Some("topic_utils"), "v1.26.0"),
+            "release: platform_toolbox/topic_utils v1.26.0"
+        );
+        assert_eq!(
+            release_title("mise", Some("mise"), "v4.5.2"),
+            "release: mise v4.5.2"
+        );
+        assert_eq!(
+            release_title("mise", None, "v4.5.2"),
+            "release: mise v4.5.2"
+        );
     }
 
     #[test]
