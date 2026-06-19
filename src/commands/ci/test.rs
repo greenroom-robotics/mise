@@ -74,6 +74,7 @@ impl Test {
                 );
                 let status = std::process::Command::new("pixi")
                     .arg("run")
+                    .arg("--locked")
                     .arg("--manifest-path")
                     .arg(&pixi)
                     .arg("-e")
