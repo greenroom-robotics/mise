@@ -1,3 +1,10 @@
+## [4.9.0](https://github.com/greenroom-robotics/mise/compare/mise@4.8.1...mise@4.9.0) (2026-06-19)
+
+
+### Features
+
+* add ability to specify extra test tasks ([#28](https://github.com/greenroom-robotics/mise/issues/28)) ([2890ab2](https://github.com/greenroom-robotics/mise/commit/2890ab2437699e8d41b94239351b35ce1582dc4f))
+
 ## [4.8.1](https://github.com/greenroom-robotics/mise/compare/mise@4.8.0...mise@4.8.1) (2026-06-12)
 
 
