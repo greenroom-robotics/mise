@@ -120,12 +120,20 @@ jobs:
       # GitHub rejects such a ref push unless the pushing identity holds the
       # Workflows permission — which the App has and the default token cannot
       # be granted (there is no `workflows` scope in the permissions block).
+      # App token scoped with the Workflows permission. Sliding v<MAJOR> can
+      # move the tag across a commit that edits a file under .github/workflows/,
+      # and GitHub rejects such a ref update (both `git push` and the REST API)
+      # unless the pushing identity holds the Workflows permission. The default
+      # GITHUB_TOKEN can't carry it, and the App token only carries it if the
+      # GitHub App has been granted "Workflows: Read & write" in its settings.
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
 
       - uses: actions/checkout@v6
         with:
@@ -135,6 +143,7 @@ jobs:
       - name: Slide major tag to latest mise@ release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           # Newest exact release tag cut by semantic-release, e.g. mise@4.2.0.
@@ -157,17 +166,8 @@ jobs:
             exit 0
           fi
           echo "Pointing $SLIDING at $TARGET (from $LATEST)"
-          # Move the ref via the REST Git Refs API rather than `git push`.
-          # A force-push of a tag whose new target adds/changes a file under
-          # .github/workflows/ is rejected by git's receive-pack unless the
-          # pushing identity has the Workflows permission. Updating the ref
-          # through the API is not treated as editing a workflow file, so it
-          # slides the tag without needing that permission. PATCH the existing
-          # ref; POST it if v<MAJOR> does not exist yet.
-          if gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/${SLIDING}" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${SLIDING}" \
-              -f sha="$TARGET" -F force=true
-          else
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/tags/${SLIDING}" -f sha="$TARGET"
-          fi
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git tag -f "$SLIDING" "$TARGET"
+          git push origin "$SLIDING" --force
