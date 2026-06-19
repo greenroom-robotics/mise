@@ -38,6 +38,16 @@ inputs:
     description: Name of the rendered test-report check (kept distinct from the legacy deb path's "Test Report").
     required: false
     default: Test Report (pixi)
+  jobs:
+    description: |
+      Newline-separated `<env>:<task>` pairs to run per package, e.g.
+        tests:test
+        tests-boost:test
+        lint:lint
+      Each line is passed as a `--job` to `mise ci test`. Defaults to
+      `tests:test` (the single-environment behaviour) when empty.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -58,6 +68,10 @@ runs:
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi
+        # Each non-empty line of `jobs` becomes a --job <env>:<task>.
+        while IFS= read -r job; do
+          [ -n "$job" ] && args+=(--job "$job")
+        done <<< "${{ inputs.jobs }}"
         pixi run --manifest-path "$MISE_MANIFEST" mise ci test "${args[@]}"
 
     - name: Upload test reports
