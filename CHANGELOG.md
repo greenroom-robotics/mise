@@ -1,3 +1,10 @@
+## [4.10.0](https://github.com/greenroom-robotics/mise/compare/mise@4.9.1...mise@4.10.0) (2026-06-19)
+
+
+### Features
+
+* use package name for release pr branches ([f70de9d](https://github.com/greenroom-robotics/mise/commit/f70de9d76b1cc3cd828ca0fea18a825098fb883e))
+
 ## [4.9.1](https://github.com/greenroom-robotics/mise/compare/mise@4.9.0...mise@4.9.1) (2026-06-19)
 
 
