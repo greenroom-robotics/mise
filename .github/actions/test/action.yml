@@ -98,10 +98,12 @@ runs:
 
     - name: Publish test report
       if: always() && steps.reports.outputs.found == 'true'
-      uses: Greenroom-Robotics/action-junit-report@main
+      uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 #v3
       with:
-        report_paths: ${{ inputs.report-dir }}/**/*.xml
-        check_name: ${{ inputs.check-name }}
+        name: ${{ inputs.check-name }}
+        path: ${{ inputs.report-dir }}/**/*.xml
+        reporter: java-junit
+        fail-on-error: false
 
     - if: always()
       uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
