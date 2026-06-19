@@ -15,7 +15,7 @@ Public action — call it directly from any workflow.
 ```yaml
 - uses: greenroom-robotics/mise/.github/actions/setup@v4
   with:
-    gh-app-id: ${{ secrets.GH_APP_ID }}
+    gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
     gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
     azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}

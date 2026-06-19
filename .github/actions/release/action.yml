@@ -3,8 +3,8 @@ description: 'Set up the full mise CI environment, install Node + semantic-relea
 author: Greenroom Robotics
 
 inputs:
-  gh-app-id:
-    description: GitHub App id used to mint a token for private deps.
+  gh-app-client-id:
+    description: GitHub App client id used to mint a token for private deps.
     required: true
   gh-app-private-key:
     description: GitHub App private key (PEM).
@@ -58,7 +58,7 @@ runs:
       if: inputs.skip-setup != 'true'
       uses: greenroom-robotics/mise/.github/actions/setup@v4
       with:
-        gh-app-id: ${{ inputs.gh-app-id }}
+        gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}

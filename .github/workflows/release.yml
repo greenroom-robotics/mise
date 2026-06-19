@@ -23,7 +23,7 @@ jobs:
       - id: setup
         uses: ./.github/actions/setup
         with:
-          gh-app-id: ${{ secrets.GH_APP_ID }}
+          gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -37,7 +37,7 @@ jobs:
         with:
           skip-setup: "true"
           gh-token: ${{ steps.setup.outputs.gh-token }}
-          gh-app-id: ${{ secrets.GH_APP_ID }}
+          gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -64,7 +64,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.GH_APP_ID }}
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v6
@@ -130,7 +130,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.GH_APP_ID }}
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-workflows: write

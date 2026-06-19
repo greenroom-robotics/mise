@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: greenroom-robotics/mise/.github/actions/build@v4
         with:
-          gh-app-id: ${{ secrets.GH_APP_ID }}
+          gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
