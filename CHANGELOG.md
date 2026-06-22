@@ -1,3 +1,10 @@
+## [4.10.1](https://github.com/greenroom-robotics/mise/compare/mise@4.10.0...mise@4.10.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* **ci:** exclude CTest Test.xml from collected reports ([#29](https://github.com/greenroom-robotics/mise/issues/29)) ([d927701](https://github.com/greenroom-robotics/mise/commit/d927701d4a4d04dd3e023d700d3e92ce352d2e25))
+
 ## [4.10.0](https://github.com/greenroom-robotics/mise/compare/mise@4.9.1...mise@4.10.0) (2026-06-19)
 
 
