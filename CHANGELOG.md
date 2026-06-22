@@ -1,3 +1,10 @@
+## [4.11.1](https://github.com/greenroom-robotics/mise/compare/mise@4.11.0...mise@4.11.1) (2026-06-22)
+
+
+### Bug Fixes
+
+* **ci:** also exclude package.xml from collected reports ([#30](https://github.com/greenroom-robotics/mise/issues/30)) ([c203702](https://github.com/greenroom-robotics/mise/commit/c20370264e093dbca184f5a2370731866a3e0e45))
+
 ## [4.11.0](https://github.com/greenroom-robotics/mise/compare/mise@4.10.1...mise@4.11.0) (2026-06-22)
 
 
