@@ -1,0 +1,15 @@
+The greenroom-robotics/mise composite actions (setup/build/test/release) renamed
+their `gh-app-id` input to `gh-app-client-id` because actions/create-github-app-token@v3
+deprecated `app-id` in favor of `client-id`. Update this repo to match.
+
+1. Grep .github/ for `gh-app-id:` and any direct `app-id:` under a
+   `create-github-app-token` step.
+2. For each `uses: greenroom-robotics/mise/.github/actions/{setup,build,test,release}@...`
+   call: rename the `gh-app-id:` input line to `gh-app-client-id:` and change its
+   value from `${{ secrets.GH_APP_ID }}` to `${{ secrets.GH_APP_CLIENT_ID }}`.
+3. For any direct `actions/create-github-app-token` step, rename `app-id:` to
+   `client-id:` and switch the value to `${{ secrets.GH_APP_CLIENT_ID }}`.
+4. IMPORTANT: client-id and app-id are DIFFERENT values. Confirm a GH_APP_CLIENT_ID
+   secret exists in the repo before assuming the value swap is valid — if only
+   GH_APP_ID exists, flag it rather than guessing.
+5. Don't touch `gh-app-private-key`. Report every file/line you changed.
