@@ -146,6 +146,11 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         if path.is_dir() {
+            // Skip CTest's native result dir: build/<pkg>/Testing/<stamp>/Test.xml
+            // is a <Site> doc, not JUnit, and crashes dorny/test-reporter.
+            if path.file_name().is_some_and(|n| n == "Testing") {
+                continue;
+            }
             find_xml(&path, out)?;
         } else if path.extension().is_some_and(|e| e == "xml") {
             out.push(path);
@@ -169,6 +174,10 @@ mod tests {
         fs::write(results.join("foo.gtest.xml"), "<testsuite/>").unwrap();
         // Non-XML files under build/ must be ignored.
         fs::write(pkg_dir.join("build/foo/other.txt"), "x").unwrap();
+        // CTest's native Test.xml is not JUnit and must be excluded.
+        let ctest = pkg_dir.join("build/foo/Testing/20240101-0000");
+        fs::create_dir_all(&ctest).unwrap();
+        fs::write(ctest.join("Test.xml"), "<Site/>").unwrap();
 
         let report_dir = tmp.path().join("test-reports");
         let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
