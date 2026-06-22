@@ -214,6 +214,27 @@ fn git_identity() -> (String, String) {
     )
 }
 
+/// Gremlin flavor text for PR bodies. The footer stays factual so anyone
+/// reading the PR still knows what created it.
+const GREMLINS: &[&str] = &[
+    "🐉 A gremlin smelled a fresh release and dragged this recipe in by its tail.",
+    "🐉 The recipe gremlins have been fed. They demand you click merge.",
+    "🐉 *gremlin noises* — new version spotted, recipe updated, snacks expected.",
+    "🐉 A wild recipe gremlin appeared and bumped the version while you weren't looking.",
+    "🐉 Do not feed the gremlins after midnight. They already shipped this PR anyway.",
+    "🐉 The gremlin in the build closet insists this recipe is ready. Trust the gremlin.",
+];
+
+fn gremlin_body() -> String {
+    // ponytail: nanos-modulo pick, no rng dep needed for flavor text
+    let idx = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize)
+        .unwrap_or(0)
+        % GREMLINS.len();
+    format!("{}\n\nAutomated by `mise ci recipes-pr`.", GREMLINS[idx])
+}
+
 fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
     [
         "gh",
@@ -228,7 +249,7 @@ fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
         "--title",
         title,
         "--body",
-        "Automated by `mise ci recipes-pr`.",
+        &gremlin_body(),
     ]
     .into_iter()
     .map(String::from)
