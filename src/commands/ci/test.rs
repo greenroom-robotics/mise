@@ -152,7 +152,12 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
                 continue;
             }
             find_xml(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "xml") {
+        } else if path.extension().is_some_and(|e| e == "xml")
+            && path.file_name().is_some_and(|n| n != "package.xml")
+        {
+            // package.xml is the ROS manifest, not a JUnit report; colcon copies
+            // it into build/<pkg>/ and collecting it crashes dorny/test-reporter
+            // the same way CTest's Test.xml does.
             out.push(path);
         }
     }
@@ -178,6 +183,8 @@ mod tests {
         let ctest = pkg_dir.join("build/foo/Testing/20240101-0000");
         fs::create_dir_all(&ctest).unwrap();
         fs::write(ctest.join("Test.xml"), "<Site/>").unwrap();
+        // The ROS package manifest is not JUnit and must be excluded.
+        fs::write(pkg_dir.join("build/foo/package.xml"), "<package/>").unwrap();
 
         let report_dir = tmp.path().join("test-reports");
         let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
