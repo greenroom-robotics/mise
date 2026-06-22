@@ -1,3 +1,10 @@
+## [4.11.0](https://github.com/greenroom-robotics/mise/compare/mise@4.10.1...mise@4.11.0) (2026-06-22)
+
+
+### Features
+
+* recipes-pr composite action for conda publish off deb tags ([#31](https://github.com/greenroom-robotics/mise/issues/31)) ([af2c59e](https://github.com/greenroom-robotics/mise/commit/af2c59e0ca3ed8903ddb1edf264a23a5cfafbf37))
+
 ## [4.10.1](https://github.com/greenroom-robotics/mise/compare/mise@4.10.0...mise@4.10.1) (2026-06-22)
 
 
