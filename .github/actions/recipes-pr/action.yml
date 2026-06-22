@@ -1,0 +1,106 @@
+name: Publish conda recipe PR off deb tags
+description: 'Discover the `<pkg>@<version>` tags the deb release just created (newer than dispatch-sha) and open/update a conda recipe PR per package via `mise ci recipes-pr`. Sets up the mise CI environment and tears down the conda-channel-proxy. Pairs with the deb release (ros_semantic_release_action) which owns tagging.'
+author: Greenroom Robotics
+
+inputs:
+  gh-app-client-id:
+    description: GitHub App client id used to mint a token for private deps and the recipes PR.
+    required: true
+  gh-app-private-key:
+    description: GitHub App private key (PEM).
+    required: true
+  azure-client-id:
+    description: AZURE_CLIENT_ID — federated identity bound to the calling repo.
+    required: true
+  azure-tenant-id:
+    description: AZURE_TENANT_ID for the channel storage account.
+    required: true
+  azure-subscription-id:
+    description: AZURE_SUBSCRIPTION_ID for the channel storage account.
+    required: true
+  proxy-version:
+    description: conda-channel-proxy release tag.
+    required: false
+    default: v0.5.1
+  dispatch-sha:
+    description: 'SHA the run was dispatched on. Tags that are NOT ancestors of this SHA were created by the deb release this run; pre-existing tags are skipped.'
+    required: true
+  package:
+    description: Single package to publish (default - every package under package-dir that was released this run).
+    required: false
+    default: ""
+  package-dir:
+    description: Directory containing per-package pixi workspaces.
+    required: false
+    default: packages
+  ros-distro:
+    description: ROS distro identifier for the conda recipe.
+    required: false
+    default: kilted
+  recipes-repo:
+    description: owner/repo of the conda recipes repository to open the PR against.
+    required: false
+    default: greenroom-robotics/ros-recipes
+
+runs:
+  using: composite
+  steps:
+    - id: setup
+      uses: greenroom-robotics/mise/.github/actions/setup@v4
+      with:
+        gh-app-client-id: ${{ inputs.gh-app-client-id }}
+        gh-app-private-key: ${{ inputs.gh-app-private-key }}
+        azure-client-id: ${{ inputs.azure-client-id }}
+        azure-tenant-id: ${{ inputs.azure-tenant-id }}
+        azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        proxy-version: ${{ inputs.proxy-version }}
+
+    - name: Fetch tags created by the deb release
+      shell: bash
+      run: git fetch --tags --force origin
+
+    - name: Publish conda recipe PR for each package released this run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.setup.outputs.gh-token }}
+        GITHUB_TOKEN: ${{ steps.setup.outputs.gh-token }}
+        API_TOKEN_GITHUB: ${{ steps.setup.outputs.gh-token }}
+        DISPATCH_SHA: ${{ inputs.dispatch-sha }}
+        ONLY_PACKAGE: ${{ inputs.package }}
+        PACKAGE_DIR: ${{ inputs.package-dir }}
+        ROS_DISTRO: ${{ inputs.ros-distro }}
+        RECIPES_REPO: ${{ inputs.recipes-repo }}
+      run: |
+        set -euo pipefail
+        if [ -n "$ONLY_PACKAGE" ]; then
+          pkgs="$ONLY_PACKAGE"
+        else
+          pkgs="$(ls "$PACKAGE_DIR")"
+        fi
+        published=0
+        for pkg in $pkgs; do
+          [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || continue
+          tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
+          [ -n "$tag" ] || continue
+          # Skip tags that already existed before this run (ancestors of the
+          # dispatch SHA). Peel `${tag}^{}` so this is correct for annotated tags.
+          if git merge-base --is-ancestor "${tag}^{}" "$DISPATCH_SHA" 2>/dev/null; then
+            continue
+          fi
+          ver="${tag#*@}"
+          sha="$(git rev-list -n1 "$tag")"
+          echo "::group::conda recipe PR for ${pkg}@${ver} (${sha})"
+          pixi run --manifest-path "$MISE_MANIFEST" mise ci recipes-pr \
+            --version="$ver" \
+            --recipes-repo="$RECIPES_REPO" \
+            --package="$pkg" \
+            --package-dir="$PACKAGE_DIR" \
+            --ros-distro="$ROS_DISTRO" \
+            --sha="$sha"
+          echo "::endgroup::"
+          published=$((published+1))
+        done
+        echo "Published conda recipe PRs for $published package(s)."
+
+    - if: always()
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
