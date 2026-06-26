@@ -1,3 +1,10 @@
+## [5.0.1](https://github.com/greenroom-robotics/mise/compare/mise@5.0.0...mise@5.0.1) (2026-06-26)
+
+
+### Bug Fixes
+
+* only prefix ros-<distro>- for package-xml packages ([9eb5307](https://github.com/greenroom-robotics/mise/commit/9eb53073d2e8d7d93756b361fd56a25d6e764bb7))
+
 ## [5.0.0](https://github.com/greenroom-robotics/mise/compare/mise@4.13.0...mise@5.0.0) (2026-06-26)
 
 
