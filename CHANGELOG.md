@@ -1,3 +1,14 @@
+## [5.0.0](https://github.com/greenroom-robotics/mise/compare/mise@4.13.0...mise@5.0.0) (2026-06-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* make package.xml the source of truth for ROS package name/version (#34)
+
+### Features
+
+* make package.xml the source of truth for ROS package name/version ([#34](https://github.com/greenroom-robotics/mise/issues/34)) ([663da3a](https://github.com/greenroom-robotics/mise/commit/663da3a6475267df68e46126e058ed7f6cfcdba0))
+
 ## [4.13.0](https://github.com/greenroom-robotics/mise/compare/mise@4.12.0...mise@4.13.0) (2026-06-26)
 
 
