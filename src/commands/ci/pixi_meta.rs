@@ -2,6 +2,12 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde::Deserialize;
 use std::path::Path;
+use std::sync::LazyLock;
+
+static NAME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<name>\s*(.*?)\s*</name>").unwrap());
+static VERSION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<version>\s*(.*?)\s*</version>").unwrap());
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct PixiPackage {
@@ -47,15 +53,14 @@ pub fn read(pixi_toml: &Path) -> Result<PixiPackage> {
 fn read_package_xml(path: &Path) -> Result<PixiPackage> {
     let body =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let name = first_element(&body, "name")
+    let name = first_element(&NAME_RE, &body)
         .with_context(|| format!("no <name> element in {}", path.display()))?;
-    let version = first_element(&body, "version")
+    let version = first_element(&VERSION_RE, &body)
         .with_context(|| format!("no <version> element in {}", path.display()))?;
     Ok(PixiPackage { name, version })
 }
 
-fn first_element(body: &str, tag: &str) -> Option<String> {
-    let re = Regex::new(&format!(r"(?s)<{tag}>\s*(.*?)\s*</{tag}>")).ok()?;
+fn first_element(re: &Regex, body: &str) -> Option<String> {
     re.captures(body)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_string())

@@ -1,5 +1,10 @@
 use clap::Args;
+use regex::Regex;
 use std::path::PathBuf;
+use std::sync::LazyLock;
+
+static VERSION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<version>\s*.*?\s*</version>").unwrap());
 
 /// Called by semantic-release's @semantic-release/exec plugin in the prepare
 /// phase, before the @semantic-release/git plugin commits. Writes the new
@@ -71,12 +76,10 @@ fn bump_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
 /// Replace the `<version>...</version>` element text. Matches the element only,
 /// so `<depend version_gte="...">` attributes are never touched.
 fn bump_package_xml(body: &str, new_version: &str) -> anyhow::Result<String> {
-    let re = regex::Regex::new(r"(?s)<version>\s*.*?\s*</version>")
-        .map_err(|e| anyhow::anyhow!("compiling version regex: {e}"))?;
-    if !re.is_match(body) {
+    if !VERSION_RE.is_match(body) {
         anyhow::bail!("no <version> element found in package.xml");
     }
-    Ok(re
+    Ok(VERSION_RE
         .replace(body, format!("<version>{new_version}</version>"))
         .into_owned())
 }
