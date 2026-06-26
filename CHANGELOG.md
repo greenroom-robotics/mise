@@ -1,3 +1,10 @@
+## [4.13.0](https://github.com/greenroom-robotics/mise/compare/mise@4.12.0...mise@4.13.0) (2026-06-26)
+
+
+### Features
+
+* add lock-check action and mise ci lock-check ([#33](https://github.com/greenroom-robotics/mise/issues/33)) ([405082e](https://github.com/greenroom-robotics/mise/commit/405082edc3b4460043d11451c26ce1e887889c7f))
+
 ## [4.12.0](https://github.com/greenroom-robotics/mise/compare/mise@4.11.1...mise@4.12.0) (2026-06-26)
 
 
