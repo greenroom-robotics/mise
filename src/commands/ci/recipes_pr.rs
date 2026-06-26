@@ -69,6 +69,7 @@ impl RecipesPr {
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
+            let recipe_name = conda_recipe_name(&self.ros_distro, &pkg.name);
             // Path from the source-repo root to the dir holding this package's
             // pixi.toml. "" or "." means the package sits at the repo root.
             // recipes-pr runs at the source repo root (cwd); when --package-dir
@@ -90,7 +91,7 @@ impl RecipesPr {
             };
             let rel = recipes_upsert::apply_release(
                 &recipes_root,
-                &pkg.name,
+                &recipe_name,
                 &src_url,
                 &tag,
                 &self.version,
@@ -349,6 +350,13 @@ fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
     Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
 }
 
+/// The conda package name the upstream `pixi-build-ros` backend publishes:
+/// `ros-<distro>-<package name with underscores dashed>`. This is the recipes
+/// repo entry key, distinct from the unprefixed identity used for git tags.
+fn conda_recipe_name(distro: &str, package_xml_name: &str) -> String {
+    format!("ros-{distro}-{}", package_xml_name.replace('_', "-"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,5 +431,18 @@ mod tests {
         );
         assert!(args.contains(&"--title".to_string()));
         assert!(args.contains(&"release: mise v4.5.2".to_string()));
+    }
+
+    #[test]
+    fn conda_recipe_name_prefixes_distro_and_dashes() {
+        assert_eq!(
+            conda_recipe_name("kilted", "release_testing_msgs"),
+            "ros-kilted-release-testing-msgs"
+        );
+        // Already-dashed names are unaffected; no double-prefix.
+        assert_eq!(
+            conda_recipe_name("jazzy", "nav2-bringup"),
+            "ros-jazzy-nav2-bringup"
+        );
     }
 }

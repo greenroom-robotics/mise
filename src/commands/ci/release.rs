@@ -138,7 +138,7 @@ impl Release {
         if self.changelog {
             plugins.push(serde_json::json!([
                 "@semantic-release/git",
-                { "assets": ["CHANGELOG.md", "**/pixi.toml"] }
+                { "assets": ["CHANGELOG.md", "**/package.xml", "**/pixi.toml"] }
             ]));
         }
 
@@ -196,5 +196,25 @@ mod tests {
     #[test]
     fn multi_package_tag_format_uses_msr_name_placeholder() {
         assert_eq!(tag_format(true, "mise"), "${name}@${version}");
+    }
+
+    #[test]
+    fn releaserc_git_plugin_commits_package_xml() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pixi = tmp.path().join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"p\"\nversion = \"1.0.0\"\n").unwrap();
+
+        let release = Release {
+            package: Some("p".into()),
+            package_dir: tmp.path().to_path_buf(),
+            ros_distro: "kilted".into(),
+            recipes_repo: "greenroom-robotics/ros-recipes".into(),
+            changelog: true,
+            release_branches: "main".into(),
+            github_release: true,
+        };
+        let rc = release.releaserc_json(&pixi).unwrap();
+        // The git plugin's asset list must include package.xml so the bump persists.
+        assert!(rc.contains("**/package.xml"), "releaserc was: {rc}");
     }
 }
