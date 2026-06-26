@@ -1,3 +1,10 @@
+## [4.12.0](https://github.com/greenroom-robotics/mise/compare/mise@4.11.1...mise@4.12.0) (2026-06-26)
+
+
+### Features
+
+* add gremlin messages ([#32](https://github.com/greenroom-robotics/mise/issues/32)) ([11cad09](https://github.com/greenroom-robotics/mise/commit/11cad09cd9d92e8ccb4a9571c0ebed4b23de2b6a))
+
 ## [4.11.1](https://github.com/greenroom-robotics/mise/compare/mise@4.11.0...mise@4.11.1) (2026-06-22)
 
 
