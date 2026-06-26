@@ -69,12 +69,10 @@ impl RecipesPr {
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
-            // Only ROS (package-xml mode) packages get the ros-<distro>- prefix;
-            // non-ROS pixi packages (e.g. mise itself) keep their verbatim name.
-            let is_ros = pixi
-                .parent()
-                .is_some_and(|d| d.join("package.xml").exists());
-            let recipe_name = recipe_key(is_ros, &self.ros_distro, &pkg.name);
+            // The pixi_native_packages.yaml entry is keyed by the unprefixed
+            // package name; the pixi-build-ros backend derives the published
+            // ros-<distro>-<name> conda name itself, so no prefix is needed here.
+            let recipe_name = &pkg.name;
             // Path from the source-repo root to the dir holding this package's
             // pixi.toml. "" or "." means the package sits at the repo root.
             // recipes-pr runs at the source repo root (cwd); when --package-dir
@@ -96,7 +94,7 @@ impl RecipesPr {
             };
             let rel = recipes_upsert::apply_release(
                 &recipes_root,
-                &recipe_name,
+                recipe_name,
                 &src_url,
                 &tag,
                 &self.version,
@@ -355,23 +353,6 @@ fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
     Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
 }
 
-/// The conda package name the upstream `pixi-build-ros` backend publishes:
-/// `ros-<distro>-<package name with underscores dashed>`. This is the recipes
-/// repo entry key, distinct from the unprefixed identity used for git tags.
-fn conda_recipe_name(distro: &str, package_xml_name: &str) -> String {
-    format!("ros-{distro}-{}", package_xml_name.replace('_', "-"))
-}
-
-/// The recipes-repo entry key for a package: prefixed `ros-<distro>-<name>` for
-/// ROS (package-xml mode) packages, verbatim name otherwise (e.g. mise itself).
-fn recipe_key(is_ros: bool, distro: &str, name: &str) -> String {
-    if is_ros {
-        conda_recipe_name(distro, name)
-    } else {
-        name.to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,29 +427,5 @@ mod tests {
         );
         assert!(args.contains(&"--title".to_string()));
         assert!(args.contains(&"release: mise v4.5.2".to_string()));
-    }
-
-    #[test]
-    fn conda_recipe_name_prefixes_distro_and_dashes() {
-        assert_eq!(
-            conda_recipe_name("kilted", "release_testing_msgs"),
-            "ros-kilted-release-testing-msgs"
-        );
-        // Already-dashed names are unaffected; no double-prefix.
-        assert_eq!(
-            conda_recipe_name("jazzy", "nav2-bringup"),
-            "ros-jazzy-nav2-bringup"
-        );
-    }
-
-    #[test]
-    fn recipe_key_prefixes_only_for_ros_packages() {
-        // ROS (package-xml) package: prefixed.
-        assert_eq!(
-            recipe_key(true, "kilted", "release_testing_msgs"),
-            "ros-kilted-release-testing-msgs"
-        );
-        // Non-ROS package (e.g. mise itself): verbatim, no prefix.
-        assert_eq!(recipe_key(false, "kilted", "mise"), "mise");
     }
 }
