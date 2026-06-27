@@ -106,7 +106,7 @@ runs:
       if: inputs.skip-pixi != 'true'
       uses: prefix-dev/setup-pixi@v0.9.4
       with:
-        pixi-version: v0.70.1
+        pixi-version: v0.71.1
         run-install: false
 
     # Write a dedicated pixi manifest that depends solely on mise, pinned to the
