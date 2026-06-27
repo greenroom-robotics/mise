@@ -1,3 +1,10 @@
+## [5.2.0](https://github.com/greenroom-robotics/mise/compare/mise@5.1.0...mise@5.2.0) (2026-06-27)
+
+
+### Features
+
+* bump version ([0dbfc33](https://github.com/greenroom-robotics/mise/commit/0dbfc3364a3ccdb9f35278b6c884bd2a5ab87369))
+
 ## [5.1.0](https://github.com/greenroom-robotics/mise/compare/mise@5.0.0...mise@5.1.0) (2026-06-27)
 
 
