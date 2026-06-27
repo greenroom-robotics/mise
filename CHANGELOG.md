@@ -1,3 +1,14 @@
+## [5.0.0](https://github.com/greenroom-robotics/mise/compare/mise@4.13.0...mise@5.0.0) (2026-06-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **setup:** pixi >0.70 is not backwards compatible with old build backends
+
+### Features
+
+* **setup:** bump pixi to 0.71.1 ([fd86aba](https://github.com/greenroom-robotics/mise/commit/fd86abad32f847a47c6ca564b05c1e7a0b00e8fb))
+
 ## [4.13.0](https://github.com/greenroom-robotics/mise/compare/mise@4.12.0...mise@4.13.0) (2026-06-26)
 
 
