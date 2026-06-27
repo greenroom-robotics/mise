@@ -12,7 +12,7 @@ mise = "mise"
 
 [package]
 name = "mise"
-version = "5.0.0"
+version = "5.1.0"
 
 [package.build.backend]
 channels = [
