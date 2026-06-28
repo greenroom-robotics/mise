@@ -18,6 +18,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Consumers pin `…/actions/<name>@v<MAJOR>`, and each composite action's
+      # internal `setup@v<MAJOR>` ref is what actually selects the mise binary
+      # version (setup reads pixi.toml at its own ref). The two only drift on a
+      # major bump, when it's easy to forget the internal pins — producing the
+      # silent "v5 actions run a v4 binary" bug. Fail here so the bump can't merge.
+      - name: Internal setup refs match major
+        run: |
+          set -euo pipefail
+          major="v$(python3 -c 'import tomllib;print(tomllib.load(open("pixi.toml","rb"))["package"]["version"].split(".")[0])')"
+          bad="$(grep -rn 'greenroom-robotics/mise/.github/actions/setup@v[0-9]' .github/actions \
+                 | grep -v "setup@${major}\b" || true)"
+          if [ -n "$bad" ]; then
+            echo "::error::internal setup refs must be @${major}:"; echo "$bad"; exit 1
+          fi
+
       - name: Install Rust toolchain
         run: rustup toolchain install stable --component rustfmt,clippy --profile minimal
 
