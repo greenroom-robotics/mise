@@ -7,6 +7,12 @@ this action discovers the tags created *this run* (those not already ancestors
 of `dispatch-sha`) and runs `mise ci recipes-pr` per package to open/update a
 PR on the recipes repo.
 
+Both repo layouts are supported. **Multi-package** repos keep packages under
+`package-dir` (`packages/<pkg>/pixi.toml`) with `<pkg>@<version>` tags.
+**Single-package** repos set `package-dir: .` so it points at the package's own
+root `pixi.toml`; their release tags may be plain semver (`X.Y.Z`) or
+`<pkg>@<version>` — both are matched.
+
 It bundles `mise/setup`, fetches tags, runs the publish loop, and tears down the
 conda-channel-proxy. No semantic-release, no tagging.
 

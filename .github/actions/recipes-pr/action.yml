@@ -30,7 +30,7 @@ inputs:
     required: false
     default: ""
   package-dir:
-    description: Directory containing per-package pixi workspaces.
+    description: Directory containing per-package pixi workspaces, or `.` for a single-package repo whose `pixi.toml` lives at the root.
     required: false
     default: packages
   ros-distro:
@@ -72,34 +72,53 @@ runs:
         RECIPES_REPO: ${{ inputs.recipes-repo }}
       run: |
         set -euo pipefail
-        if [ -n "$ONLY_PACKAGE" ]; then
-          pkgs="$ONLY_PACKAGE"
-        else
-          pkgs="$(ls "$PACKAGE_DIR")"
-        fi
         published=0
-        for pkg in $pkgs; do
-          [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || continue
-          tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
-          [ -n "$tag" ] || continue
+
+        # Open/update the recipe PR for one package at its latest release tag.
+        # $1=display label  $2=tag  $3=--package value (may be empty -> CLI derives it)
+        publish_one() {
+          local label="$1" tag="$2" pkg_arg="$3" ver sha
+          [ -n "$tag" ] || return 0
           # Skip tags that already existed before this run (ancestors of the
           # dispatch SHA). Peel `${tag}^{}` so this is correct for annotated tags.
           if git merge-base --is-ancestor "${tag}^{}" "$DISPATCH_SHA" 2>/dev/null; then
-            continue
+            return 0
           fi
           ver="${tag#*@}"
           sha="$(git rev-list -n1 "$tag")"
-          echo "::group::conda recipe PR for ${pkg}@${ver} (${sha})"
+          echo "::group::conda recipe PR for ${label}@${ver} (${sha})"
           pixi run --manifest-path "$MISE_MANIFEST" mise ci recipes-pr \
             --version="$ver" \
             --recipes-repo="$RECIPES_REPO" \
-            --package="$pkg" \
+            --package="$pkg_arg" \
             --package-dir="$PACKAGE_DIR" \
             --ros-distro="$ROS_DISTRO" \
             --sha="$sha"
           echo "::endgroup::"
           published=$((published+1))
-        done
+        }
+
+        if [ -f "$PACKAGE_DIR/pixi.toml" ] && grep -q '^\[package\]' "$PACKAGE_DIR/pixi.toml"; then
+          # Root single-package layout: package-dir points at the package itself
+          # (mirrors `packages::discover`). Tags are plain semver (X.Y.Z); some
+          # single-package repos still tag <pkg>@<ver>, so match both.
+          globs=('[0-9]*.[0-9]*.[0-9]*')
+          [ -n "$ONLY_PACKAGE" ] && globs+=("${ONLY_PACKAGE}@*")
+          tag="$(git tag --list "${globs[@]}" --sort=-v:refname | head -n1)"
+          publish_one "${ONLY_PACKAGE:-$(basename "$PWD")}" "$tag" "$ONLY_PACKAGE"
+        else
+          # Multi-package layout: packages/<pkg>/pixi.toml, <pkg>@<ver> tags.
+          if [ -n "$ONLY_PACKAGE" ]; then
+            pkgs="$ONLY_PACKAGE"
+          else
+            pkgs="$(ls "$PACKAGE_DIR")"
+          fi
+          for pkg in $pkgs; do
+            [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || continue
+            tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
+            publish_one "$pkg" "$tag" "$pkg"
+          done
+        fi
         echo "Published conda recipe PRs for $published package(s)."
 
     - if: always()
