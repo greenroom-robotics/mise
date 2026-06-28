@@ -100,6 +100,62 @@ pub enum ChangedFiles {
     Paths(Vec<PathBuf>),
 }
 
+/// Workflow whose last green run marks how far the channel has been published.
+const PUBLISH_WORKFLOW: &str = "publish.yml";
+
+/// `head_sha` of the most recent **successful** publish run on `main`, or
+/// `None` if there has never been one. This — not the push's own `before` — is
+/// the correct base for change detection: `publish.yml` runs with
+/// `cancel-in-progress: false`, so a run that is superseded while queued never
+/// builds its range. Diffing from `before` would drop those changes
+/// permanently; diffing from the last green publish folds them into the next
+/// run. Querying for `status=success` cannot match the current run (still
+/// in-progress), so there is no self-exclusion to worry about.
+fn last_successful_publish_sha() -> anyhow::Result<Option<Sha40>> {
+    let repo = env::var("GITHUB_REPOSITORY").context("GITHUB_REPOSITORY must be set")?;
+    let token = env::var("GITHUB_TOKEN")
+        .or_else(|_| env::var("GH_TOKEN"))
+        .context("GITHUB_TOKEN or GH_TOKEN must be set to query workflow runs")?;
+    let url = format!(
+        "https://api.github.com/repos/{repo}/actions/workflows/{PUBLISH_WORKFLOW}/runs\
+         ?branch=main&status=success&per_page=1"
+    );
+    let body: serde_json::Value = ureq::get(&url)
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", "ros-recipes-mise")
+        .call()
+        .context("query publish workflow runs")?
+        .into_json()
+        .context("parse workflow runs response")?;
+    let Some(sha) = body["workflow_runs"]
+        .get(0)
+        .and_then(|r| r["head_sha"].as_str())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Sha40::new(sha)?))
+}
+
+/// Replace a push event's `before` with the last green publish SHA so change
+/// detection diffs from the real channel high-water mark (see
+/// [`last_successful_publish_sha`]). `None` base — no prior success, or the API
+/// lookup failed — degrades to a full rebuild downstream, matching the existing
+/// "no base ref → build everything" fail-safe. Non-push events pass through.
+pub fn rebase_push_to_last_publish(event: Event) -> anyhow::Result<Event> {
+    let Event::Push { after, .. } = event else {
+        return Ok(event);
+    };
+    let before = match last_successful_publish_sha() {
+        Ok(sha) => sha,
+        Err(e) => {
+            tracing::warn!("could not resolve last successful publish run ({e:#}); rebuilding all");
+            None
+        }
+    };
+    Ok(Event::Push { before, after })
+}
+
 pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles> {
     let range = match event {
         Event::PullRequest { base, head } => format!("{base}...{head}"),
@@ -207,6 +263,19 @@ mod tests {
     fn parses_push_event_rejects_short_zero_before() {
         let json = r#"{"before":"00","after":"0000000000000000000000000000000000000004"}"#;
         assert!(Event::from_str_with_kind("push", json).is_err());
+    }
+
+    #[test]
+    fn rebase_passes_through_non_push_events() {
+        let pr = Event::PullRequest {
+            base: Sha40::new("1111111111111111111111111111111111111111").unwrap(),
+            head: Sha40::new("2222222222222222222222222222222222222222").unwrap(),
+        };
+        assert_eq!(rebase_push_to_last_publish(pr.clone()).unwrap(), pr);
+        assert_eq!(
+            rebase_push_to_last_publish(Event::WorkflowDispatch).unwrap(),
+            Event::WorkflowDispatch
+        );
     }
 
     #[test]

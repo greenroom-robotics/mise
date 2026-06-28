@@ -72,7 +72,7 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let ds = repo.deepstream()?;
     let manifest = repo.pixi_native_manifest()?;
-    let event = gh::Event::load()?;
+    let event = gh::rebase_push_to_last_publish(gh::Event::load()?)?;
     let changed = gh::changed_files(&repo, &event)?;
 
     let run_id = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into());
