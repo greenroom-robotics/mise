@@ -1,3 +1,16 @@
+## [5.6.0](https://github.com/greenroom-robotics/mise/compare/mise@5.5.0...mise@5.6.0) (2026-06-28)
+
+
+### Features
+
+* fold cargo bump into release commit via extra prepare/assets ([2e7a8ed](https://github.com/greenroom-robotics/mise/commit/2e7a8ed4971b68ae626d6a997415917f94c76fb9))
+* trigger release ([091ed9d](https://github.com/greenroom-robotics/mise/commit/091ed9d7d00f5ea9f5e76e54f380289b99edf8be))
+
+
+### Bug Fixes
+
+* temporarily drop unpublished commands ([874ea96](https://github.com/greenroom-robotics/mise/commit/874ea96614e904d0a4de146f2575297a9f987f1d))
+
 ## [5.5.0](https://github.com/greenroom-robotics/mise/compare/mise@5.4.0...mise@5.5.0) (2026-06-28)
 
 
