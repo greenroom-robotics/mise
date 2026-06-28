@@ -1,3 +1,10 @@
+## [5.3.0](https://github.com/greenroom-robotics/mise/compare/mise@5.2.2...mise@5.3.0) (2026-06-28)
+
+
+### Features
+
+* support single-package repos in recipes-pr ([#36](https://github.com/greenroom-robotics/mise/issues/36)) ([933b40a](https://github.com/greenroom-robotics/mise/commit/933b40a1690ab7ce29b5449d5112263bb5b06d24))
+
 ## [5.2.2](https://github.com/greenroom-robotics/mise/compare/mise@5.2.1...mise@5.2.2) (2026-06-28)
 
 
