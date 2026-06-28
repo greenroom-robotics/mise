@@ -1,3 +1,10 @@
+## [5.2.1](https://github.com/greenroom-robotics/mise/compare/mise@5.2.0...mise@5.2.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* properly handle superseded publish workflows ([1e4132a](https://github.com/greenroom-robotics/mise/commit/1e4132ab8af3c9a5065b43253905dcf8935e9516))
+
 ## [5.2.0](https://github.com/greenroom-robotics/mise/compare/mise@5.1.0...mise@5.2.0) (2026-06-27)
 
 
