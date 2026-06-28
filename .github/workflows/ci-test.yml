@@ -1,0 +1,147 @@
+# Reusable workflow: fan a multi-package repo's `mise ci test` across one runner
+# per package (matrix), instead of looping all packages sequentially on one
+# runner. Each package builds in full isolation — no shared build/, no CPU/RAM
+# contention — at the cost of repeating the setup on each runner.
+#
+# Single-package repos don't need this; they keep using the actions/test
+# composite directly. This wrapper just discovers packages → matrix → composite.
+#
+# Usage (in a consumer repo's .github/workflows/test.yml):
+#
+#   jobs:
+#     test:
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v5
+#       with:
+#         runner: runs-on=${{ github.run_id }}/runner=...
+#         package-dir: packages
+#         jobs: |
+#           tests:test
+#       secrets:
+#         gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+#         gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+#         azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#         azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#         azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+name: mise ci test (matrix)
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: runs-on label/expression for both jobs (e.g. a runs-on.com dynamic runner).
+        required: true
+        type: string
+      package:
+        description: Single package to test (default - all packages under package-dir).
+        required: false
+        type: string
+        default: ""
+      package-dir:
+        description: Directory containing per-package pixi workspaces.
+        required: false
+        type: string
+        default: packages
+      report-dir:
+        description: Directory to collect JUnit XML test reports into.
+        required: false
+        type: string
+        default: test-reports
+      jobs:
+        description: Newline-separated `<env>:<task>` pairs to run per package (passed to actions/test).
+        required: false
+        type: string
+        default: ""
+      proxy-version:
+        description: conda-channel-proxy release tag.
+        required: false
+        type: string
+        default: v0.5.1
+    secrets:
+      gh-app-client-id:
+        required: true
+      gh-app-private-key:
+        required: true
+      azure-client-id:
+        required: true
+      azure-tenant-id:
+        required: true
+      azure-subscription-id:
+        required: true
+
+jobs:
+  # Cheap: just list package dirs and emit a matrix. No proxy/Azure/mise here so
+  # it costs seconds, not a full setup.
+  discover:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: list
+        shell: bash
+        env:
+          PACKAGE: ${{ inputs.package }}
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+        # ponytail: ~8 lines duplicating the per-subdir half of the Rust
+        # `discover`. Ceiling: ignores root-[package] single-package repos —
+        # those stay on the composite, so this never has to handle them.
+        run: |
+          set -euo pipefail
+          if [ -n "$PACKAGE" ]; then
+            packages=$(printf '%s' "$PACKAGE" | jq -Rsc 'split("\n") | map(select(length>0))')
+          else
+            packages=$(find "$PACKAGE_DIR" -mindepth 1 -maxdepth 1 -type d \
+              -exec test -e '{}/pixi.toml' ';' -printf '%f\n' \
+              | sort | jq -Rsc 'split("\n") | map(select(length>0))')
+          fi
+          if [ "$packages" = "[]" ]; then
+            echo "::error::no packages with pixi.toml found under $PACKAGE_DIR"; exit 1
+          fi
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "Discovered: $packages"
+
+  test:
+    needs: discover
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+      id-token: write      # Azure OIDC login in setup
+      checks: write        # dorny/test-reporter publishes a check per package
+    strategy:
+      fail-fast: false     # one package failing must not cancel the others
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: greenroom-robotics/mise/.github/actions/test@v5
+        with:
+          gh-app-client-id: ${{ secrets.gh-app-client-id }}
+          gh-app-private-key: ${{ secrets.gh-app-private-key }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-subscription-id: ${{ secrets.azure-subscription-id }}
+          proxy-version: ${{ inputs.proxy-version }}
+          package: ${{ matrix.package }}
+          package-dir: ${{ inputs.package-dir }}
+          report-dir: ${{ inputs.report-dir }}
+          check-name: 'Test Report (pixi): ${{ matrix.package }}'
+          jobs: ${{ inputs.jobs }}
+
+  # Single stable status to require in branch protection. Matrix legs have
+  # per-package names that can't be required directly; this collapses them into
+  # one check that is green only when every leg (and discovery) succeeded.
+  result:
+    needs: test
+    if: always()
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    steps:
+      - shell: bash
+        run: |
+          echo "test result: ${{ needs.test.result }}"
+          [ "${{ needs.test.result }}" = "success" ] || {
+            echo "::error::one or more package test jobs did not pass"; exit 1
+          }
