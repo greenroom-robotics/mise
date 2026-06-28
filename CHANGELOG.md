@@ -1,3 +1,10 @@
+## [5.5.0](https://github.com/greenroom-robotics/mise/compare/mise@5.4.0...mise@5.5.0) (2026-06-28)
+
+
+### Features
+
+* add changed-only and lfs inputs to ci-test matrix workflow ([c0d6918](https://github.com/greenroom-robotics/mise/commit/c0d691884fbc5e20198c4222189fb21ca49e59fc))
+
 ## [5.4.0](https://github.com/greenroom-robotics/mise/compare/mise@5.3.0...mise@5.4.0) (2026-06-28)
 
 
