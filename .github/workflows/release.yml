@@ -49,12 +49,8 @@ jobs:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           package-dir: "."
-          # ponytail: bootstrap — the published mise binary that runs this job
-          # (==root pixi.toml version) predates the --extra-git-asset/
-          # --extra-prepare-cmd flags, so passing them fails. Dropped for one
-          # release to publish a flag-aware mise; re-add once setup installs it.
-          # extra-git-assets: "Cargo.toml Cargo.lock"
-          # extra-prepare-cmd: "mise ci sync-cargo --version=${nextRelease.version}"
+          extra-git-assets: "Cargo.toml Cargo.lock"
+          extra-prepare-cmd: "mise ci sync-cargo --version=${nextRelease.version}"
 
   # Slides the bare `v<MAJOR>` tag (e.g. `v1`, `v2`) forward whenever the
   # release job above cuts a new exact `mise@X.Y.Z` tag. Consumers pin
