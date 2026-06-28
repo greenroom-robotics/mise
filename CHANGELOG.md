@@ -1,3 +1,10 @@
+## [5.6.1](https://github.com/greenroom-robotics/mise/compare/mise@5.6.0...mise@5.6.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* add back extra flags ([443ae1c](https://github.com/greenroom-robotics/mise/commit/443ae1ce1973df34bcb27aa68f9e484d4b04353d))
+
 ## [5.6.0](https://github.com/greenroom-robotics/mise/compare/mise@5.5.0...mise@5.6.0) (2026-06-28)
 
 
