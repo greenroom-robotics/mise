@@ -1,3 +1,10 @@
+## [5.2.2](https://github.com/greenroom-robotics/mise/compare/mise@5.2.1...mise@5.2.2) (2026-06-28)
+
+
+### Bug Fixes
+
+* pin internal setup refs to v5 and guard major drift ([28ecf24](https://github.com/greenroom-robotics/mise/commit/28ecf24c184dd2463540c827e37f7118684e3dd3))
+
 ## [5.2.1](https://github.com/greenroom-robotics/mise/compare/mise@5.2.0...mise@5.2.1) (2026-06-28)
 
 
