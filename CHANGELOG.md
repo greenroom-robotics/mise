@@ -1,3 +1,15 @@
+## [5.4.0](https://github.com/greenroom-robotics/mise/compare/mise@5.3.0...mise@5.4.0) (2026-06-28)
+
+
+### Features
+
+* add matrix reusable workflow for per-package ci test ([2cad617](https://github.com/greenroom-robotics/mise/commit/2cad617a84f3a9352bdffdce4598568a4ed12dfa))
+
+
+### Bug Fixes
+
+* bump build backend ([562eba0](https://github.com/greenroom-robotics/mise/commit/562eba06e2855484adf672f8d6bcc405b47618eb))
+
 ## [5.3.0](https://github.com/greenroom-robotics/mise/compare/mise@5.2.2...mise@5.3.0) (2026-06-28)
 
 
