@@ -50,6 +50,14 @@ inputs:
     description: GitHub App token to use when skip-setup is true (the gh-token output of the caller's setup step). Ignored when skip-setup is false.
     required: false
     default: ""
+  extra-git-assets:
+    description: Space-separated extra path(s) to fold into the release commit alongside pixi.toml (e.g. "Cargo.toml Cargo.lock" for Rust-native repos). Each becomes a --extra-git-asset flag.
+    required: false
+    default: ""
+  extra-prepare-cmd:
+    description: Extra shell command appended to semantic-release's prepare step (after the pixi bump, before the release commit). `${nextRelease.version}` is available.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -91,12 +99,22 @@ runs:
         GH_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
         GITHUB_TOKEN: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
         API_TOKEN_GITHUB: ${{ inputs.skip-setup == 'true' && inputs.gh-token || steps.setup.outputs.gh-token }}
+        # Passed via env, not inline ${{ }}, so bash keeps the `${nextRelease.version}`
+        # template literal (inline it would be a bad-substitution) for semantic-release.
+        EXTRA_GIT_ASSETS: ${{ inputs.extra-git-assets }}
+        EXTRA_PREPARE_CMD: ${{ inputs.extra-prepare-cmd }}
       run: |
         args=(--package-dir "${{ inputs.package-dir }}"
               --changelog "${{ inputs.changelog }}"
               --release-branches "${{ inputs.release-branches }}")
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
+        fi
+        for asset in $EXTRA_GIT_ASSETS; do
+          args+=(--extra-git-asset "$asset")
+        done
+        if [ -n "$EXTRA_PREPARE_CMD" ]; then
+          args+=(--extra-prepare-cmd "$EXTRA_PREPARE_CMD")
         fi
         pixi run --manifest-path "$MISE_MANIFEST" mise ci release "${args[@]}"
 

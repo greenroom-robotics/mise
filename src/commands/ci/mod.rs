@@ -8,6 +8,7 @@ pub mod pixi_meta;
 pub mod recipes_pr;
 pub mod recipes_upsert;
 pub mod release;
+pub mod sync_cargo;
 pub mod test;
 
 use build::Build;
@@ -15,6 +16,7 @@ use bump_pixi::BumpPixi;
 use lock_check::LockCheck;
 use recipes_pr::RecipesPr;
 use release::Release;
+use sync_cargo::SyncCargo;
 use test::Test;
 
 #[derive(Subcommand, Debug)]
@@ -31,6 +33,8 @@ pub enum Ci {
     BumpPixi(BumpPixi),
     /// Callback invoked by semantic-release publish hook to open the recipes-repo PR. Not for direct use.
     RecipesPr(RecipesPr),
+    /// mise-specific prepare callback to sync Cargo.toml/Cargo.lock to the released version. Not for direct use.
+    SyncCargo(SyncCargo),
 }
 
 impl Ci {
@@ -42,6 +46,7 @@ impl Ci {
             Ci::Release(c) => c.run(),
             Ci::BumpPixi(c) => c.run(),
             Ci::RecipesPr(c) => c.run(),
+            Ci::SyncCargo(c) => c.run(),
         }
     }
 }

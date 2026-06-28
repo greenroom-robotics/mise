@@ -27,6 +27,17 @@ pub struct Release {
     /// Whether to create a GitHub release.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub github_release: bool,
+    /// Extra path(s) to include in the release commit alongside pixi.toml,
+    /// committed and tagged in the same `chore(release)` commit. Repeatable.
+    /// Used by Rust-native repos (e.g. mise itself) to fold Cargo.toml/Cargo.lock
+    /// into the release commit; the generic path stays Cargo-agnostic.
+    #[arg(long)]
+    pub extra_git_asset: Vec<String>,
+    /// Extra shell command appended (with `&&`) to semantic-release's prepare
+    /// step, run after the pixi bump and before the release commit. The
+    /// `${nextRelease.version}` placeholder is available.
+    #[arg(long)]
+    pub extra_prepare_cmd: Option<String>,
 }
 
 /// semantic-release tag format. Both modes tag `<package>@<version>` — in
@@ -106,10 +117,14 @@ impl Release {
         // context env vars at runtime.
         let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
 
-        let prepare_cmd = format!(
+        let mut prepare_cmd = format!(
             "mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={}",
             pixi.display()
         );
+        if let Some(extra) = &self.extra_prepare_cmd {
+            prepare_cmd.push_str(" && ");
+            prepare_cmd.push_str(extra);
+        }
 
         let publish_cmd = format!(
             "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={} --sha=${{nextRelease.gitHead}}",
@@ -135,10 +150,16 @@ impl Release {
                 { "assets": [], "successComment": false }
             ]));
         }
-        if self.changelog {
+        if self.changelog || !self.extra_git_asset.is_empty() {
+            let mut assets: Vec<String> = Vec::new();
+            if self.changelog {
+                assets.push("CHANGELOG.md".to_string());
+            }
+            assets.push("**/pixi.toml".to_string());
+            assets.extend(self.extra_git_asset.iter().cloned());
             plugins.push(serde_json::json!([
                 "@semantic-release/git",
-                { "assets": ["CHANGELOG.md", "**/pixi.toml"] }
+                { "assets": assets }
             ]));
         }
 
@@ -196,5 +217,45 @@ mod tests {
     #[test]
     fn multi_package_tag_format_uses_msr_name_placeholder() {
         assert_eq!(tag_format(true, "mise"), "${name}@${version}");
+    }
+
+    // Extra prepare cmd + git assets must reach the .releaserc so the Cargo bump
+    // lands in the same release commit/tag as pixi.toml.
+    #[test]
+    fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
+        let dir = std::env::temp_dir().join("mise-release-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"mise\"\nversion = \"1.0.0\"\n").unwrap();
+
+        let cli = TestCli::parse_from([
+            "x",
+            "--extra-prepare-cmd",
+            "mise ci sync-cargo --version=${nextRelease.version}",
+            "--extra-git-asset",
+            "Cargo.toml",
+            "--extra-git-asset",
+            "Cargo.lock",
+        ]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let plugins = v["plugins"].as_array().unwrap();
+
+        let exec = plugins
+            .iter()
+            .find(|p| p[0] == "@semantic-release/exec")
+            .unwrap();
+        let prepare = exec[1]["prepareCmd"].as_str().unwrap();
+        assert!(prepare.contains("mise ci bump-pixi"));
+        assert!(prepare.contains(" && mise ci sync-cargo --version=${nextRelease.version}"));
+
+        let git = plugins
+            .iter()
+            .find(|p| p[0] == "@semantic-release/git")
+            .unwrap();
+        let assets = git[1]["assets"].as_array().unwrap();
+        assert!(assets.iter().any(|a| a == "**/pixi.toml"));
+        assert!(assets.iter().any(|a| a == "Cargo.toml"));
+        assert!(assets.iter().any(|a| a == "Cargo.lock"));
     }
 }
