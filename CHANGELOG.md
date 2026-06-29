@@ -1,3 +1,10 @@
+## [5.8.3](https://github.com/greenroom-robotics/mise/compare/mise@5.8.2...mise@5.8.3) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ci-test:** install gh (and base tooling) in container job ([#44](https://github.com/greenroom-robotics/mise/issues/44)) ([ffb4c5a](https://github.com/greenroom-robotics/mise/commit/ffb4c5a640ef81217741c50e13a2e94fcb9276a8))
+
 ## [5.8.2](https://github.com/greenroom-robotics/mise/compare/mise@5.8.1...mise@5.8.2) (2026-06-29)
 
 
