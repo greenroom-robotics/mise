@@ -245,13 +245,28 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.discover.outputs.container_packages) }}
     steps:
-      # Container images (e.g. DeepStream) often lack git-lfs, which
-      # actions/checkout needs when lfs:true. Install it first (no-op on the
-      # host runner, but this job runs inside the image). apt-based images only.
-      - name: Ensure git-lfs
-        if: inputs.lfs
+      # Minimal vendor images (e.g. DeepStream) lack CI tooling the rest of this
+      # job assumes: git-lfs for actions/checkout, and gh, which the setup
+      # action and the conda-channel-proxy teardown shell out to. Install them
+      # up front. apt-based images only; gh comes from its release tarball since
+      # it isn't in the distro repos.
+      - name: Prepare container tooling
         shell: bash
-        run: command -v git-lfs >/dev/null || { apt-get update && apt-get install -y git-lfs; }
+        run: |
+          set -euo pipefail
+          pkgs=()
+          command -v git    >/dev/null || pkgs+=(git)
+          command -v curl   >/dev/null || pkgs+=(curl)
+          command -v jq     >/dev/null || pkgs+=(jq)
+          command -v git-lfs >/dev/null || pkgs+=(git-lfs)
+          if [ "${#pkgs[@]}" -gt 0 ]; then apt-get update && apt-get install -y "${pkgs[@]}"; fi
+          if ! command -v gh >/dev/null; then
+            arch="$(dpkg --print-architecture)"   # amd64 | arm64
+            ver=2.63.2
+            tmp="$(mktemp -d)"
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${ver}/gh_${ver}_linux_${arch}.tar.gz" | tar -xz -C "$tmp"
+            install "$tmp/gh_${ver}_linux_${arch}/bin/gh" /usr/local/bin/gh
+          fi
       - uses: actions/checkout@v6
         with:
           lfs: ${{ inputs.lfs }}
