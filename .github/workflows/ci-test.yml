@@ -17,6 +17,12 @@
 #         changed-only: true        # PRs test only changed packages
 #         jobs: |
 #           tests:test
+#         # Optional: run some packages' tests inside a container (e.g. DeepStream
+#         # on a GPU runner) while the rest stay on the host runner:
+#         container-packages: '["detector"]'
+#         container-image: nvcr.io/nvidia/deepstream:8.0-triton-multiarch
+#         container-runner: runs-on=${{ github.run_id }}/family=g4dn.2xlarge/image=ubuntu24-gpu-x64
+#         container-options: --gpus all --network host
 #       secrets:
 #         gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
 #         gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -32,16 +38,26 @@ on:
         description: runs-on label/expression for all jobs (e.g. a runs-on.com dynamic runner).
         required: true
         type: string
-      gpu-runner:
-        description: runs-on label for packages listed in `gpu-packages` (e.g. a GPU runner for CUDA tests). Falls back to `runner`.
-        required: false
-        type: string
-        default: ""
-      gpu-packages:
-        description: 'JSON array of packages that run on `gpu-runner`, e.g. ["detector"].'
+      container-packages:
+        description: 'JSON array of packages whose tests run inside `container-image` on `container-runner` (e.g. DeepStream packages needing the SDK libs + GPU). Everything else runs on the host `runner`. Default [] keeps all packages on the host.'
         required: false
         type: string
         default: "[]"
+      container-image:
+        description: Container image for `container-packages` (e.g. nvcr.io/nvidia/deepstream:8.0-triton-multiarch). Required if `container-packages` is non-empty.
+        required: false
+        type: string
+        default: ""
+      container-runner:
+        description: runs-on label for the container test job (e.g. a GPU runner). Falls back to `runner`.
+        required: false
+        type: string
+        default: ""
+      container-options:
+        description: 'Extra `docker run` options for the container job (e.g. "--gpus all --network host").'
+        required: false
+        type: string
+        default: ""
       package:
         description: Single package to test (default - all packages under package-dir).
         required: false
@@ -104,6 +120,8 @@ jobs:
       pull-requests: read   # paths-filter reads the PR's changed-file list
     outputs:
       packages: ${{ steps.assemble.outputs.packages }}
+      host_packages: ${{ steps.assemble.outputs.host_packages }}
+      container_packages: ${{ steps.assemble.outputs.container_packages }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -154,6 +172,7 @@ jobs:
           ALL: ${{ steps.all.outputs.all }}
           CHANGED: ${{ steps.filter.outputs.changes }}
           FILTER_RAN: ${{ steps.filter.outcome }}
+          CONTAINER_PACKAGES: ${{ inputs.container-packages }}
         run: |
           set -euo pipefail
           # Use the filtered set only when paths-filter actually ran; otherwise
@@ -163,16 +182,20 @@ jobs:
           else
             packages="$ALL"
           fi
+          # Split the to-test set into host vs container packages. jq array
+          # subtraction: host = all - container; container = the rest.
+          host=$(jq -cn --argjson all "$packages" --argjson c "$CONTAINER_PACKAGES" '$all - $c')
+          cont=$(jq -cn --argjson all "$packages" --argjson c "$CONTAINER_PACKAGES" '$all - ($all - $c)')
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
-          echo "Testing: $packages"
+          echo "host_packages=$host" >> "$GITHUB_OUTPUT"
+          echo "container_packages=$cont" >> "$GITHUB_OUTPUT"
+          echo "Host: $host  Container: $cont"
 
+  # Host packages: run directly on `runner`.
   test:
     needs: discover
-    if: needs.discover.outputs.packages != '[]'
-    # Packages in `gpu-packages` run on `gpu-runner` (e.g. CUDA tests); all
-    # others use the shared `runner`. Default gpu-packages is [], so every
-    # package stays on `runner`.
-    runs-on: ${{ contains(fromJSON(inputs.gpu-packages), matrix.package) && inputs.gpu-runner || inputs.runner }}
+    if: needs.discover.outputs.host_packages != '[]'
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       id-token: write      # Azure OIDC login in setup
@@ -180,7 +203,47 @@ jobs:
     strategy:
       fail-fast: false     # one package failing must not cancel the others
       matrix:
-        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+        package: ${{ fromJSON(needs.discover.outputs.host_packages) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: ${{ inputs.lfs }}
+      - uses: greenroom-robotics/mise/.github/actions/test@v5
+        with:
+          gh-app-client-id: ${{ secrets.gh-app-client-id }}
+          gh-app-private-key: ${{ secrets.gh-app-private-key }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-subscription-id: ${{ secrets.azure-subscription-id }}
+          proxy-version: ${{ inputs.proxy-version }}
+          package: ${{ matrix.package }}
+          package-dir: ${{ inputs.package-dir }}
+          report-dir: ${{ inputs.report-dir }}
+          check-name: 'Test Report (pixi): ${{ matrix.package }}'
+          jobs: ${{ inputs.jobs }}
+          locked: ${{ inputs.locked }}
+
+  # Container packages: same steps as `test`, but inside `container-image`
+  # (e.g. a DeepStream image carrying the SDK runtime libs) on `container-runner`
+  # (e.g. a GPU runner). A separate job because a per-row conditional `container:`
+  # can't be expressed — the long form needed for `options: --gpus all` has no
+  # "run on host" value. Step block is duplicated from `test` for the same reason
+  # (GitHub Actions has no cross-job step reuse).
+  test-container:
+    needs: discover
+    if: needs.discover.outputs.container_packages != '[]'
+    runs-on: ${{ inputs.container-runner != '' && inputs.container-runner || inputs.runner }}
+    container:
+      image: ${{ inputs.container-image }}
+      options: ${{ inputs.container-options }}
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.container_packages) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -205,21 +268,28 @@ jobs:
   # one check that is green only when discovery succeeded and every leg passed.
   # An empty change set (PR touched no package) is a pass, not a failure.
   result:
-    needs: [discover, test]
+    needs: [discover, test, test-container]
     if: always()
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
     steps:
       - shell: bash
+        env:
+          TEST: ${{ needs.test.result }}
+          TEST_CONTAINER: ${{ needs.test-container.result }}
         run: |
-          echo "discover=${{ needs.discover.result }} test=${{ needs.test.result }} packages=${{ needs.discover.outputs.packages }}"
+          echo "discover=${{ needs.discover.result }} test=$TEST test-container=$TEST_CONTAINER packages=${{ needs.discover.outputs.packages }}"
           if [ "${{ needs.discover.result }}" != "success" ]; then
             echo "::error::package discovery failed"; exit 1
           fi
           if [ "${{ needs.discover.outputs.packages }}" = "[]" ]; then
             echo "no packages to test — nothing changed"; exit 0
           fi
-          if [ "${{ needs.test.result }}" != "success" ]; then
-            echo "::error::one or more package test jobs did not pass"; exit 1
-          fi
+          # Each test job is 'skipped' when its package set is empty — only an
+          # actual failure should fail the gate.
+          for r in "$TEST" "$TEST_CONTAINER"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::one or more package test jobs did not pass"; exit 1
+            fi
+          done
