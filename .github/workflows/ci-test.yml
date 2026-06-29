@@ -32,6 +32,11 @@ on:
         description: runs-on label/expression for all jobs (e.g. a runs-on.com dynamic runner).
         required: true
         type: string
+      runners:
+        description: 'JSON map of package -> runner override, e.g. {"detector":"...gpu..."}. Packages absent from the map fall back to `runner`.'
+        required: false
+        type: string
+        default: "{}"
       package:
         description: Single package to test (default - all packages under package-dir).
         required: false
@@ -154,7 +159,11 @@ jobs:
   test:
     needs: discover
     if: needs.discover.outputs.packages != '[]'
-    runs-on: ${{ inputs.runner }}
+    # Per-package runner override (e.g. a GPU runner for a package whose tests
+    # need CUDA); falls back to the shared `runner` when the package isn't in
+    # the map. fromJSON('{}')[x] is null, so the default leaves all packages on
+    # `runner`.
+    runs-on: ${{ fromJSON(inputs.runners)[matrix.package] || inputs.runner }}
     permissions:
       contents: read
       id-token: write      # Azure OIDC login in setup
