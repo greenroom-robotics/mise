@@ -841,10 +841,13 @@ fn pixi(
             })?;
         }
 
-        // `pixi publish` does not honour --locked; pre-flight install --locked
-        // is our drift/missing-lock check before the (re-resolving) publish.
-        process::run_in(&manifest_dir, "pixi", &["install", "--locked"])
-            .with_context(|| format!("entry {}: pixi.lock validation failed", entry.name))?;
+        // No lockfile gate before publish: like conda-forge, a source build
+        // re-resolves build/host/run from the manifest + current channels.
+        // `pixi publish` re-resolves regardless, and the backend re-derives
+        // package metadata at build time (e.g. ament_python noarch run-deps),
+        // so a committed pixi.lock written by an older backend would spuriously
+        // fail `--locked` here even when the build is fine. The manifest, not
+        // pixi.lock, is the source of truth for the published artifact.
 
         // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
         // the upload-artifact glob.
