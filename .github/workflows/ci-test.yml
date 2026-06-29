@@ -255,6 +255,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: ${{ inputs.lfs }}
+      # Container packages (DeepStream, etc.) carry the heavy model/video LFS
+      # fixtures that .lfsconfig fetchexclude keeps out of normal clones — but
+      # their tests need them. Pull everything, overriding fetchexclude. Matches
+      # what the legacy docker-based CIs did (`git lfs pull --exclude=""`).
+      - name: Fetch all LFS objects
+        if: inputs.lfs
+        shell: bash
+        run: git lfs pull --exclude=""
       - uses: greenroom-robotics/mise/.github/actions/test@v5
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
