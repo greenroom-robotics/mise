@@ -1,3 +1,10 @@
+## [5.9.0](https://github.com/greenroom-robotics/mise/compare/mise@5.8.4...mise@5.9.0) (2026-06-29)
+
+
+### Features
+
+* **ci-test:** add exclude-packages input to drop packages from discovery ([#46](https://github.com/greenroom-robotics/mise/issues/46)) ([e18deff](https://github.com/greenroom-robotics/mise/commit/e18deff074ded4d41283abf64c36545cfbd5c4a8))
+
 ## [5.8.4](https://github.com/greenroom-robotics/mise/compare/mise@5.8.3...mise@5.8.4) (2026-06-29)
 
 
