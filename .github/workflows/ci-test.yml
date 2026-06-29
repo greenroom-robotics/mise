@@ -245,6 +245,13 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.discover.outputs.container_packages) }}
     steps:
+      # Container images (e.g. DeepStream) often lack git-lfs, which
+      # actions/checkout needs when lfs:true. Install it first (no-op on the
+      # host runner, but this job runs inside the image). apt-based images only.
+      - name: Ensure git-lfs
+        if: inputs.lfs
+        shell: bash
+        run: command -v git-lfs >/dev/null || { apt-get update && apt-get install -y git-lfs; }
       - uses: actions/checkout@v6
         with:
           lfs: ${{ inputs.lfs }}
