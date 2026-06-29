@@ -1,3 +1,10 @@
+## [5.8.4](https://github.com/greenroom-robotics/mise/compare/mise@5.8.3...mise@5.8.4) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ci-test:** pin LFS pull to workspace and mark safe.directory ([#45](https://github.com/greenroom-robotics/mise/issues/45)) ([c9fed74](https://github.com/greenroom-robotics/mise/commit/c9fed74044cf6bc131b9df3ad17b1e2258fedf83))
+
 ## [5.8.3](https://github.com/greenroom-robotics/mise/compare/mise@5.8.2...mise@5.8.3) (2026-06-29)
 
 
