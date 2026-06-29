@@ -38,6 +38,11 @@ on:
         description: runs-on label/expression for all jobs (e.g. a runs-on.com dynamic runner).
         required: true
         type: string
+      exclude-packages:
+        description: 'JSON array of packages to drop from discovery entirely (no host or container job). For packages that can''t be tested in CI yet. Default [] tests everything found.'
+        required: false
+        type: string
+        default: "[]"
       container-packages:
         description: 'JSON array of packages whose tests run inside `container-image` on `container-runner` (e.g. DeepStream packages needing the SDK libs + GPU). Everything else runs on the host `runner`. Default [] keeps all packages on the host.'
         required: false
@@ -173,6 +178,7 @@ jobs:
           CHANGED: ${{ steps.filter.outputs.changes }}
           FILTER_RAN: ${{ steps.filter.outcome }}
           CONTAINER_PACKAGES: ${{ inputs.container-packages }}
+          EXCLUDE_PACKAGES: ${{ inputs.exclude-packages }}
         run: |
           set -euo pipefail
           # Use the filtered set only when paths-filter actually ran; otherwise
@@ -182,6 +188,8 @@ jobs:
           else
             packages="$ALL"
           fi
+          # Drop excluded packages from the whole run (host and container).
+          packages=$(jq -cn --argjson p "$packages" --argjson x "$EXCLUDE_PACKAGES" '$p - $x')
           # Split the to-test set into host vs container packages. jq array
           # subtraction: host = all - container; container = the rest.
           host=$(jq -cn --argjson all "$packages" --argjson c "$CONTAINER_PACKAGES" '$all - $c')
