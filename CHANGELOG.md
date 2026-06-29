@@ -1,3 +1,10 @@
+## [5.8.1](https://github.com/greenroom-robotics/mise/compare/mise@5.8.0...mise@5.8.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ci-test:** install git-lfs in container job when lfs enabled ([#42](https://github.com/greenroom-robotics/mise/issues/42)) ([406246e](https://github.com/greenroom-robotics/mise/commit/406246ef4caee99de1f6bb56f2604517051bcef9))
+
 ## [5.8.0](https://github.com/greenroom-robotics/mise/compare/mise@5.7.2...mise@5.8.0) (2026-06-29)
 
 
