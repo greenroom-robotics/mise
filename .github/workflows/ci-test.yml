@@ -62,6 +62,11 @@ on:
         required: false
         type: string
         default: ""
+      locked:
+        description: Require the committed pixi.lock to satisfy the manifest and fail on drift. Off by default - re-resolve from the manifest (conda-forge style).
+        required: false
+        type: boolean
+        default: false
       proxy-version:
         description: conda-channel-proxy release tag.
         required: false
@@ -193,6 +198,7 @@ jobs:
           report-dir: ${{ inputs.report-dir }}
           check-name: 'Test Report (pixi): ${{ matrix.package }}'
           jobs: ${{ inputs.jobs }}
+          locked: ${{ inputs.locked }}
 
   # Single stable status to require in branch protection. Matrix legs have
   # per-package names that can't be required directly; this collapses them into

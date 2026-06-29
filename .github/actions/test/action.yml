@@ -48,6 +48,10 @@ inputs:
       `tests:test` (the single-environment behaviour) when empty.
     required: false
     default: ""
+  locked:
+    description: Require the committed pixi.lock to satisfy the manifest and fail on drift (`mise ci test --locked`). Off by default - re-resolve from the manifest (conda-forge style).
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -61,20 +65,15 @@ runs:
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
         proxy-version: ${{ inputs.proxy-version }}
 
-    # Fail fast on missing/stale lockfiles before running the test suite. Reuses
-    # the setup above (skip-setup) so it neither re-provisions nor tears down.
-    - uses: greenroom-robotics/mise/.github/actions/lock-check@v4
-      with:
-        skip-setup: "true"
-        package: ${{ inputs.package }}
-        package-dir: ${{ inputs.package-dir }}
-
     - name: Run mise ci test
       shell: bash
       run: |
         args=(--package-dir "${{ inputs.package-dir }}" --report-dir "${{ inputs.report-dir }}")
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
+        fi
+        if [ "${{ inputs.locked }}" = "true" ]; then
+          args+=(--locked)
         fi
         # Each non-empty line of `jobs` becomes a --job <env>:<task>.
         while IFS= read -r job; do
