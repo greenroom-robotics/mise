@@ -1,3 +1,10 @@
+## [5.8.0](https://github.com/greenroom-robotics/mise/compare/mise@5.7.2...mise@5.8.0) (2026-06-29)
+
+
+### Features
+
+* **ci-test:** run selected packages' tests in a container on a separate runner ([#41](https://github.com/greenroom-robotics/mise/issues/41)) ([da18e10](https://github.com/greenroom-robotics/mise/commit/da18e109b8d5de2208469b8acb79f3f6ac9613c2))
+
 ## [5.7.2](https://github.com/greenroom-robotics/mise/compare/mise@5.7.1...mise@5.7.2) (2026-06-29)
 
 
