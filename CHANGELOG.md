@@ -1,3 +1,10 @@
+## [5.7.1](https://github.com/greenroom-robotics/mise/compare/mise@5.7.0...mise@5.7.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ci-test:** replace runners map with gpu-runner/gpu-packages ([#39](https://github.com/greenroom-robotics/mise/issues/39)) ([6bdaa55](https://github.com/greenroom-robotics/mise/commit/6bdaa5574f104164833f8746b0531217d6a77c7e))
+
 ## [5.7.0](https://github.com/greenroom-robotics/mise/compare/mise@5.6.1...mise@5.7.0) (2026-06-29)
 
 
