@@ -1,3 +1,10 @@
+## [5.7.2](https://github.com/greenroom-robotics/mise/compare/mise@5.7.1...mise@5.7.2) (2026-06-29)
+
+
+### Bug Fixes
+
+* trigger release ([af8bd40](https://github.com/greenroom-robotics/mise/commit/af8bd400acf05a2548bffa49b0716122890474be))
+
 ## [5.7.1](https://github.com/greenroom-robotics/mise/compare/mise@5.7.0...mise@5.7.1) (2026-06-29)
 
 
