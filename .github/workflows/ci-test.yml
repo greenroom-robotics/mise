@@ -32,11 +32,16 @@ on:
         description: runs-on label/expression for all jobs (e.g. a runs-on.com dynamic runner).
         required: true
         type: string
-      runners:
-        description: 'JSON map of package -> runner override, e.g. {"detector":"...gpu..."}. Packages absent from the map fall back to `runner`.'
+      gpu-runner:
+        description: runs-on label for packages listed in `gpu-packages` (e.g. a GPU runner for CUDA tests). Falls back to `runner`.
         required: false
         type: string
-        default: "{}"
+        default: ""
+      gpu-packages:
+        description: 'JSON array of packages that run on `gpu-runner`, e.g. ["detector"].'
+        required: false
+        type: string
+        default: "[]"
       package:
         description: Single package to test (default - all packages under package-dir).
         required: false
@@ -159,11 +164,10 @@ jobs:
   test:
     needs: discover
     if: needs.discover.outputs.packages != '[]'
-    # Per-package runner override (e.g. a GPU runner for a package whose tests
-    # need CUDA); falls back to the shared `runner` when the package isn't in
-    # the map. fromJSON('{}')[x] is null, so the default leaves all packages on
-    # `runner`.
-    runs-on: ${{ fromJSON(inputs.runners)[matrix.package] || inputs.runner }}
+    # Packages in `gpu-packages` run on `gpu-runner` (e.g. CUDA tests); all
+    # others use the shared `runner`. Default gpu-packages is [], so every
+    # package stays on `runner`.
+    runs-on: ${{ contains(fromJSON(inputs.gpu-packages), matrix.package) && inputs.gpu-runner || inputs.runner }}
     permissions:
       contents: read
       id-token: write      # Azure OIDC login in setup
