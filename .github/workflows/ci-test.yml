@@ -277,7 +277,14 @@ jobs:
       - name: Fetch all LFS objects
         if: inputs.lfs
         shell: bash
-        run: git lfs pull --exclude=""
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # Vendor images (DeepStream) ship a custom WORKDIR and the checkout
+          # runs as root, so pin to the workspace and mark it safe before git
+          # will treat it as a repo.
+          git config --global --add safe.directory "$PWD"
+          git lfs pull --exclude=""
       - uses: greenroom-robotics/mise/.github/actions/test@v5
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
