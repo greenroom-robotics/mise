@@ -1,3 +1,10 @@
+## [5.8.2](https://github.com/greenroom-robotics/mise/compare/mise@5.8.1...mise@5.8.2) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ci-test:** pull all LFS objects in container job, overriding fetchexclude ([#43](https://github.com/greenroom-robotics/mise/issues/43)) ([f9b7721](https://github.com/greenroom-robotics/mise/commit/f9b772188e00d1f8a0f3afe5a4d4975ff0cc8cdc))
+
 ## [5.8.1](https://github.com/greenroom-robotics/mise/compare/mise@5.8.0...mise@5.8.1) (2026-06-29)
 
 
