@@ -1,3 +1,10 @@
+## [5.7.0](https://github.com/greenroom-robotics/mise/compare/mise@5.6.1...mise@5.7.0) (2026-06-29)
+
+
+### Features
+
+* **ci-test:** per-package runner override map ([#37](https://github.com/greenroom-robotics/mise/issues/37)) ([3c2db4d](https://github.com/greenroom-robotics/mise/commit/3c2db4dc17489e38a6770575c49c6f6c62076a54))
+
 ## [5.6.1](https://github.com/greenroom-robotics/mise/compare/mise@5.6.0...mise@5.6.1) (2026-06-28)
 
 
