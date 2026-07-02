@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use crate::types::{DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
+use crate::types::{Arch, DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
 
 #[derive(Subcommand, Debug)]
 pub enum BuildRecipes {
@@ -401,7 +401,15 @@ pub(crate) struct UpstreamPackage {
 #[derive(Debug, Deserialize)]
 pub(crate) struct UpstreamBuild {
     #[serde(default)]
+    pub backend: Option<UpstreamBuildBackend>,
+    #[serde(default)]
     pub config: Option<UpstreamBuildConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpstreamBuildBackend {
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -409,6 +417,8 @@ pub(crate) struct UpstreamBuildConfig {
     /// Defaults to 0 when omitted from the upstream pixi.toml.
     #[serde(default, rename = "build-number")]
     pub build_number: u64,
+    #[serde(default, rename = "build-type")]
+    pub build_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -429,6 +439,29 @@ impl UpstreamPixiToml {
             .and_then(|b| b.config.as_ref())
             .map(|c| c.build_number)
             .unwrap_or(0)
+    }
+
+    /// `true` if this package builds a platform-independent (noarch) artifact:
+    /// the `pixi-build-python` backend, or an `ament_python` ROS package. Those
+    /// produce byte-identical output on every arch, so the buildfarm only builds
+    /// them on linux-64 (see the skip in `check_entry`). Anything else
+    /// (ament_cmake, ament_idl, cmake, unknown) compiles per-arch and is not
+    /// treated as noarch.
+    pub fn is_noarch(&self) -> bool {
+        let Some(build) = &self.package.build else {
+            return false;
+        };
+        if build
+            .backend
+            .as_ref()
+            .is_some_and(|b| b.name == "pixi-build-python")
+        {
+            return true;
+        }
+        build
+            .config
+            .as_ref()
+            .is_some_and(|c| c.build_type == "ament_python")
     }
 
     /// `true` if the workspace's `platforms` list is empty or contains `target`.
@@ -607,6 +640,10 @@ enum CheckOutcome {
         name: String,
         version: String,
     },
+    SkipNoarchNonCanonical {
+        name: String,
+        version: String,
+    },
     SkipAlreadyPublished {
         name: String,
         version: String,
@@ -625,6 +662,15 @@ fn check_entry(
 
     if !upstream.supports_platform(target_platform) {
         return Ok(CheckOutcome::SkipPlatformUnsupported {
+            name: upstream.package.name,
+            version: upstream.package.version,
+        });
+    }
+
+    // noarch artifacts are arch-independent; build them once on linux-64 and
+    // skip every other platform rather than repeating the (identical) build.
+    if upstream.is_noarch() && target_platform.arch() != Arch::Linux64 {
+        return Ok(CheckOutcome::SkipNoarchNonCanonical {
             name: upstream.package.name,
             version: upstream.package.version,
         });
@@ -795,6 +841,12 @@ fn pixi(
                     target_platform.arch(),
                 );
             }
+            CheckOutcome::SkipNoarchNonCanonical { name, version } => {
+                tracing::info!(
+                    "skipping {name} {version}: noarch, built only on linux-64 (not {})",
+                    target_platform.arch(),
+                );
+            }
             CheckOutcome::SkipAlreadyPublished { name, version } => {
                 tracing::info!("skipping {name} {version}: already in channel {channel_url}");
             }
@@ -932,6 +984,42 @@ mod tests {
 
     fn recipe(name: &str) -> RecipeName {
         RecipeName::from_str(name).unwrap()
+    }
+
+    fn is_noarch(toml: &str) -> bool {
+        UpstreamPixiToml::parse(toml).unwrap().is_noarch()
+    }
+
+    #[test]
+    fn noarch_detects_python_and_ament_python() {
+        // pixi-build-python backend → noarch
+        assert!(is_noarch(
+            "[package]\nname=\"c\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
+        ));
+        // ament_python ROS package → noarch
+        assert!(is_noarch(
+            "[package]\nname=\"p\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
+             [package.build.config]\nbuild-type=\"ament_python\"",
+        ));
+    }
+
+    #[test]
+    fn noarch_false_for_compiled_and_missing_build() {
+        // ament_cmake / ament_idl compile per-arch → not noarch
+        for bt in ["ament_cmake", "ament_idl", "cmake"] {
+            assert!(
+                !is_noarch(&format!(
+                    "[package]\nname=\"x\"\nversion=\"1\"\n\
+                     [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
+                     [package.build.config]\nbuild-type=\"{bt}\"",
+                )),
+                "expected {bt} to be arch-specific"
+            );
+        }
+        // no [package.build] at all → conservative: not noarch
+        assert!(!is_noarch("[package]\nname=\"x\"\nversion=\"1\""));
     }
 
     #[test]
