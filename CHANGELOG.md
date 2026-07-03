@@ -1,3 +1,10 @@
+## [5.11.0](https://github.com/greenroom-robotics/mise/compare/mise@5.10.0...mise@5.11.0) (2026-07-03)
+
+
+### Features
+
+* **recipes-pr:** link source diff since last release in PR body ([#48](https://github.com/greenroom-robotics/mise/issues/48)) ([459a8af](https://github.com/greenroom-robotics/mise/commit/459a8af164c6edb842a3a83075512df5c5400256))
+
 ## [5.10.0](https://github.com/greenroom-robotics/mise/compare/mise@5.9.0...mise@5.10.0) (2026-07-03)
 
 
