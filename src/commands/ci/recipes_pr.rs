@@ -68,7 +68,7 @@ impl RecipesPr {
         use std::collections::BTreeSet;
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         // The refs each package was pinned to before this release, for a diff link.
-        let mut old_refs: BTreeSet<String> = BTreeSet::new();
+        let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
             // Path from the source-repo root to the dir holding this package's
@@ -100,9 +100,7 @@ impl RecipesPr {
                 subdir,
             )?;
             changed.insert(applied.path);
-            if let Some(old) = applied.old_ref {
-                old_refs.insert(old);
-            }
+            old_refs.extend(applied.old_ref);
         }
 
         // 6. Commit + push + open PR.
@@ -142,16 +140,9 @@ impl RecipesPr {
         )?;
 
         // Link to the source-repo diff between what the recipe was pinned to
-        // before and this release, so a reviewer sees what changed. Only when
-        // every package moved from the same single previous pin (the common
-        // case); skipped for a brand-new package or a same-rev re-pin.
-        let diff = match old_refs.iter().next() {
-            Some(old) if old_refs.len() == 1 && old != &self.sha => {
-                Some(compare_url(&src_url, old, &self.sha))
-            }
-            _ => None,
-        };
-        let body = pr_body(diff.as_deref());
+        // before and this release, so a reviewer sees what changed.
+        let old = diff_ref(&old_refs, &self.sha);
+        let body = pr_body(old.map(|o| compare_url(&src_url, o, &self.sha)).as_deref());
 
         let title = release_title(&src_short, self.package.as_deref(), &tag);
         if pr_exists(&self.recipes_repo, &branch)? {
@@ -220,6 +211,21 @@ fn pr_edit_args(repo: &str, branch: &str, title: &str, body: &str) -> Vec<String
 /// GitHub compare URL between two refs of the source repo.
 fn compare_url(src_url: &str, old: &str, new: &str) -> String {
     format!("{}/compare/{old}...{new}", src_url.trim_end_matches(".git"))
+}
+
+/// The old ref to diff against `sha`. There's one pin per package (normally a
+/// single package); prefer an immutable rev over a mutable tag. `None` for a
+/// brand-new package (no prior pin) or a same-rev re-pin (nothing to show).
+fn diff_ref<'a>(
+    old_refs: &'a [crate::commands::ci::recipes_upsert::OldRef],
+    sha: &str,
+) -> Option<&'a str> {
+    old_refs
+        .iter()
+        .find(|r| r.is_rev())
+        .or_else(|| old_refs.first())
+        .map(|r| r.value())
+        .filter(|v| *v != sha)
 }
 
 /// Git author/committer identity for the recipes commit. Prefers the App bot
@@ -444,6 +450,22 @@ mod tests {
         assert!(args.contains(&"release: mise v4.5.2".to_string()));
         // Body is refreshed on edit so the diff link doesn't go stale.
         assert!(args.contains(&"--body".to_string()));
+    }
+
+    #[test]
+    fn diff_ref_prefers_immutable_rev_over_tag() {
+        use crate::commands::ci::recipes_upsert::OldRef;
+        let refs = vec![OldRef::Tag("1.2.3".into()), OldRef::Rev("deadbeef".into())];
+        // Rev wins even though the tag came first.
+        assert_eq!(diff_ref(&refs, "newsha"), Some("deadbeef"));
+        // Tag is used when that's all there is.
+        assert_eq!(
+            diff_ref(&[OldRef::Tag("1.2.3".into())], "newsha"),
+            Some("1.2.3")
+        );
+        // Same-rev re-pin and no prior pin both yield no link.
+        assert_eq!(diff_ref(&[OldRef::Rev("s".into())], "s"), None);
+        assert_eq!(diff_ref(&[], "s"), None);
     }
 
     #[test]
