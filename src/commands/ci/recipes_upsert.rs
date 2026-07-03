@@ -299,8 +299,39 @@ fn rosdistro_has_entry(text: &str, package: &str) -> bool {
         .any(|l| !l.starts_with([' ', '\t']) && l.trim_end() == header)
 }
 
-/// Apply a release for one package to the cloned recipes repo. Returns the
-/// repo-relative path of the file that changed, for staging.
+/// The ref a recipe pinned a package to before this release. `Rev` is an
+/// immutable commit sha (vendored `source.rev`, pixi-native `rev:`); `Tag` is a
+/// mutable tag/branch (rosdistro `tag:`, pixi-native `ref:`). When both are
+/// available a `Rev` is preferred for diffing because it can't be moved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OldRef {
+    Rev(String),
+    Tag(String),
+}
+
+impl OldRef {
+    pub fn value(&self) -> &str {
+        match self {
+            OldRef::Rev(s) | OldRef::Tag(s) => s,
+        }
+    }
+
+    pub fn is_rev(&self) -> bool {
+        matches!(self, OldRef::Rev(_))
+    }
+}
+
+/// The outcome of applying one package's release: which repo-relative file
+/// changed (for staging) and the ref the package was pinned to *before* this
+/// release (for building a source-repo diff link). `old_ref` is `None` for a
+/// brand-new package that had no prior pin.
+#[derive(Debug)]
+pub(crate) struct Applied {
+    pub path: PathBuf,
+    pub old_ref: Option<OldRef>,
+}
+
+/// Apply a release for one package to the cloned recipes repo.
 ///
 /// Routing (first match wins):
 ///  1. `vendor_recipes/<package>/recipe.yaml` exists -> patch it (version + rev).
@@ -319,7 +350,7 @@ pub(crate) fn apply_release(
     version: &str,
     sha: &str,
     subdir: Option<&str>,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<Applied> {
     // 1. Vendored.
     let vendored_rel = Path::new("vendor_recipes")
         .join(package)
@@ -328,10 +359,14 @@ pub(crate) fn apply_release(
     if vendored_abs.exists() {
         let text = std::fs::read_to_string(&vendored_abs)
             .with_context(|| format!("reading {}", vendored_abs.display()))?;
+        let old_ref = field_in_section(&text, "source", "rev").map(OldRef::Rev);
         let updated = mutate_vendored_recipe(&text, version, sha)?;
         std::fs::write(&vendored_abs, updated)
             .with_context(|| format!("writing {}", vendored_abs.display()))?;
-        return Ok(vendored_rel);
+        return Ok(Applied {
+            path: vendored_rel,
+            old_ref,
+        });
     }
 
     let pixi_native_rel = PathBuf::from("pixi_native_packages.yaml");
@@ -339,21 +374,35 @@ pub(crate) fn apply_release(
     let pixi_native_abs = recipes_root.join(&pixi_native_rel);
     let rosdistro_abs = recipes_root.join(&rosdistro_rel);
 
-    let in_pixi_native = pixi_native_abs.exists()
-        && pixi_native_has_entry(
-            &std::fs::read_to_string(&pixi_native_abs)
+    let pixi_native_text = if pixi_native_abs.exists() {
+        Some(
+            std::fs::read_to_string(&pixi_native_abs)
                 .with_context(|| format!("reading {}", pixi_native_abs.display()))?,
-            package,
-        );
-    let in_rosdistro = rosdistro_abs.exists()
-        && rosdistro_has_entry(
-            &std::fs::read_to_string(&rosdistro_abs)
+        )
+    } else {
+        None
+    };
+    let rosdistro_text = if rosdistro_abs.exists() {
+        Some(
+            std::fs::read_to_string(&rosdistro_abs)
                 .with_context(|| format!("reading {}", rosdistro_abs.display()))?,
-            package,
-        );
+        )
+    } else {
+        None
+    };
+    let in_pixi_native = pixi_native_text
+        .as_deref()
+        .is_some_and(|t| pixi_native_has_entry(t, package));
+    let in_rosdistro = rosdistro_text
+        .as_deref()
+        .is_some_and(|t| rosdistro_has_entry(t, package));
 
     // Arm 3: existing rosdistro entry (and not already pixi-native) -> update there.
     if in_rosdistro && !in_pixi_native {
+        let old_ref = rosdistro_text
+            .as_deref()
+            .and_then(|t| field_in_section(t, package, "tag"))
+            .map(OldRef::Tag);
         upsert(
             &rosdistro_abs,
             &Entry {
@@ -363,22 +412,75 @@ pub(crate) fn apply_release(
                 version,
             },
         )?;
-        return Ok(rosdistro_rel);
+        return Ok(Applied {
+            path: rosdistro_rel,
+            old_ref,
+        });
     }
 
     // Arms 2 & 4: existing pixi-native entry, or brand-new package -> pixi-native.
-    if !pixi_native_abs.exists() {
-        anyhow::bail!(
+    let text = pixi_native_text.ok_or_else(|| {
+        anyhow::anyhow!(
             "{} not found in recipes repo; cannot add pixi-native entry for {package}",
             pixi_native_abs.display()
-        );
-    }
-    let text = std::fs::read_to_string(&pixi_native_abs)
-        .with_context(|| format!("reading {}", pixi_native_abs.display()))?;
+        )
+    })?;
+    let old_ref = pixi_entry_rev(&text, package);
     let updated = mutate_pixi_entry(&text, package, url, sha, subdir)?;
     std::fs::write(&pixi_native_abs, updated)
         .with_context(|| format!("writing {}", pixi_native_abs.display()))?;
-    Ok(pixi_native_rel)
+    Ok(Applied {
+        path: pixi_native_rel,
+        old_ref,
+    })
+}
+
+/// Value of the `<key>:` line inside a top-level `<section>:` block, indent-based
+/// (mirrors `mutate_vendored_recipe`'s parsing). Used to read the previously
+/// pinned rev/tag for a diff link. `None` if not found.
+fn field_in_section(text: &str, section: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}:");
+    let mut cur: Option<&str> = None;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            cur = trimmed.strip_suffix(':');
+        }
+        if cur == Some(section)
+            && indent > 0
+            && let Some(v) = trimmed.strip_prefix(&prefix)
+        {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// The pin a `pixi_native_packages.yaml` entry currently carries: `rev:` as an
+/// immutable [`OldRef::Rev`], `ref:` as a mutable [`OldRef::Tag`]. `None` if the
+/// entry or field is absent.
+fn pixi_entry_rev(text: &str, name: &str) -> Option<OldRef> {
+    let header = format!("- name: {name}");
+    let lines: Vec<&str> = text.lines().collect();
+    let idx = lines.iter().position(|l| l.trim_start() == header)?;
+    let item_indent = lines[idx].len() - lines[idx].trim_start().len();
+    for l in &lines[idx + 1..] {
+        if l.trim().is_empty() {
+            continue;
+        }
+        if l.len() - l.trim_start().len() <= item_indent {
+            break;
+        }
+        let t = l.trim_start();
+        if let Some(v) = t.strip_prefix("rev:") {
+            return Some(OldRef::Rev(v.trim().to_string()));
+        }
+        if let Some(v) = t.strip_prefix("ref:") {
+            return Some(OldRef::Tag(v.trim().to_string()));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -750,7 +852,7 @@ packages:
             "vendor_recipes/is-core/recipe.yaml",
             "package:\n  name: is-core\n  version: 1.0.0\n\nsource:\n  git: https://github.com/example/is-core.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 2\n",
         );
-        let changed = apply_release(
+        let applied = apply_release(
             root,
             "is-core",
             "https://github.com/example/is-core.git",
@@ -761,8 +863,15 @@ packages:
         )
         .unwrap();
         assert_eq!(
-            changed,
+            applied.path,
             std::path::Path::new("vendor_recipes/is-core/recipe.yaml")
+        );
+        // Old ref is the source.rev the recipe pinned before this release.
+        assert_eq!(
+            applied.old_ref,
+            Some(OldRef::Rev(
+                "0000000000000000000000000000000000000000".into()
+            ))
         );
         let out = std::fs::read_to_string(root.join("vendor_recipes/is-core/recipe.yaml")).unwrap();
         assert!(
@@ -781,7 +890,7 @@ packages:
             "pixi_native_packages.yaml",
             "rebuild_epoch: 0\n\npackages:\n  - name: mise\n    url: https://github.com/greenroom-robotics/mise\n    rev: 0000000000000000000000000000000000000000\n",
         );
-        let changed = apply_release(
+        let applied = apply_release(
             root,
             "mise",
             "https://github.com/greenroom-robotics/mise",
@@ -791,7 +900,16 @@ packages:
             None,
         )
         .unwrap();
-        assert_eq!(changed, std::path::Path::new("pixi_native_packages.yaml"));
+        assert_eq!(
+            applied.path,
+            std::path::Path::new("pixi_native_packages.yaml")
+        );
+        assert_eq!(
+            applied.old_ref,
+            Some(OldRef::Rev(
+                "0000000000000000000000000000000000000000".into()
+            ))
+        );
         let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
         assert!(out.contains("rev: 2222222222222222222222222222222222222222"));
         assert!(!root.join("rosdistro_additional_recipes.yaml").exists());
@@ -811,7 +929,7 @@ packages:
             "rosdistro_additional_recipes.yaml",
             "foo_pkg:\n  url: https://github.com/example/foo_pkg.git\n  tag: 0.1.0\n  version: 0.1.0\n",
         );
-        let changed = apply_release(
+        let applied = apply_release(
             root,
             "foo_pkg",
             "https://github.com/example/foo_pkg.git",
@@ -822,9 +940,11 @@ packages:
         )
         .unwrap();
         assert_eq!(
-            changed,
+            applied.path,
             std::path::Path::new("rosdistro_additional_recipes.yaml")
         );
+        // rosdistro pins a tag; old ref is the previous tag.
+        assert_eq!(applied.old_ref, Some(OldRef::Tag("0.1.0".into())));
         let out = std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml")).unwrap();
         assert!(out.contains("tag: v0.2.0") && out.contains("version: 0.2.0"));
     }
@@ -838,7 +958,7 @@ packages:
             "pixi_native_packages.yaml",
             "rebuild_epoch: 0\n\npackages:\n  - name: existing\n    url: https://example.invalid/existing\n    rev: 0000000000000000000000000000000000000000\n",
         );
-        let changed = apply_release(
+        let applied = apply_release(
             root,
             "newpkg",
             "https://github.com/example/newpkg.git",
@@ -848,7 +968,12 @@ packages:
             Some("packages/newpkg"),
         )
         .unwrap();
-        assert_eq!(changed, std::path::Path::new("pixi_native_packages.yaml"));
+        assert_eq!(
+            applied.path,
+            std::path::Path::new("pixi_native_packages.yaml")
+        );
+        // Brand-new package had no prior pin.
+        assert_eq!(applied.old_ref, None);
         let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
         assert!(out.contains("- name: newpkg"));
         assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
