@@ -1,3 +1,10 @@
+## [5.10.0](https://github.com/greenroom-robotics/mise/compare/mise@5.9.0...mise@5.10.0) (2026-07-03)
+
+
+### Features
+
+* build noarch packages only on linux-64 ([#47](https://github.com/greenroom-robotics/mise/issues/47)) ([80b784e](https://github.com/greenroom-robotics/mise/commit/80b784e651e17876ad25f3764c9d7263cef158cf))
+
 ## [5.9.0](https://github.com/greenroom-robotics/mise/compare/mise@5.8.4...mise@5.9.0) (2026-06-29)
 
 
