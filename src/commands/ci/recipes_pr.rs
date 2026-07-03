@@ -67,6 +67,8 @@ impl RecipesPr {
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
         use std::collections::BTreeSet;
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+        // The refs each package was pinned to before this release, for a diff link.
+        let mut old_refs: BTreeSet<String> = BTreeSet::new();
         for pixi in &pixis {
             let pkg = pixi_meta::read(pixi)?;
             // Path from the source-repo root to the dir holding this package's
@@ -88,7 +90,7 @@ impl RecipesPr {
                 "" | "." => None,
                 s => Some(s),
             };
-            let rel = recipes_upsert::apply_release(
+            let applied = recipes_upsert::apply_release(
                 &recipes_root,
                 &pkg.name,
                 &src_url,
@@ -97,7 +99,10 @@ impl RecipesPr {
                 &self.sha,
                 subdir,
             )?;
-            changed.insert(rel);
+            changed.insert(applied.path);
+            if let Some(old) = applied.old_ref {
+                old_refs.insert(old);
+            }
         }
 
         // 6. Commit + push + open PR.
@@ -136,18 +141,30 @@ impl RecipesPr {
             &["git", "push", "--force", "origin", &branch],
         )?;
 
+        // Link to the source-repo diff between what the recipe was pinned to
+        // before and this release, so a reviewer sees what changed. Only when
+        // every package moved from the same single previous pin (the common
+        // case); skipped for a brand-new package or a same-rev re-pin.
+        let diff = match old_refs.iter().next() {
+            Some(old) if old_refs.len() == 1 && old != &self.sha => {
+                Some(compare_url(&src_url, old, &self.sha))
+            }
+            _ => None,
+        };
+        let body = pr_body(diff.as_deref());
+
         let title = release_title(&src_short, self.package.as_deref(), &tag);
         if pr_exists(&self.recipes_repo, &branch)? {
             // The rolling PR already exists from a previous release; refresh its
-            // title to the new version so it doesn't show a stale version.
-            let edit_args = pr_edit_args(&self.recipes_repo, &branch, &title);
+            // title and body so the version and diff link aren't stale.
+            let edit_args = pr_edit_args(&self.recipes_repo, &branch, &title, &body);
             run_in(
                 &recipes_root,
                 &edit_args.iter().map(String::as_str).collect::<Vec<_>>(),
             )?;
-            println!("PR already exists for {branch}; branch and title updated.");
+            println!("PR already exists for {branch}; branch, title and body updated.");
         } else {
-            let create_args = pr_create_args(&self.recipes_repo, &branch, &title);
+            let create_args = pr_create_args(&self.recipes_repo, &branch, &title, &body);
             run_in(
                 &recipes_root,
                 &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -191,11 +208,18 @@ fn release_title(src_short: &str, package: Option<&str>, tag: &str) -> String {
     }
 }
 
-fn pr_edit_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
-    ["gh", "pr", "edit", "--repo", repo, branch, "--title", title]
-        .into_iter()
-        .map(String::from)
-        .collect()
+fn pr_edit_args(repo: &str, branch: &str, title: &str, body: &str) -> Vec<String> {
+    [
+        "gh", "pr", "edit", "--repo", repo, branch, "--title", title, "--body", body,
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// GitHub compare URL between two refs of the source repo.
+fn compare_url(src_url: &str, old: &str, new: &str) -> String {
+    format!("{}/compare/{old}...{new}", src_url.trim_end_matches(".git"))
 }
 
 /// Git author/committer identity for the recipes commit. Prefers the App bot
@@ -225,31 +249,25 @@ const GREMLINS: &[&str] = &[
     "🐉 The gremlin in the build closet insists this recipe is ready. Trust the gremlin.",
 ];
 
-fn gremlin_body() -> String {
+fn pr_body(diff: Option<&str>) -> String {
     // ponytail: nanos-modulo pick, no rng dep needed for flavor text
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos() as usize)
         .unwrap_or(0)
         % GREMLINS.len();
-    format!("{}\n\nAutomated by `mise ci recipes-pr`.", GREMLINS[idx])
+    let mut body = GREMLINS[idx].to_string();
+    if let Some(url) = diff {
+        body.push_str(&format!("\n\n**Diff since last release:** {url}"));
+    }
+    body.push_str("\n\nAutomated by `mise ci recipes-pr`.");
+    body
 }
 
-fn pr_create_args(repo: &str, branch: &str, title: &str) -> Vec<String> {
+fn pr_create_args(repo: &str, branch: &str, title: &str, body: &str) -> Vec<String> {
     [
-        "gh",
-        "pr",
-        "create",
-        "--repo",
-        repo,
-        "--base",
-        "main",
-        "--head",
-        branch,
-        "--title",
-        title,
-        "--body",
-        &gremlin_body(),
+        "gh", "pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title,
+        "--body", body,
     ]
     .into_iter()
     .map(String::from)
@@ -358,7 +376,7 @@ mod tests {
     // never merges.
     #[test]
     fn create_args_do_not_use_automerge_label() {
-        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise", "t");
+        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise", "t", "b");
         assert!(!args.iter().any(|a| a == "--label"));
     }
 
@@ -420,8 +438,28 @@ mod tests {
             "greenroom-robotics/ros-recipes",
             "release/mise",
             "release: mise v4.5.2",
+            "body",
         );
         assert!(args.contains(&"--title".to_string()));
         assert!(args.contains(&"release: mise v4.5.2".to_string()));
+        // Body is refreshed on edit so the diff link doesn't go stale.
+        assert!(args.contains(&"--body".to_string()));
+    }
+
+    #[test]
+    fn compare_url_strips_git_suffix() {
+        assert_eq!(
+            compare_url("https://github.com/gr/mise.git", "v1.0.0", "abc123"),
+            "https://github.com/gr/mise/compare/v1.0.0...abc123"
+        );
+    }
+
+    #[test]
+    fn pr_body_includes_diff_link_when_present() {
+        let body = pr_body(Some("https://github.com/gr/mise/compare/v1.0.0...v1.1.0"));
+        assert!(body.contains("Diff since last release"));
+        assert!(body.contains("compare/v1.0.0...v1.1.0"));
+        // No link line when there's no prior tag.
+        assert!(!pr_body(None).contains("Diff since last release"));
     }
 }
