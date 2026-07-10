@@ -1,3 +1,10 @@
+## [5.12.0](https://github.com/greenroom-robotics/mise/compare/mise@5.11.0...mise@5.12.0) (2026-07-10)
+
+
+### Features
+
+* **ci-test:** add host-setup input for pre-test host provisioning ([#49](https://github.com/greenroom-robotics/mise/issues/49)) ([3375b76](https://github.com/greenroom-robotics/mise/commit/3375b7615784688f39520f14148d0c3d64960067))
+
 ## [5.11.0](https://github.com/greenroom-robotics/mise/compare/mise@5.10.0...mise@5.11.0) (2026-07-03)
 
 
