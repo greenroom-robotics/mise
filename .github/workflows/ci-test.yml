@@ -17,12 +17,6 @@
 #         changed-only: true        # PRs test only changed packages
 #         jobs: |
 #           tests:test
-#         # Optional: run some packages' tests inside a container (e.g. DeepStream
-#         # on a GPU runner) while the rest stay on the host runner:
-#         container-packages: '["detector"]'
-#         container-image: nvcr.io/nvidia/deepstream:8.0-triton-multiarch
-#         container-runner: runs-on=${{ github.run_id }}/family=g4dn.2xlarge/image=ubuntu24-gpu-x64
-#         container-options: --gpus all --network host
 #       secrets:
 #         gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
 #         gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -43,26 +37,6 @@ on:
         required: false
         type: string
         default: "[]"
-      container-packages:
-        description: 'JSON array of packages whose tests run inside `container-image` on `container-runner` (e.g. DeepStream packages needing the SDK libs + GPU). Everything else runs on the host `runner`. Default [] keeps all packages on the host.'
-        required: false
-        type: string
-        default: "[]"
-      container-image:
-        description: Container image for `container-packages` (e.g. nvcr.io/nvidia/deepstream:8.0-triton-multiarch). Required if `container-packages` is non-empty.
-        required: false
-        type: string
-        default: ""
-      container-runner:
-        description: runs-on label for the container test job (e.g. a GPU runner). Falls back to `runner`.
-        required: false
-        type: string
-        default: ""
-      container-options:
-        description: 'Extra `docker run` options for the container job (e.g. "--gpus all --network host").'
-        required: false
-        type: string
-        default: ""
       package:
         description: Single package to test (default - all packages under package-dir).
         required: false
@@ -104,7 +78,7 @@ on:
         type: boolean
         default: false
       host-setup:
-        description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Host `test` job only — not the container job. Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
+        description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
         required: false
         type: string
         default: ""
@@ -130,8 +104,6 @@ jobs:
       pull-requests: read   # paths-filter reads the PR's changed-file list
     outputs:
       packages: ${{ steps.assemble.outputs.packages }}
-      host_packages: ${{ steps.assemble.outputs.host_packages }}
-      container_packages: ${{ steps.assemble.outputs.container_packages }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -182,7 +154,6 @@ jobs:
           ALL: ${{ steps.all.outputs.all }}
           CHANGED: ${{ steps.filter.outputs.changes }}
           FILTER_RAN: ${{ steps.filter.outcome }}
-          CONTAINER_PACKAGES: ${{ inputs.container-packages }}
           EXCLUDE_PACKAGES: ${{ inputs.exclude-packages }}
         run: |
           set -euo pipefail
@@ -193,21 +164,15 @@ jobs:
           else
             packages="$ALL"
           fi
-          # Drop excluded packages from the whole run (host and container).
+          # Drop excluded packages from the whole run.
           packages=$(jq -cn --argjson p "$packages" --argjson x "$EXCLUDE_PACKAGES" '$p - $x')
-          # Split the to-test set into host vs container packages. jq array
-          # subtraction: host = all - container; container = the rest.
-          host=$(jq -cn --argjson all "$packages" --argjson c "$CONTAINER_PACKAGES" '$all - $c')
-          cont=$(jq -cn --argjson all "$packages" --argjson c "$CONTAINER_PACKAGES" '$all - ($all - $c)')
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
-          echo "host_packages=$host" >> "$GITHUB_OUTPUT"
-          echo "container_packages=$cont" >> "$GITHUB_OUTPUT"
-          echo "Host: $host  Container: $cont"
+          echo "Packages: $packages"
 
-  # Host packages: run directly on `runner`.
+  # Run each package's tests on `runner`.
   test:
     needs: discover
-    if: needs.discover.outputs.host_packages != '[]'
+    if: needs.discover.outputs.packages != '[]'
     runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
@@ -216,7 +181,7 @@ jobs:
     strategy:
       fail-fast: false     # one package failing must not cancel the others
       matrix:
-        package: ${{ fromJSON(needs.discover.outputs.host_packages) }}
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -240,89 +205,12 @@ jobs:
           jobs: ${{ inputs.jobs }}
           locked: ${{ inputs.locked }}
 
-  # Container packages: same steps as `test`, but inside `container-image`
-  # (e.g. a DeepStream image carrying the SDK runtime libs) on `container-runner`
-  # (e.g. a GPU runner). A separate job because a per-row conditional `container:`
-  # can't be expressed — the long form needed for `options: --gpus all` has no
-  # "run on host" value. Step block is duplicated from `test` for the same reason
-  # (GitHub Actions has no cross-job step reuse).
-  test-container:
-    needs: discover
-    if: needs.discover.outputs.container_packages != '[]'
-    runs-on: ${{ inputs.container-runner != '' && inputs.container-runner || inputs.runner }}
-    container:
-      image: ${{ inputs.container-image }}
-      options: ${{ inputs.container-options }}
-    permissions:
-      contents: read
-      id-token: write
-      checks: write
-    strategy:
-      fail-fast: false
-      matrix:
-        package: ${{ fromJSON(needs.discover.outputs.container_packages) }}
-    steps:
-      # Minimal vendor images (e.g. DeepStream) lack CI tooling the rest of this
-      # job assumes: git-lfs for actions/checkout, and gh, which the setup
-      # action and the conda-channel-proxy teardown shell out to. Install them
-      # up front. apt-based images only; gh comes from its release tarball since
-      # it isn't in the distro repos.
-      - name: Prepare container tooling
-        shell: bash
-        run: |
-          set -euo pipefail
-          pkgs=()
-          command -v git    >/dev/null || pkgs+=(git)
-          command -v curl   >/dev/null || pkgs+=(curl)
-          command -v jq     >/dev/null || pkgs+=(jq)
-          command -v git-lfs >/dev/null || pkgs+=(git-lfs)
-          if [ "${#pkgs[@]}" -gt 0 ]; then apt-get update && apt-get install -y "${pkgs[@]}"; fi
-          if ! command -v gh >/dev/null; then
-            arch="$(dpkg --print-architecture)"   # amd64 | arm64
-            ver=2.63.2
-            tmp="$(mktemp -d)"
-            curl -fsSL "https://github.com/cli/cli/releases/download/v${ver}/gh_${ver}_linux_${arch}.tar.gz" | tar -xz -C "$tmp"
-            install "$tmp/gh_${ver}_linux_${arch}/bin/gh" /usr/local/bin/gh
-          fi
-      - uses: actions/checkout@v6
-        with:
-          lfs: ${{ inputs.lfs }}
-      # Container packages (DeepStream, etc.) carry the heavy model/video LFS
-      # fixtures that .lfsconfig fetchexclude keeps out of normal clones — but
-      # their tests need them. Pull everything, overriding fetchexclude. Matches
-      # what the legacy docker-based CIs did (`git lfs pull --exclude=""`).
-      - name: Fetch all LFS objects
-        if: inputs.lfs
-        shell: bash
-        working-directory: ${{ github.workspace }}
-        run: |
-          set -euo pipefail
-          # Vendor images (DeepStream) ship a custom WORKDIR and the checkout
-          # runs as root, so pin to the workspace and mark it safe before git
-          # will treat it as a repo.
-          git config --global --add safe.directory "$PWD"
-          git lfs pull --exclude=""
-      - uses: greenroom-robotics/mise/.github/actions/test@v5
-        with:
-          gh-app-client-id: ${{ secrets.gh-app-client-id }}
-          gh-app-private-key: ${{ secrets.gh-app-private-key }}
-          azure-client-id: ${{ secrets.azure-client-id }}
-          azure-tenant-id: ${{ secrets.azure-tenant-id }}
-          azure-subscription-id: ${{ secrets.azure-subscription-id }}
-          proxy-version: ${{ inputs.proxy-version }}
-          package: ${{ matrix.package }}
-          package-dir: ${{ inputs.package-dir }}
-          report-dir: ${{ inputs.report-dir }}
-          check-name: 'Test Report (pixi): ${{ matrix.package }}'
-          jobs: ${{ inputs.jobs }}
-          locked: ${{ inputs.locked }}
-
   # Single stable status to require in branch protection. Matrix legs have
   # per-package names that can't be required directly; this collapses them into
   # one check that is green only when discovery succeeded and every leg passed.
   # An empty change set (PR touched no package) is a pass, not a failure.
   result:
-    needs: [discover, test, test-container]
+    needs: [discover, test]
     if: always()
     runs-on: ${{ inputs.runner }}
     permissions:
@@ -331,19 +219,16 @@ jobs:
       - shell: bash
         env:
           TEST: ${{ needs.test.result }}
-          TEST_CONTAINER: ${{ needs.test-container.result }}
         run: |
-          echo "discover=${{ needs.discover.result }} test=$TEST test-container=$TEST_CONTAINER packages=${{ needs.discover.outputs.packages }}"
+          echo "discover=${{ needs.discover.result }} test=$TEST packages=${{ needs.discover.outputs.packages }}"
           if [ "${{ needs.discover.result }}" != "success" ]; then
             echo "::error::package discovery failed"; exit 1
           fi
           if [ "${{ needs.discover.outputs.packages }}" = "[]" ]; then
             echo "no packages to test — nothing changed"; exit 0
           fi
-          # Each test job is 'skipped' when its package set is empty — only an
+          # The test job is 'skipped' when the package set is empty — only an
           # actual failure should fail the gate.
-          for r in "$TEST" "$TEST_CONTAINER"; do
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::one or more package test jobs did not pass"; exit 1
-            fi
-          done
+          if [ "$TEST" != "success" ] && [ "$TEST" != "skipped" ]; then
+            echo "::error::one or more package test jobs did not pass"; exit 1
+          fi
