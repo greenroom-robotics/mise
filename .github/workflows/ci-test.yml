@@ -103,6 +103,11 @@ on:
         required: false
         type: boolean
         default: false
+      host-setup:
+        description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Host `test` job only — not the container job. Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
+        required: false
+        type: string
+        default: ""
     secrets:
       gh-app-client-id:
         required: true
@@ -216,6 +221,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: ${{ inputs.lfs }}
+      - name: Host setup
+        if: inputs.host-setup != ''
+        shell: bash
+        run: ${{ inputs.host-setup }}
       - uses: greenroom-robotics/mise/.github/actions/test@v5
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
