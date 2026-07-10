@@ -1,3 +1,10 @@
+## [5.12.1](https://github.com/greenroom-robotics/mise/compare/mise@5.12.0...mise@5.12.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* bump dorny/paths-filter for new node ([5ce596e](https://github.com/greenroom-robotics/mise/commit/5ce596ecd54dfda4ea6b26393635e166f79c6e91))
+
 ## [5.12.0](https://github.com/greenroom-robotics/mise/compare/mise@5.11.0...mise@5.12.0) (2026-07-10)
 
 
