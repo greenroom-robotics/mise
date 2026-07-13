@@ -86,25 +86,27 @@ impl RecipesPr {
         let src_url = source_repo_https_url()?;
         let src_short = source_repo_short_name(&src_url)?;
         let tag = format!("v{}", self.version);
+        let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
         // 3. Clone the recipes repo into a tempdir.
         let tmp = tempfile::TempDir::new()?;
         let recipes_root = tmp.path().join("recipes");
         clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
 
-        // 4. Create the release branch. The branch name is intentionally
-        //    version-independent so every release of this source repo lands on
-        //    the SAME rolling PR (force-pushed each time) rather than opening a
-        //    fresh PR per version. A per-version branch leaves superseded PRs
-        //    open, and an older one merging after a newer one downgrades the
-        //    pin. Mirrors `mise bump`'s `bump/<pkg>` branch.
-        //
-        //    Multi-package repos get a per-package rolling branch
-        //    (release/<repo>/<package>) so each package's release lands on its
-        //    own PR. Single-package repos (where --package matches the repo
-        //    name, or is absent) stay at release/<repo>.
-        let branch = release_branch(&src_short, self.package.as_deref());
-        run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
+        // 4. Create or continue the rolling release branch. If an earlier
+        //    package of this same CI run already pushed the branch, append to
+        //    it so the whole coupled release lands in one PR; otherwise reset
+        //    it from main.
+        let branch = release_branch(&src_short);
+        let head_msg = remote_branch_head_message(&recipes_root, &branch)?;
+        if should_append(head_msg.as_deref(), run_id.as_deref()) {
+            run_in(
+                &recipes_root,
+                &["git", "checkout", "-b", &branch, "FETCH_HEAD"],
+            )?;
+        } else {
+            run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
+        }
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
         use std::collections::BTreeSet;
@@ -162,7 +164,10 @@ impl RecipesPr {
         let (git_name, git_email) = git_identity();
         let name_cfg = format!("user.name={git_name}");
         let email_cfg = format!("user.email={git_email}");
-        let commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
+        let mut commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
+        if let Some(id) = &run_id {
+            commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
+        }
         run_in(
             &recipes_root,
             &[
@@ -222,17 +227,50 @@ impl RecipesPr {
     }
 }
 
-/// Version-independent branch for a source repo's rolling release PR.
-///
-/// Multi-package repos get a per-package branch (`release/<repo>/<package>`) so
-/// each package lands on its own rolling PR. Single-package repos — where no
-/// `--package` is passed, or it matches the repo name — stay at
-/// `release/<repo>` and avoid a redundant `release/mise/mise`.
-fn release_branch(src_short: &str, package: Option<&str>) -> String {
-    match package {
-        Some(pkg) if pkg != src_short => format!("release/{src_short}/{pkg}"),
-        _ => format!("release/{src_short}"),
+/// Version-independent rolling branch, one per source repo. Packages released
+/// in the same CI run append commits to it (see should_append); a new run
+/// resets it from main. Shared so coupled sibling releases land in ONE
+/// recipes PR and build together in one pr-validate run.
+fn release_branch(src_short: &str) -> String {
+    format!("release/{src_short}")
+}
+
+fn run_marker(run_id: &str) -> String {
+    format!("[mise-run:{run_id}]")
+}
+
+/// Append to the existing branch only when its head commit carries this CI
+/// run's marker — i.e. an earlier package of the same release run wrote it.
+/// Anything else (stale branch, standalone run) starts fresh from main.
+fn should_append(branch_head_msg: Option<&str>, run_id: Option<&str>) -> bool {
+    match (branch_head_msg, run_id) {
+        (Some(msg), Some(id)) => msg.contains(&run_marker(id)),
+        _ => false,
     }
+}
+
+/// Fetch the remote rolling branch and return its head commit message.
+/// `None` when the branch doesn't exist on the remote.
+fn remote_branch_head_message(
+    recipes_root: &std::path::Path,
+    branch: &str,
+) -> anyhow::Result<Option<String>> {
+    let fetched = std::process::Command::new("git")
+        .args(["fetch", "--depth=1", "origin", branch])
+        .current_dir(recipes_root)
+        .status()?
+        .success();
+    if !fetched {
+        return Ok(None);
+    }
+    let out = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B", "FETCH_HEAD"])
+        .current_dir(recipes_root)
+        .output()?;
+    if !out.status.success() {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
 /// PR title / commit message, mirroring `release_branch`: per-package repos read
@@ -577,26 +615,35 @@ mod tests {
     // an older release merge over a newer one.
     #[test]
     fn release_branch_is_version_independent() {
-        let a = release_branch("mise", None);
+        let a = release_branch("mise");
         assert_eq!(a, "release/mise");
         assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
     }
 
-    // Multi-package repos get a per-package rolling branch so each package's
-    // release lands on its own PR instead of sharing one repo-level PR.
+    // Shared per-repo branch: every package of a multi-package repo lands on ONE
+    // rolling PR so coupled releases build together in one pr-validate run.
     #[test]
-    fn release_branch_is_per_package_when_package_differs() {
+    fn release_branch_is_per_repo_not_per_package() {
         assert_eq!(
-            release_branch("platform_toolbox", Some("topic_utils")),
-            "release/platform_toolbox/topic_utils"
+            release_branch("platform_toolbox"),
+            "release/platform_toolbox"
         );
+        assert_eq!(release_branch("mise"), "release/mise");
     }
 
-    // Single-package repos pass --package == repo name; don't produce a
-    // redundant release/mise/mise.
     #[test]
-    fn release_branch_collapses_when_package_matches_repo() {
-        assert_eq!(release_branch("mise", Some("mise")), "release/mise");
+    fn should_append_only_for_same_run_marker() {
+        let msg = format!("release: r geolocation@1.2.0\n\n{}", run_marker("12345"));
+        // same run -> append
+        assert!(should_append(Some(&msg), Some("12345")));
+        // different run -> reset
+        assert!(!should_append(Some(&msg), Some("99999")));
+        // no marker on branch head -> reset
+        assert!(!should_append(Some("release: r x@1.0.0"), Some("12345")));
+        // no branch -> reset
+        assert!(!should_append(None, Some("12345")));
+        // standalone run (no run id) -> always reset
+        assert!(!should_append(Some(&msg), None));
     }
 
     // Title mirrors the branch: per-package vs repo-level.
