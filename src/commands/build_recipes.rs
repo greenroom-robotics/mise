@@ -406,6 +406,8 @@ pub(crate) struct UpstreamPixiToml {
     pub package: UpstreamPackage,
     #[serde(default)]
     pub workspace: Option<UpstreamWorkspace>,
+    #[serde(default)]
+    dependencies: Option<toml::value::Table>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,6 +416,12 @@ pub(crate) struct UpstreamPackage {
     pub version: String,
     #[serde(default)]
     pub build: Option<UpstreamBuild>,
+    #[serde(default, rename = "run-dependencies")]
+    run_dependencies: Option<toml::value::Table>,
+    #[serde(default, rename = "host-dependencies")]
+    host_dependencies: Option<toml::value::Table>,
+    #[serde(default, rename = "build-dependencies")]
+    build_dependencies: Option<toml::value::Table>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,6 +502,96 @@ impl UpstreamPixiToml {
         let target_str = target.arch().to_string();
         ws.platforms.iter().any(|p| p == &target_str)
     }
+
+    /// Relative `path =` values from all dependency tables, excluding the
+    /// self-as-workspace-member idiom (`path = "."`).
+    pub fn path_dep_rel_paths(&self) -> Vec<String> {
+        let tables = [
+            self.dependencies.as_ref(),
+            self.package.run_dependencies.as_ref(),
+            self.package.host_dependencies.as_ref(),
+            self.package.build_dependencies.as_ref(),
+        ];
+        let mut out = Vec::new();
+        for table in tables.into_iter().flatten() {
+            for value in table.values() {
+                if let Some(p) = value.get("path").and_then(|p| p.as_str())
+                    && p != "."
+                {
+                    out.push(p.to_string());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A pixi-native entry selected for building, along with the info needed to
+/// order it relative to other builds (see `topo_sort_builds`).
+#[derive(Debug)]
+pub(crate) struct BuildItem<'a> {
+    pub entry: &'a PixiNativeEntry,
+    pub effective_build: u64,
+    pub name: String,
+    pub rel_path_deps: Vec<String>,
+}
+
+/// Order build items so same-repo path-dep targets build before consumers.
+/// Edge rule: consumer.subdir/rel_path (normalized) == target.subdir, same url.
+fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
+    use crate::commands::ci::siblings::normalize;
+    use std::collections::BTreeMap;
+
+    let key = |e: &PixiNativeEntry| {
+        (
+            format!("{}/{}", e.url.owner, e.url.repo),
+            normalize(e.subdir.as_deref().unwrap_or(Path::new("."))),
+        )
+    };
+    let index: BTreeMap<_, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| (key(it.entry), i))
+        .collect();
+
+    let mut indegree = vec![0usize; items.len()];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); items.len()];
+    for (i, it) in items.iter().enumerate() {
+        let (repo, subdir) = key(it.entry);
+        for rel in &it.rel_path_deps {
+            let target = normalize(&subdir.join(rel));
+            if let Some(&j) = index.get(&(repo.clone(), target)) {
+                dependents[j].push(i);
+                indegree[i] += 1;
+            }
+        }
+    }
+    let mut ready: std::collections::BTreeSet<usize> = indegree
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| **d == 0)
+        .map(|(i, _)| i)
+        .collect();
+    let mut order = Vec::new();
+    while let Some(&i) = ready.iter().next() {
+        ready.remove(&i);
+        order.push(i);
+        for &d in &dependents[i] {
+            indegree[d] -= 1;
+            if indegree[d] == 0 {
+                ready.insert(d);
+            }
+        }
+    }
+    if order.len() != items.len() {
+        anyhow::bail!("path-dep cycle among pixi-native entries");
+    }
+    // Reorder without cloning items.
+    let mut slots: Vec<Option<BuildItem>> = items.into_iter().map(Some).collect();
+    Ok(order
+        .into_iter()
+        .map(|i| slots[i].take().unwrap())
+        .collect())
 }
 
 use crate::types::{GithubRepoUrl, PixiNativeEntry, Sha40};
@@ -653,6 +751,7 @@ enum CheckOutcome {
         version: String,
         upstream_build: u64,
         effective_build: u64,
+        upstream: Box<UpstreamPixiToml>,
     },
     SkipPlatformUnsupported {
         name: String,
@@ -711,10 +810,11 @@ fn check_entry(
     }
 
     Ok(CheckOutcome::Build {
-        name: upstream.package.name,
-        version: upstream.package.version,
+        name: upstream.package.name.clone(),
+        version: upstream.package.version.clone(),
         upstream_build,
         effective_build,
+        upstream: Box::new(upstream),
     })
 }
 
@@ -833,7 +933,7 @@ fn pixi(
                 .collect()
         });
 
-    let mut to_build: Vec<(&PixiNativeEntry, u64)> = Vec::new();
+    let mut to_build: Vec<BuildItem> = Vec::new();
     let mut build_labels: Vec<String> = Vec::new();
     for (entry, outcome) in outcomes {
         match outcome? {
@@ -842,6 +942,7 @@ fn pixi(
                 version,
                 upstream_build,
                 effective_build,
+                upstream,
             } => {
                 if rebuild_epoch > 0 {
                     build_labels.push(format!(
@@ -851,7 +952,12 @@ fn pixi(
                 } else {
                     build_labels.push(format!("{name} {version}"));
                 }
-                to_build.push((entry, effective_build));
+                to_build.push(BuildItem {
+                    entry,
+                    effective_build,
+                    name: upstream.package.name.clone(),
+                    rel_path_deps: upstream.path_dep_rel_paths(),
+                });
             }
             CheckOutcome::SkipPlatformUnsupported { name, version } => {
                 tracing::info!(
@@ -882,7 +988,12 @@ fn pixi(
         build_labels.join(", "),
     );
 
-    for (entry, effective_build) in to_build {
+    let to_build = topo_sort_builds(to_build)?;
+
+    for item in to_build {
+        let entry = item.entry;
+        let effective_build = item.effective_build;
+        tracing::debug!("building {} (build order name: {})", entry.name, item.name);
         let tmp = tempfile::Builder::new()
             .prefix(&format!("pixi-native-{}-", entry.name))
             .tempdir()
@@ -1009,6 +1120,79 @@ mod tests {
 
     fn is_noarch(toml: &str) -> bool {
         UpstreamPixiToml::parse(toml).unwrap().is_noarch()
+    }
+
+    fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
+        PixiNativeEntry {
+            name: name.into(),
+            url: GithubRepoUrl::parse("https://github.com/gr/repo").unwrap(),
+            rev: Sha40::new("a".repeat(40)).unwrap(),
+            subdir: Some(PathBuf::from(subdir)),
+            runner_size: RunnerSize::default(),
+        }
+    }
+
+    #[test]
+    fn path_dep_rel_paths_excludes_self_idiom() {
+        let t = UpstreamPixiToml::parse(
+            "[dependencies]\nnode = { path = \".\" }\n\
+             [package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+             [package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n\
+             [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n",
+        )
+        .unwrap();
+        let mut got = t.path_dep_rel_paths();
+        got.sort();
+        assert_eq!(got, vec!["../lib".to_string(), "../msgs".to_string()]);
+    }
+
+    #[test]
+    fn topo_sort_builds_orders_same_repo_path_deps() {
+        let lib = test_entry("lib", "packages/lib");
+        let node = test_entry("node", "packages/node");
+        let items = vec![
+            BuildItem {
+                entry: &node,
+                effective_build: 0,
+                name: "node".into(),
+                rel_path_deps: vec!["../lib".into()],
+            },
+            BuildItem {
+                entry: &lib,
+                effective_build: 0,
+                name: "lib".into(),
+                rel_path_deps: vec![],
+            },
+        ];
+        let sorted = topo_sort_builds(items).unwrap();
+        assert_eq!(sorted[0].name, "lib");
+        assert_eq!(sorted[1].name, "node");
+    }
+
+    #[test]
+    fn topo_sort_builds_rejects_cycles() {
+        let a = test_entry("a", "packages/a");
+        let b = test_entry("b", "packages/b");
+        let items = vec![
+            BuildItem {
+                entry: &a,
+                effective_build: 0,
+                name: "a".into(),
+                rel_path_deps: vec!["../b".into()],
+            },
+            BuildItem {
+                entry: &b,
+                effective_build: 0,
+                name: "b".into(),
+                rel_path_deps: vec!["../a".into()],
+            },
+        ];
+        assert!(
+            topo_sort_builds(items)
+                .unwrap_err()
+                .to_string()
+                .contains("cycle")
+        );
     }
 
     #[test]

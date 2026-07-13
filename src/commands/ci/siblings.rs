@@ -136,7 +136,7 @@ pub fn topo_order(graph: &SiblingGraph) -> Result<Vec<String>> {
 }
 
 /// Lexical path normalization (no fs access): resolves `.` and `..`.
-fn normalize(p: &Path) -> PathBuf {
+pub(crate) fn normalize(p: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for c in p.components() {
         match c {
