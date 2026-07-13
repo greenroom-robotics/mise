@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Sibling dependency graph for one repo's per-package pixi workspaces.
 #[derive(Debug, Default)]
@@ -31,13 +33,20 @@ pub fn analyze(pixis: &[PathBuf]) -> Result<SiblingGraph> {
             std::fs::read_to_string(pixi).with_context(|| format!("reading {}", pixi.display()))?;
         let doc: toml::Value =
             toml::from_str(&text).with_context(|| format!("parsing {}", pixi.display()))?;
+        let dir = normalize(pixi.parent().unwrap());
         let name = doc
             .get("package")
             .and_then(|p| p.get("name"))
             .and_then(|n| n.as_str())
-            .with_context(|| format!("{}: missing package.name", pixi.display()))?
-            .to_string();
-        let dir = normalize(pixi.parent().unwrap());
+            .map(str::to_string)
+            .or_else(|| package_xml_name(&dir))
+            .with_context(|| {
+                format!(
+                    "{}: missing package.name and no <name> in {}",
+                    pixi.display(),
+                    dir.join("package.xml").display()
+                )
+            })?;
         g.dirs.insert(name.clone(), dir.clone());
         docs.push((name, dir, doc));
     }
@@ -133,6 +142,19 @@ pub fn topo_order(graph: &SiblingGraph) -> Result<Vec<String>> {
         anyhow::bail!("sibling dependency cycle involving: {}", stuck.join(", "));
     }
     Ok(order)
+}
+
+/// Package-xml mode: `pixi.toml [package]` has no `name` key, and identity
+/// comes from a `package.xml` beside the manifest. Extracts the first
+/// `<name>...</name>` element's text, or `None` if there's no `package.xml`
+/// or no `<name>` element in it.
+fn package_xml_name(dir: &Path) -> Option<String> {
+    static NAME_RE: OnceLock<Regex> = OnceLock::new();
+    let re = NAME_RE.get_or_init(|| Regex::new(r"(?s)<name>\s*(.*?)\s*</name>").unwrap());
+    let text = std::fs::read_to_string(dir.join("package.xml")).ok()?;
+    re.captures(&text)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
 }
 
 /// Lexical path normalization (no fs access): resolves `.` and `..`.
@@ -248,6 +270,43 @@ mod tests {
         let pos = |n: &str| order.iter().position(|x| x == n).unwrap();
         assert!(pos("geolocation_msgs") < pos("geolocation"));
         assert!(pos("geolocation") < pos("geolocation_node"));
+    }
+
+    #[test]
+    fn package_xml_mode_manifest_falls_back_to_package_xml_name() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("geolocation");
+        fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        fs::write(
+            &pixi,
+            "[workspace]\nname = \"geolocation\"\n\n[package]\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("package.xml"),
+            "<?xml version=\"1.0\"?>\n<package format=\"3\">\n  <name>geolocation</name>\n  <version>1.0.0</version>\n</package>\n",
+        )
+        .unwrap();
+        let g = analyze(&[pixi]).unwrap();
+        assert!(g.dirs.contains_key("geolocation"));
+    }
+
+    #[test]
+    fn missing_name_in_both_manifest_and_package_xml_errors_mentioning_both() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("geolocation");
+        fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        fs::write(
+            &pixi,
+            "[workspace]\nname = \"geolocation\"\n\n[package]\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let err = analyze(&[pixi]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("package.name"));
+        assert!(msg.contains("package.xml"));
     }
 
     #[test]

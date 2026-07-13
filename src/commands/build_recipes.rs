@@ -529,7 +529,16 @@ impl UpstreamPixiToml {
 
 /// A sibling package whose `path =` dep was rewritten to a derived `==version`
 /// pin in the temp checkout.
+#[derive(Debug)]
 pub struct ResolvedDep {
+    /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
+    /// This is the channel artifact name, which is what `version_published` /
+    /// `built_this_job` / the local-build guard key off of. It is NOT
+    /// necessarily the sibling's `package.name` — in package-xml mode the
+    /// sibling manifest may have no `package.name` at all, and even when it
+    /// does, the published artifact is prefixed/transformed relative to it.
+    /// The dep key is guaranteed correct because the consumer's manifest can
+    /// only solve against the real channel name.
     pub name: String,
     pub version: String,
     /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
@@ -568,12 +577,26 @@ fn visit_table(
                 sib_manifest.display()
             )
         })?;
-        let sib = UpstreamPixiToml::parse(&sib_text)
+        // Only `package.version` is read from the sibling manifest: the
+        // dependency key (not the sibling's `package.name`, which may not
+        // even exist in package-xml mode) is the channel artifact name.
+        let sib_doc: toml::Value = toml::from_str(&sib_text)
             .with_context(|| format!("parse sibling manifest for {key}"))?;
-        table.insert(&key, toml_edit::value(format!("=={}", sib.package.version)));
+        let version = sib_doc
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+            .with_context(|| {
+                format!(
+                    "path dep {key}: sibling manifest {} has no package.version",
+                    sib_manifest.display()
+                )
+            })?
+            .to_string();
+        table.insert(&key, toml_edit::value(format!("=={version}")));
         resolved.push(ResolvedDep {
-            name: sib.package.name,
-            version: sib.package.version,
+            name: key.clone(),
+            version,
             manifest: sib_manifest,
         });
     }
@@ -1965,6 +1988,57 @@ ci = "test"
         assert!(
             text.contains("ros-kilted-rclpy"),
             "externals untouched: {text}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Sibling dir/manifest is named "lib" (e.g. package-xml mode: no
+        // stable relationship between package.name and the channel artifact
+        // name), but the consumer depends on it under the artifact-name key
+        // "ros-kilted-lib".
+        write_checkout_pkg(root, "lib", "");
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nros-kilted-lib = { path = \"../lib\" }\n",
+        );
+        let resolved = resolve_path_deps(&consumer).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "ros-kilted-lib");
+        assert_eq!(resolved[0].version, "2.5.0");
+
+        let text = std::fs::read_to_string(&consumer).unwrap();
+        assert!(
+            text.contains("ros-kilted-lib = \"==2.5.0\""),
+            "rewritten under the dep key: {text}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let dir = root.join("packages").join("lib");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("pixi.toml"),
+            "[workspace]\nname = \"lib\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+             [dependencies]\nlib = { path = \".\" }\n\
+             [package]\nname = \"lib\"\n",
+        )
+        .unwrap();
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+        );
+        let err = resolve_path_deps(&consumer).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("package.version"),
+            "got: {err:#}"
         );
     }
 
