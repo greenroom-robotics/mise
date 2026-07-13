@@ -12,6 +12,13 @@ pub enum BuildRecipes {
         repo_root: Option<PathBuf>,
         #[arg(long)]
         channel_url: String,
+        /// Extra channel whose already-published packages should be skipped
+        /// (rattler `--skip-existing`) but which must NOT win dependency
+        /// resolution — the `overrides` channel. Its packages carry
+        /// `down_prioritize_variant`, so the solver avoids them for build deps
+        /// while `--skip-existing` still finds them to skip a rebuild.
+        #[arg(long)]
+        overrides_channel_url: Option<String>,
         #[arg(long, default_value = "./conda-bld")]
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
@@ -68,6 +75,7 @@ impl BuildRecipes {
             Self::Vinca {
                 repo_root,
                 channel_url,
+                overrides_channel_url,
                 output_dir,
                 target_platform,
                 ds_recipes,
@@ -76,6 +84,7 @@ impl BuildRecipes {
             } => vinca(
                 repo_root,
                 channel_url,
+                overrides_channel_url,
                 output_dir,
                 target_platform,
                 ds_recipes,
@@ -119,9 +128,11 @@ impl BuildRecipes {
 use crate::process;
 use crate::repo::Repo;
 
+#[allow(clippy::too_many_arguments)]
 fn vinca(
     repo_root: Option<PathBuf>,
     channel_url: String,
+    overrides_channel_url: Option<String>,
     output_dir: PathBuf,
     target_platform: TargetPlatform,
     ds_recipes: Vec<RecipeName>,
@@ -177,9 +188,16 @@ fn vinca(
     for a in &variant_args {
         args.push(a);
     }
+    args.extend_from_slice(&["-c", &channel_url]);
+    // The overrides channel lets --skip-existing find already-published
+    // override packages (so they aren't rebuilt every run). It sits below the
+    // general channel; its packages carry down_prioritize_variant so the solver
+    // still prefers the stock build for any dependency.
+    if let Some(ovr) = &overrides_channel_url {
+        args.push("-c");
+        args.push(ovr.as_str());
+    }
     args.extend_from_slice(&[
-        "-c",
-        &channel_url,
         "-c",
         "https://prefix.dev/robostack-kilted",
         "-c",
@@ -962,10 +980,13 @@ fn deepstream_container(
     // 3. Install pixi env for the repo.
     process::run_in(repo.root(), "pixi", &["install"])?;
 
-    // 4. Delegate to build vinca (always DeepstreamOnly mode).
+    // 4. Delegate to build vinca (always DeepstreamOnly mode). DeepStream
+    // builds are filtered to DS recipes only and never touch overrides
+    // packages, so no overrides channel is passed.
     vinca(
         Some(repo.root().to_path_buf()),
         channel_url,
+        None,
         output_dir,
         target_platform,
         ds_recipes,
