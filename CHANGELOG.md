@@ -1,3 +1,10 @@
+## [5.14.0](https://github.com/greenroom-robotics/mise/compare/mise@5.13.0...mise@5.14.0) (2026-07-13)
+
+
+### Features
+
+* **recipes-pr:** first-class vendored monorepo releases ([#52](https://github.com/greenroom-robotics/mise/issues/52)) ([35889be](https://github.com/greenroom-robotics/mise/commit/35889be825cf66b0faae811edfc810761a34ee41))
+
 ## [5.13.0](https://github.com/greenroom-robotics/mise/compare/mise@5.12.1...mise@5.13.0) (2026-07-13)
 
 
