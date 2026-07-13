@@ -1,3 +1,10 @@
+## [5.13.0](https://github.com/greenroom-robotics/mise/compare/mise@5.12.1...mise@5.13.0) (2026-07-13)
+
+
+### Features
+
+* pass overrides channel to vinca build for skip-existing ([#51](https://github.com/greenroom-robotics/mise/issues/51)) ([86e1327](https://github.com/greenroom-robotics/mise/commit/86e1327f344b9c7e5c9196ff05cf98fbfddb1490))
+
 ## [5.12.1](https://github.com/greenroom-robotics/mise/compare/mise@5.12.0...mise@5.12.1) (2026-07-10)
 
 
