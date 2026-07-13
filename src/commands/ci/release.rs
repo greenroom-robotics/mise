@@ -1,4 +1,5 @@
 use clap::Args;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
@@ -51,6 +52,36 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
     }
 }
 
+/// Per-workspace package.json synthesized at release time so the patched
+/// multi-semantic-release discovers packages and releases them in topological
+/// order of sibling deps. Never committed (repos don't track package.json).
+fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
+    let deps_obj: serde_json::Map<String, serde_json::Value> = deps
+        .iter()
+        .map(|d| (d.clone(), serde_json::Value::String("*".into())))
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "name": name,
+        "version": version,
+        "private": true,
+        "dependencies": deps_obj,
+    }))
+    .expect("static json")
+}
+
+/// Merge a `workspaces` array into the root package.json (staged by the
+/// release action), creating a minimal one for standalone/local runs.
+fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
+    let mut v: serde_json::Value = if root_pkg_json.exists() {
+        serde_json::from_str(&std::fs::read_to_string(root_pkg_json)?)?
+    } else {
+        serde_json::json!({ "name": "mise-release-root", "private": true })
+    };
+    v["workspaces"] = serde_json::json!(globs);
+    std::fs::write(root_pkg_json, serde_json::to_string_pretty(&v)?)?;
+    Ok(())
+}
+
 impl Release {
     pub fn run(self) -> anyhow::Result<()> {
         use crate::commands::ci::packages;
@@ -60,20 +91,41 @@ impl Release {
         if pixis.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
+        let multi = self.package.is_none() && pixis.len() > 1;
 
-        // Write a .releaserc next to each package's pixi.toml. semantic-release
-        // (and multi-semantic-release) discover them via the per-package
-        // workspaces declared in the root package.json.
+        // Sibling graph: drives msr's topological release order (multi mode)
+        // via synthesized package.json files. Both dep kinds order; only path
+        // deps are guarded (verify-siblings).
+        let graph = crate::commands::ci::siblings::analyze(&pixis)?;
+
+        // Write a .releaserc (and, in multi mode, a package.json encoding
+        // sibling deps) next to each package's pixi.toml.
+        let mut workspace_globs: Vec<String> = Vec::new();
         for pixi in &pixis {
             let pkg_dir = pixi.parent().unwrap();
             let releaserc = self.releaserc_json(pixi)?;
             std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
+            if multi {
+                let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
+                let empty = BTreeSet::new();
+                let deps: BTreeSet<String> = graph
+                    .path_deps
+                    .get(&pkg.name)
+                    .unwrap_or(&empty)
+                    .union(graph.pin_deps.get(&pkg.name).unwrap_or(&empty))
+                    .cloned()
+                    .collect();
+                std::fs::write(
+                    pkg_dir.join("package.json"),
+                    package_json_for(&pkg.name, &pkg.version, &deps),
+                )?;
+                workspace_globs.push(pkg_dir.to_string_lossy().into_owned());
+            }
+        }
+        if multi {
+            ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
         }
 
-        // Single-package mode (consumer passed --package, or there's only one
-        // package) → bare `semantic-release`. Multi-package mode → `multi-
-        // semantic-release` walks workspaces and runs each one independently.
-        let multi = self.package.is_none() && pixis.len() > 1;
         // In single-package mode `pixis` holds exactly the package being
         // released, so its name can be embedded literally in the tag format.
         let single_pkg = crate::commands::ci::pixi_meta::read(&pixis[0])?;
@@ -287,5 +339,40 @@ mod tests {
             verify_pos < bump_pos,
             "guard must run before the bump: {prepare}"
         );
+    }
+
+    #[test]
+    fn package_json_encodes_sibling_deps_for_msr_ordering() {
+        let mut deps = std::collections::BTreeSet::new();
+        deps.insert("geolocation".to_string());
+        let js = package_json_for("geolocation_node", "1.37.0", &deps);
+        let v: serde_json::Value = serde_json::from_str(&js).unwrap();
+        assert_eq!(v["name"], "geolocation_node");
+        assert_eq!(v["version"], "1.37.0");
+        assert_eq!(v["private"], true);
+        assert_eq!(v["dependencies"]["geolocation"], "*");
+    }
+
+    #[test]
+    fn ensure_root_workspaces_merges_into_existing_tooling_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("package.json");
+        std::fs::write(&root, r#"{"name":"mise-release-tooling","private":true}"#).unwrap();
+        ensure_root_workspaces(&root, &["packages/geolocation".into()]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
+        assert_eq!(v["name"], "mise-release-tooling"); // existing fields kept
+        assert_eq!(v["workspaces"][0], "packages/geolocation");
+    }
+
+    #[test]
+    fn ensure_root_workspaces_creates_minimal_json_when_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("package.json");
+        ensure_root_workspaces(&root, &["packages/a".into(), "packages/b".into()]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
+        assert_eq!(v["private"], true);
+        assert_eq!(v["workspaces"].as_array().unwrap().len(), 2);
     }
 }
