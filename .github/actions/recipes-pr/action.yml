@@ -93,7 +93,8 @@ runs:
             --package="$pkg_arg" \
             --package-dir="$PACKAGE_DIR" \
             --ros-distro="$ROS_DISTRO" \
-            --sha="$sha"
+            --sha="$sha" \
+            ${EXTRA_RECIPES_PR_ARGS:-}
           echo "::endgroup::"
           published=$((published+1))
         }
@@ -107,17 +108,25 @@ runs:
           tag="$(git tag --list "${globs[@]}" --sort=-v:refname | head -n1)"
           publish_one "${ONLY_PACKAGE:-$(basename "$PWD")}" "$tag" "$ONLY_PACKAGE"
         else
-          # Multi-package layout: packages/<pkg>/pixi.toml, <pkg>@<ver> tags.
+          # Multi-package layout: packages/<pkg>/{pixi.toml|package.xml}, <pkg>@<ver> tags.
           if [ -n "$ONLY_PACKAGE" ]; then
-            pkgs="$ONLY_PACKAGE"
+            # Explicit target: release exactly this package (may be a vendored
+            # package with no pixi.toml). No gate — a missing recipe is a user
+            # error the CLI reports loudly.
+            tag="$(git tag --list "${ONLY_PACKAGE}@*" --sort=-v:refname | head -n1)"
+            publish_one "$ONLY_PACKAGE" "$tag" "$ONLY_PACKAGE"
           else
-            pkgs="$(ls "$PACKAGE_DIR")"
+            # Sweep: every current ROS package (has package.xml — catches vendored
+            # packages like deepstream_extensions, drops junk/renamed dirs).
+            # --allow-missing-recipe lets a tagged non-conda package (launch/meta,
+            # e.g. perception_bringup) skip instead of failing the whole run.
+            EXTRA_RECIPES_PR_ARGS="--allow-missing-recipe"
+            for pkg in $(ls "$PACKAGE_DIR"); do
+              [ -f "$PACKAGE_DIR/$pkg/package.xml" ] || continue
+              tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
+              publish_one "$pkg" "$tag" "$pkg"
+            done
           fi
-          for pkg in $pkgs; do
-            [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || continue
-            tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
-            publish_one "$pkg" "$tag" "$pkg"
-          done
         fi
         echo "Published conda recipe PRs for $published package(s)."
 
