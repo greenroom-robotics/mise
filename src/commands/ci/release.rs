@@ -55,6 +55,10 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
 /// Per-workspace package.json synthesized at release time so the patched
 /// multi-semantic-release discovers packages and releases them in topological
 /// order of sibling deps. Never committed (repos don't track package.json).
+///
+/// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
+/// private workspace packages entirely (observed as "Queued 0 packages").
+/// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
 fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
     let deps_obj: serde_json::Map<String, serde_json::Value> = deps
         .iter()
@@ -63,7 +67,6 @@ fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> Strin
     serde_json::to_string_pretty(&serde_json::json!({
         "name": name,
         "version": version,
-        "private": true,
         "dependencies": deps_obj,
     }))
     .expect("static json")
@@ -361,7 +364,8 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&js).unwrap();
         assert_eq!(v["name"], "geolocation_node");
         assert_eq!(v["version"], "1.37.0");
-        assert_eq!(v["private"], true);
+        // NOT private: msr's ignorePrivate would skip the package outright.
+        assert_eq!(v.get("private"), None);
         assert_eq!(v["dependencies"]["geolocation"], "*");
     }
 
