@@ -128,6 +128,7 @@ impl BuildRecipes {
 use crate::process;
 use crate::repo::Repo;
 
+#[allow(clippy::too_many_arguments)]
 fn vinca(
     repo_root: Option<PathBuf>,
     channel_url: String,
