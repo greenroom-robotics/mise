@@ -220,6 +220,7 @@ fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
 }
 
 use anyhow::Context;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -643,8 +644,34 @@ fn push_unique(v: &mut Vec<String>, s: String) {
     }
 }
 
+/// Guard for `build_local_dep`'s recursion, factored out so it's testable
+/// without invoking pixi. `Ok(false)` means skip (already built this entry),
+/// `Ok(true)` means proceed, `Err` means a cycle was detected among the
+/// sibling path deps being built as local fallbacks.
+fn check_local_build_guard(
+    name: &str,
+    visiting: &[String],
+    local_built: &BTreeSet<String>,
+) -> anyhow::Result<bool> {
+    if visiting.iter().any(|v| v == name) {
+        anyhow::bail!(
+            "path-dep cycle among local fallback builds: {} -> {}",
+            visiting.join(" -> "),
+            name
+        );
+    }
+    if local_built.contains(name) {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 /// Build a path-dep sibling from the consumer's checkout into a local-only
 /// file channel. Recurses through the sibling's own path deps first.
+/// `local_built` and `visiting` are scoped per top-level entry (fresh at each
+/// call site in the main build loop): `local_built` dedupes a diamond
+/// dependency shared by two siblings, and `visiting` catches a cycle among
+/// path deps before it reaches pixi's solver.
 /// ponytail: duplicate build when the sibling lives in another matrix job;
 /// layered farm stages are the upgrade path if this gets slow in practice.
 fn build_local_dep(
@@ -652,14 +679,28 @@ fn build_local_dep(
     local_deps_dir: &Path,
     channel_url: &str,
     target_platform: TargetPlatform,
+    local_built: &mut BTreeSet<String>,
+    visiting: &mut Vec<String>,
 ) -> anyhow::Result<()> {
+    if !check_local_build_guard(&dep.name, visiting, local_built)? {
+        return Ok(());
+    }
     fs::create_dir_all(local_deps_dir)?;
+    visiting.push(dep.name.clone());
     let nested = resolve_path_deps(&dep.manifest)?;
     for n in &nested {
         if !version_published(&n.name, &n.version, channel_url, target_platform) {
-            build_local_dep(n, local_deps_dir, channel_url, target_platform)?;
+            build_local_dep(
+                n,
+                local_deps_dir,
+                channel_url,
+                target_platform,
+                local_built,
+                visiting,
+            )?;
         }
     }
+    visiting.pop();
     if !nested.is_empty() {
         prepend_channels(
             &dep.manifest,
@@ -679,6 +720,7 @@ fn build_local_dep(
             &target_platform.arch().to_string(),
         ],
     )?;
+    local_built.insert(dep.name.clone());
     Ok(())
 }
 
@@ -1246,6 +1288,8 @@ fn pixi(
         let local_deps_dir = tmp.path().join("local-deps");
         let resolved = resolve_path_deps(&manifest_path)?;
         let mut extra_channels: Vec<String> = Vec::new();
+        let mut local_built: BTreeSet<String> = BTreeSet::new();
+        let mut visiting: Vec<String> = Vec::new();
         for dep in &resolved {
             if built_this_job.contains(&dep.name) {
                 push_unique(
@@ -1258,7 +1302,14 @@ fn pixi(
                 // Fallback: build the sibling from this same checkout (correct
                 // rev by construction) into a local-only channel. Not drained;
                 // the sibling's own entry / linux-64 stays the canonical publisher.
-                build_local_dep(dep, &local_deps_dir, &channel_url, target_platform)?;
+                build_local_dep(
+                    dep,
+                    &local_deps_dir,
+                    &channel_url,
+                    target_platform,
+                    &mut local_built,
+                    &mut visiting,
+                )?;
                 push_unique(
                     &mut extra_channels,
                     format!("file://{}", local_deps_dir.display()),
@@ -1915,6 +1966,26 @@ ci = "test"
             text.contains("ros-kilted-rclpy"),
             "externals untouched: {text}"
         );
+    }
+
+    #[test]
+    fn check_local_build_guard_detects_cycle() {
+        let visiting = vec!["a".to_string(), "b".to_string()];
+        let local_built = BTreeSet::new();
+        let err = check_local_build_guard("a", &visiting, &local_built).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cycle"), "message: {msg}");
+        assert!(msg.contains("a -> b -> a"), "message: {msg}");
+    }
+
+    #[test]
+    fn check_local_build_guard_skips_already_built() {
+        let visiting: Vec<String> = Vec::new();
+        let mut local_built = BTreeSet::new();
+        local_built.insert("lib".to_string());
+        assert!(!check_local_build_guard("lib", &visiting, &local_built).unwrap());
+        // Not yet built and not visiting: proceed.
+        assert!(check_local_build_guard("other", &visiting, &local_built).unwrap());
     }
 
     #[test]
