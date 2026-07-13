@@ -56,6 +56,12 @@ impl RecipesPr {
                 let mut out = Vec::new();
                 for pixi in &pixis {
                     let pkg = pixi_meta::read(pixi)?;
+                    // Path from the source-repo root to the dir holding this
+                    // package's pixi.toml. "" or "." means the package sits at
+                    // the repo root. recipes-pr runs at the source repo root
+                    // (cwd); when --package-dir was passed as an absolute path
+                    // the discovered pixi path is also absolute, so strip the
+                    // cwd to keep the subdir repo-root-relative.
                     let parent = pixi
                         .parent()
                         .map(|p| {
@@ -133,6 +139,13 @@ impl RecipesPr {
             )?;
             changed.insert(applied.path);
             old_refs.extend(applied.old_ref);
+        }
+
+        // Every target was skipped (sweep tolerating packages with no conda
+        // recipe) — there's nothing to commit, so don't try to open a PR.
+        if changed.is_empty() {
+            println!("no recipe changes to publish; nothing to do");
+            return Ok(());
         }
 
         // 6. Commit + push + open PR.
