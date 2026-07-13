@@ -116,19 +116,23 @@ runs:
             tag="$(git tag --list "${ONLY_PACKAGE}@*" --sort=-v:refname | head -n1)"
             publish_one "$ONLY_PACKAGE" "$tag" "$ONLY_PACKAGE"
           else
-            # Sweep: every current ROS package (has package.xml — catches vendored
-            # packages like deepstream_extensions, drops junk/renamed dirs).
+            # Sweep: every current package (has pixi.toml or package.xml — the
+            # latter catches vendored ROS packages like deepstream_extensions,
+            # drops junk/renamed dirs).
             # --allow-missing-recipe lets a tagged non-conda package (launch/meta,
             # e.g. perception_bringup) skip instead of failing the whole run.
             EXTRA_RECIPES_PR_ARGS="--allow-missing-recipe"
             for pkg in $(ls "$PACKAGE_DIR"); do
-              [ -f "$PACKAGE_DIR/$pkg/package.xml" ] || continue
+              # A real package has a pixi.toml (pixi-native) or a package.xml
+              # (ROS, incl. vendored packages like deepstream_extensions with no
+              # pixi.toml). Union keeps both; junk/renamed dirs (neither) drop.
+              { [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || [ -f "$PACKAGE_DIR/$pkg/package.xml" ]; } || continue
               tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
               publish_one "$pkg" "$tag" "$pkg"
             done
           fi
         fi
-        echo "Published conda recipe PRs for $published package(s)."
+        echo "Processed $published package(s) for conda recipe PRs."
 
     - if: always()
       uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
