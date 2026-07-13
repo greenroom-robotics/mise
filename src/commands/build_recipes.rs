@@ -1325,6 +1325,12 @@ fn pixi(
                 // Fallback: build the sibling from this same checkout (correct
                 // rev by construction) into a local-only channel. Not drained;
                 // the sibling's own entry / linux-64 stays the canonical publisher.
+                tracing::info!(
+                    "entry {}: sibling {} =={} not in channel and not built this job; fallback local build",
+                    entry.name,
+                    dep.name,
+                    dep.version,
+                );
                 build_local_dep(
                     dep,
                     &local_deps_dir,
