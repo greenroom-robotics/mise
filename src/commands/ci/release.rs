@@ -69,6 +69,17 @@ fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> Strin
     .expect("static json")
 }
 
+/// Convert an absolute path to a relative path from cwd if possible;
+/// otherwise return the path unchanged. Workspace globs in package.json
+/// must be cwd-relative for npm/yarn/msr discovery to work correctly.
+fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| p.strip_prefix(&cwd).ok())
+        .map(|r| r.to_owned())
+        .unwrap_or_else(|| p.to_owned())
+}
+
 /// Merge a `workspaces` array into the root package.json (staged by the
 /// release action), creating a minimal one for standalone/local runs.
 fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
@@ -119,7 +130,8 @@ impl Release {
                     pkg_dir.join("package.json"),
                     package_json_for(&pkg.name, &pkg.version, &deps),
                 )?;
-                workspace_globs.push(pkg_dir.to_string_lossy().into_owned());
+                let rel_pkg_dir = cwd_relative(pkg_dir);
+                workspace_globs.push(rel_pkg_dir.to_string_lossy().into_owned());
             }
         }
         if multi {
@@ -374,5 +386,19 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
         assert_eq!(v["private"], true);
         assert_eq!(v["workspaces"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn workspace_globs_are_cwd_relative() {
+        // Test absolute path under cwd becomes relative
+        let cwd = std::env::current_dir().unwrap();
+        let abs_path = cwd.join("packages/x");
+        let rel = cwd_relative(&abs_path);
+        assert_eq!(rel, std::path::PathBuf::from("packages/x"));
+
+        // Test relative path is unchanged
+        let rel_path = std::path::PathBuf::from("packages/y");
+        let result = cwd_relative(&rel_path);
+        assert_eq!(result, rel_path);
     }
 }
