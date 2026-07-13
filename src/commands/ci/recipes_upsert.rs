@@ -331,6 +331,22 @@ pub(crate) struct Applied {
     pub old_ref: Option<OldRef>,
 }
 
+/// Locate a hand-authored vendored recipe for `package`, tolerating the
+/// underscore→hyphen convention gap (ROS/tag names use `_`; conda recipe dirs
+/// use `-`). Returns the repo-relative path to the first existing recipe,
+/// trying `package` verbatim then its hyphenated form. `None` if neither exists.
+pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &str) -> Option<PathBuf> {
+    let mut candidates = vec![package.to_string()];
+    let hyphenated = package.replace('_', "-");
+    if hyphenated != package {
+        candidates.push(hyphenated);
+    }
+    candidates.into_iter().find_map(|name| {
+        let rel = Path::new("vendor_recipes").join(&name).join("recipe.yaml");
+        recipes_root.join(&rel).exists().then_some(rel)
+    })
+}
+
 /// Apply a release for one package to the cloned recipes repo.
 ///
 /// Routing (first match wins):
@@ -351,12 +367,9 @@ pub(crate) fn apply_release(
     sha: &str,
     subdir: Option<&str>,
 ) -> anyhow::Result<Applied> {
-    // 1. Vendored.
-    let vendored_rel = Path::new("vendor_recipes")
-        .join(package)
-        .join("recipe.yaml");
-    let vendored_abs = recipes_root.join(&vendored_rel);
-    if vendored_abs.exists() {
+    // 1. Vendored (name-convention tolerant: `_` ROS name -> `-` recipe dir).
+    if let Some(vendored_rel) = vendored_recipe_path(recipes_root, package) {
+        let vendored_abs = recipes_root.join(&vendored_rel);
         let text = std::fs::read_to_string(&vendored_abs)
             .with_context(|| format!("reading {}", vendored_abs.display()))?;
         let old_ref = field_in_section(&text, "source", "rev").map(OldRef::Rev);
@@ -997,5 +1010,37 @@ packages:
         )
         .unwrap_err();
         assert!(err.to_string().contains("pixi_native_packages.yaml"));
+    }
+
+    #[test]
+    fn apply_release_resolves_hyphenated_vendored_dir() {
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        write(
+            root,
+            "vendor_recipes/deepstream-extensions/recipe.yaml",
+            "package:\n  name: deepstream-extensions\n  version: 1.0.1\n\nsource:\n  git: https://github.com/example/pp.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 0\n",
+        );
+        // Called with the underscore ROS/tag name; must resolve the hyphen dir.
+        let applied = apply_release(
+            root,
+            "deepstream_extensions",
+            "https://github.com/example/pp.git",
+            "v1.1.0",
+            "1.1.0",
+            "1111111111111111111111111111111111111111",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            applied.path,
+            std::path::Path::new("vendor_recipes/deepstream-extensions/recipe.yaml")
+        );
+        let out =
+            std::fs::read_to_string(root.join("vendor_recipes/deepstream-extensions/recipe.yaml"))
+                .unwrap();
+        assert!(out.contains("version: 1.1.0"));
+        assert!(out.contains("rev: 1111111111111111111111111111111111111111"));
+        assert!(out.contains("number: 0"));
     }
 }

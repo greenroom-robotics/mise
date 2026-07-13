@@ -23,22 +23,64 @@ pub struct RecipesPr {
     /// Tagged commit SHA (matches ${nextRelease.gitHead}). Used as source.rev for vendored recipes.
     #[arg(long)]
     pub sha: String,
+    /// In a sweep (set by the action when no explicit package is requested), a
+    /// name with no monorepo pixi.toml and no vendored recipe is a non-conda
+    /// package (e.g. a launch/meta package) — skip it instead of erroring.
+    /// Omitted for explicit single-package releases so a typo still fails loudly.
+    #[arg(long)]
+    pub allow_missing_recipe: bool,
 }
 
 impl RecipesPr {
     pub fn run(self) -> anyhow::Result<()> {
         use crate::commands::ci::{packages, pixi_meta, recipes_upsert};
 
-        // 1. Resolve which packages we're upserting and read each one's name.
-        //    semantic-release always invokes us with a known version; in
-        //    single-package mode --package is set; in multi-package mode the
-        //    plugin's cwd is the package being released, so --package may also
-        //    be set there. If --package is empty we upsert every package in
-        //    --package-dir at the same version (matches platform_cli's behavior).
-        let pixis = packages::discover(&self.package_dir, self.package.as_deref())?;
-        if pixis.is_empty() {
-            anyhow::bail!("no packages found under {}", self.package_dir.display());
-        }
+        // 1. Resolve which package(s) we're upserting. semantic-release always
+        //    invokes us with a known version; in single-package mode --package
+        //    is set; in multi-package mode the plugin's cwd is the package
+        //    being released, so --package may also be set there. If --package
+        //    is empty we upsert every package in --package-dir at the same
+        //    version (matches platform_cli's behavior). A `--package` naming
+        //    something with no monorepo pixi.toml (and no root manifest) is a
+        //    vendored monorepo package — its conda artifact is built from a
+        //    hand-authored vendor_recipes/<name>/recipe.yaml, so there's
+        //    nothing to discover.
+        let mode = release_target(&self.package_dir, self.package.as_deref());
+        let targets: Vec<(String, Option<String>)> = match &mode {
+            ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
+            ReleaseTarget::Discovered => {
+                let pixis = packages::discover(&self.package_dir, self.package.as_deref())?;
+                if pixis.is_empty() {
+                    anyhow::bail!("no packages found under {}", self.package_dir.display());
+                }
+                let mut out = Vec::new();
+                for pixi in &pixis {
+                    let pkg = pixi_meta::read(pixi)?;
+                    // Path from the source-repo root to the dir holding this
+                    // package's pixi.toml. "" or "." means the package sits at
+                    // the repo root. recipes-pr runs at the source repo root
+                    // (cwd); when --package-dir was passed as an absolute path
+                    // the discovered pixi path is also absolute, so strip the
+                    // cwd to keep the subdir repo-root-relative.
+                    let parent = pixi
+                        .parent()
+                        .map(|p| {
+                            let rel = std::env::current_dir()
+                                .ok()
+                                .and_then(|cwd| p.strip_prefix(&cwd).ok().map(|r| r.to_owned()))
+                                .unwrap_or_else(|| p.to_owned());
+                            rel.to_string_lossy().into_owned()
+                        })
+                        .unwrap_or_default();
+                    let subdir = match parent.as_str() {
+                        "" | "." => None,
+                        s => Some(s.to_string()),
+                    };
+                    out.push((pkg.name, subdir));
+                }
+                out
+            }
+        };
 
         // 2. Identify the source repo from the current git remote.
         let src_url = source_repo_https_url()?;
@@ -69,38 +111,41 @@ impl RecipesPr {
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
         // The refs each package was pinned to before this release, for a diff link.
         let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
-        for pixi in &pixis {
-            let pkg = pixi_meta::read(pixi)?;
-            // Path from the source-repo root to the dir holding this package's
-            // pixi.toml. "" or "." means the package sits at the repo root.
-            // recipes-pr runs at the source repo root (cwd); when --package-dir
-            // was passed as an absolute path the discovered pixi path is also
-            // absolute, so strip the cwd to keep the subdir repo-root-relative.
-            let parent = pixi
-                .parent()
-                .map(|p| {
-                    let rel = std::env::current_dir()
-                        .ok()
-                        .and_then(|cwd| p.strip_prefix(&cwd).ok().map(|r| r.to_owned()))
-                        .unwrap_or_else(|| p.to_owned());
-                    rel.to_string_lossy().into_owned()
-                })
-                .unwrap_or_default();
-            let subdir = match parent.as_str() {
-                "" | "." => None,
-                s => Some(s),
-            };
+        for (name, subdir) in &targets {
+            // A vendored-by-name target with no recipe would otherwise fall
+            // through apply_release to a spurious pixi-native entry. Decide
+            // skip-vs-error based on whether this is a tolerant sweep.
+            let has_recipe = recipes_upsert::vendored_recipe_path(&recipes_root, name).is_some();
+            match recipe_action(&mode, has_recipe, self.allow_missing_recipe) {
+                RecipeAction::Skip => {
+                    println!("skipping {name}: no monorepo pixi.toml and no vendored recipe");
+                    continue;
+                }
+                RecipeAction::Error => anyhow::bail!(
+                    "package {name} has no monorepo pixi.toml and no vendored recipe \
+                     (vendor_recipes/{name}/recipe.yaml or its hyphenated form) in {}",
+                    self.recipes_repo
+                ),
+                RecipeAction::Apply => {}
+            }
             let applied = recipes_upsert::apply_release(
                 &recipes_root,
-                &pkg.name,
+                name,
                 &src_url,
                 &tag,
                 &self.version,
                 &self.sha,
-                subdir,
+                subdir.as_deref(),
             )?;
             changed.insert(applied.path);
             old_refs.extend(applied.old_ref);
+        }
+
+        // Every target was skipped (sweep tolerating packages with no conda
+        // recipe) — there's nothing to commit, so don't try to open a PR.
+        if changed.is_empty() {
+            println!("no recipe changes to publish; nothing to do");
+            return Ok(());
         }
 
         // 6. Commit + push + open PR.
@@ -196,6 +241,55 @@ fn release_title(src_short: &str, package: Option<&str>, tag: &str) -> String {
     match package {
         Some(pkg) if pkg != src_short => format!("release: {src_short}/{pkg} {tag}"),
         _ => format!("release: {src_short} {tag}"),
+    }
+}
+
+/// How `recipes-pr` sources the package(s) to release.
+#[derive(Debug, PartialEq, Eq)]
+enum ReleaseTarget {
+    /// Discover pixi packages under `--package-dir` (existing behavior).
+    Discovered,
+    /// A single package named by `--package` that has no monorepo pixi.toml;
+    /// its conda artifact is built from a hand-authored vendored recipe
+    /// (e.g. deepstream_extensions).
+    VendoredByName(String),
+}
+
+/// Choose the release target. A `--package` with neither a per-package
+/// `<dir>/<pkg>/pixi.toml` nor a root `<dir>/pixi.toml` is a vendored monorepo
+/// package; everything else discovers as before.
+fn release_target(package_dir: &std::path::Path, package: Option<&str>) -> ReleaseTarget {
+    match package {
+        Some(pkg)
+            if !package_dir.join(pkg).join("pixi.toml").exists()
+                && !package_dir.join("pixi.toml").exists() =>
+        {
+            ReleaseTarget::VendoredByName(pkg.to_string())
+        }
+        _ => ReleaseTarget::Discovered,
+    }
+}
+
+/// What to do with a resolved target once we know whether a vendored recipe
+/// exists for it. Only a `VendoredByName` with no recipe is special: skip it in
+/// a tolerant sweep (`allow_missing`), else fail loudly (explicit target).
+#[derive(Debug, PartialEq, Eq)]
+enum RecipeAction {
+    Apply,
+    Skip,
+    Error,
+}
+
+fn recipe_action(mode: &ReleaseTarget, has_recipe: bool, allow_missing: bool) -> RecipeAction {
+    match mode {
+        ReleaseTarget::VendoredByName(_) if !has_recipe => {
+            if allow_missing {
+                RecipeAction::Skip
+            } else {
+                RecipeAction::Error
+            }
+        }
+        _ => RecipeAction::Apply,
     }
 }
 
@@ -376,6 +470,90 @@ fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_target_vendored_when_no_manifest() {
+        let td = tempfile::TempDir::new().unwrap();
+        let pkgs = td.path().join("packages");
+        std::fs::create_dir_all(&pkgs).unwrap();
+        // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
+        assert_eq!(
+            release_target(&pkgs, Some("deepstream_extensions")),
+            ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
+        );
+    }
+
+    #[test]
+    fn release_target_discovered_when_per_package_manifest_exists() {
+        let td = tempfile::TempDir::new().unwrap();
+        let pkgs = td.path().join("packages");
+        std::fs::create_dir_all(pkgs.join("object_tracker")).unwrap();
+        std::fs::write(
+            pkgs.join("object_tracker/pixi.toml"),
+            "[package]\nname = \"object_tracker\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            release_target(&pkgs, Some("object_tracker")),
+            ReleaseTarget::Discovered
+        );
+    }
+
+    #[test]
+    fn release_target_discovered_for_root_package_repo() {
+        let td = tempfile::TempDir::new().unwrap();
+        let root = td.path();
+        std::fs::write(
+            root.join("pixi.toml"),
+            "[package]\nname = \"mise\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            release_target(root, Some("mise")),
+            ReleaseTarget::Discovered
+        );
+    }
+
+    #[test]
+    fn release_target_discovered_when_no_package_filter() {
+        let td = tempfile::TempDir::new().unwrap();
+        assert_eq!(release_target(td.path(), None), ReleaseTarget::Discovered);
+    }
+
+    #[test]
+    fn recipe_action_applies_for_discovered() {
+        // Discovered packages always apply, regardless of has_recipe/allow.
+        assert_eq!(
+            recipe_action(&ReleaseTarget::Discovered, false, false),
+            RecipeAction::Apply
+        );
+    }
+
+    #[test]
+    fn recipe_action_applies_for_vendored_with_recipe() {
+        assert_eq!(
+            recipe_action(&ReleaseTarget::VendoredByName("x".into()), true, false),
+            RecipeAction::Apply
+        );
+    }
+
+    #[test]
+    fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
+        // No recipe + not allowed to miss (explicit target) -> loud error.
+        assert_eq!(
+            recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, false),
+            RecipeAction::Error
+        );
+    }
+
+    #[test]
+    fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
+        // No recipe + allowed to miss (sweep) -> skip quietly.
+        assert_eq!(
+            recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, true),
+            RecipeAction::Skip
+        );
+    }
 
     // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
     // label — `--label automerge` only attaches a literal label and the PR
