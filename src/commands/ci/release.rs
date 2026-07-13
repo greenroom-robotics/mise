@@ -118,8 +118,10 @@ impl Release {
         let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
 
         let mut prepare_cmd = format!(
-            "mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={}",
-            pixi.display()
+            "mise ci verify-siblings --pixi-toml={pixi} --package-dir={pkgdir} && \
+             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi}",
+            pixi = pixi.display(),
+            pkgdir = self.package_dir.display(),
         );
         if let Some(extra) = &self.extra_prepare_cmd {
             prepare_cmd.push_str(" && ");
@@ -257,5 +259,33 @@ mod tests {
         assert!(assets.iter().any(|a| a == "**/pixi.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.lock"));
+    }
+
+    #[test]
+    fn prepare_cmd_runs_verify_siblings_before_bump() {
+        let dir = std::env::temp_dir().join("mise-release-verify-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let prepare = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/exec")
+            .unwrap()[1]["prepareCmd"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let verify_pos = prepare
+            .find("verify-siblings")
+            .expect("verify-siblings present");
+        let bump_pos = prepare.find("bump-pixi").unwrap();
+        assert!(
+            verify_pos < bump_pos,
+            "guard must run before the bump: {prepare}"
+        );
     }
 }
