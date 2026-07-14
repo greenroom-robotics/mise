@@ -7,8 +7,10 @@ pub mod pixi_meta;
 pub mod recipes_pr;
 pub mod recipes_upsert;
 pub mod release;
+pub mod siblings;
 pub mod sync_cargo;
 pub mod test;
+pub mod verify_siblings;
 
 use build::Build;
 use bump_pixi::BumpPixi;
@@ -16,6 +18,7 @@ use recipes_pr::RecipesPr;
 use release::Release;
 use sync_cargo::SyncCargo;
 use test::Test;
+use verify_siblings::VerifySiblings;
 
 #[derive(Subcommand, Debug)]
 pub enum Ci {
@@ -31,6 +34,8 @@ pub enum Ci {
     RecipesPr(RecipesPr),
     /// mise-specific prepare callback to sync Cargo.toml/Cargo.lock to the released version. Not for direct use.
     SyncCargo(SyncCargo),
+    /// Callback invoked by semantic-release prepare hook to check sibling path deps against their release tags. Not for direct use.
+    VerifySiblings(VerifySiblings),
 }
 
 impl Ci {
@@ -42,6 +47,7 @@ impl Ci {
             Ci::BumpPixi(c) => c.run(),
             Ci::RecipesPr(c) => c.run(),
             Ci::SyncCargo(c) => c.run(),
+            Ci::VerifySiblings(c) => c.run(),
         }
     }
 }

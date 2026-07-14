@@ -1,4 +1,5 @@
 use clap::Args;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
@@ -51,6 +52,64 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
     }
 }
 
+/// Per-workspace package.json synthesized at release time so the patched
+/// multi-semantic-release discovers packages and releases them in topological
+/// order of sibling deps. Never committed (repos don't track package.json).
+///
+/// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
+/// private workspace packages entirely (observed as "Queued 0 packages").
+/// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
+fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
+    let deps_obj: serde_json::Map<String, serde_json::Value> = deps
+        .iter()
+        .map(|d| (d.clone(), serde_json::Value::String("*".into())))
+        .collect();
+    serde_json::to_string_pretty(&serde_json::json!({
+        "name": name,
+        "version": version,
+        "dependencies": deps_obj,
+    }))
+    .expect("static json")
+}
+
+/// Absolutize a path against cwd. multi-semantic-release runs each package's
+/// semantic-release — and therefore the exec plugin's shell commands — with
+/// cwd = the package directory, so paths embedded in prepareCmd/publishCmd
+/// must be absolute to survive.
+fn absolute(p: &std::path::Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| p.to_owned())
+    }
+}
+
+/// Convert an absolute path to a relative path from cwd if possible;
+/// otherwise return the path unchanged. Workspace globs in package.json
+/// must be cwd-relative for npm/yarn/msr discovery to work correctly.
+fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| p.strip_prefix(&cwd).ok())
+        .map(|r| r.to_owned())
+        .unwrap_or_else(|| p.to_owned())
+}
+
+/// Merge a `workspaces` array into the root package.json (staged by the
+/// release action), creating a minimal one for standalone/local runs.
+fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
+    let mut v: serde_json::Value = if root_pkg_json.exists() {
+        serde_json::from_str(&std::fs::read_to_string(root_pkg_json)?)?
+    } else {
+        serde_json::json!({ "name": "mise-release-root", "private": true })
+    };
+    v["workspaces"] = serde_json::json!(globs);
+    std::fs::write(root_pkg_json, serde_json::to_string_pretty(&v)?)?;
+    Ok(())
+}
+
 impl Release {
     pub fn run(self) -> anyhow::Result<()> {
         use crate::commands::ci::packages;
@@ -60,20 +119,42 @@ impl Release {
         if pixis.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
+        let multi = self.package.is_none() && pixis.len() > 1;
 
-        // Write a .releaserc next to each package's pixi.toml. semantic-release
-        // (and multi-semantic-release) discover them via the per-package
-        // workspaces declared in the root package.json.
+        // Sibling graph: drives msr's topological release order (multi mode)
+        // via synthesized package.json files. Both dep kinds order; only path
+        // deps are guarded (verify-siblings).
+        let graph = crate::commands::ci::siblings::analyze(&pixis)?;
+
+        // Write a .releaserc (and, in multi mode, a package.json encoding
+        // sibling deps) next to each package's pixi.toml.
+        let mut workspace_globs: Vec<String> = Vec::new();
         for pixi in &pixis {
             let pkg_dir = pixi.parent().unwrap();
             let releaserc = self.releaserc_json(pixi)?;
             std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
+            if multi {
+                let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
+                let empty = BTreeSet::new();
+                let deps: BTreeSet<String> = graph
+                    .path_deps
+                    .get(&pkg.name)
+                    .unwrap_or(&empty)
+                    .union(graph.pin_deps.get(&pkg.name).unwrap_or(&empty))
+                    .cloned()
+                    .collect();
+                std::fs::write(
+                    pkg_dir.join("package.json"),
+                    package_json_for(&pkg.name, &pkg.version, &deps),
+                )?;
+                let rel_pkg_dir = cwd_relative(pkg_dir);
+                workspace_globs.push(rel_pkg_dir.to_string_lossy().into_owned());
+            }
+        }
+        if multi {
+            ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
         }
 
-        // Single-package mode (consumer passed --package, or there's only one
-        // package) → bare `semantic-release`. Multi-package mode → `multi-
-        // semantic-release` walks workspaces and runs each one independently.
-        let multi = self.package.is_none() && pixis.len() > 1;
         // In single-package mode `pixis` holds exactly the package being
         // released, so its name can be embedded literally in the tag format.
         let single_pkg = crate::commands::ci::pixi_meta::read(&pixis[0])?;
@@ -117,9 +198,13 @@ impl Release {
         // context env vars at runtime.
         let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
 
+        let abs_pixi = absolute(pixi);
+        let abs_pkgdir = absolute(&self.package_dir);
         let mut prepare_cmd = format!(
-            "mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={}",
-            pixi.display()
+            "mise ci verify-siblings --pixi-toml={pixi} --package-dir={pkgdir} && \
+             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi}",
+            pixi = abs_pixi.display(),
+            pkgdir = abs_pkgdir.display(),
         );
         if let Some(extra) = &self.extra_prepare_cmd {
             prepare_cmd.push_str(" && ");
@@ -129,7 +214,7 @@ impl Release {
         let publish_cmd = format!(
             "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={} --sha=${{nextRelease.gitHead}}",
             self.recipes_repo,
-            self.package_dir.display(),
+            abs_pkgdir.display(),
             self.ros_distro,
             pkg.name,
         );
@@ -150,18 +235,19 @@ impl Release {
                 { "assets": [], "successComment": false }
             ]));
         }
-        if self.changelog || !self.extra_git_asset.is_empty() {
-            let mut assets: Vec<String> = Vec::new();
-            if self.changelog {
-                assets.push("CHANGELOG.md".to_string());
-            }
-            assets.push("**/pixi.toml".to_string());
-            assets.extend(self.extra_git_asset.iter().cloned());
-            plugins.push(serde_json::json!([
-                "@semantic-release/git",
-                { "assets": assets }
-            ]));
+        // The git plugin is unconditional: the farm reads versions and derived
+        // pins from pixi.toml at the tagged rev, so the bump must always be
+        // committed. --changelog only controls the CHANGELOG.md asset.
+        let mut assets: Vec<String> = Vec::new();
+        if self.changelog {
+            assets.push("CHANGELOG.md".to_string());
         }
+        assets.push("**/pixi.toml".to_string());
+        assets.extend(self.extra_git_asset.iter().cloned());
+        plugins.push(serde_json::json!([
+            "@semantic-release/git",
+            { "assets": assets }
+        ]));
 
         let releaserc = serde_json::json!({
             "branches": branches,
@@ -257,5 +343,135 @@ mod tests {
         assert!(assets.iter().any(|a| a == "**/pixi.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.lock"));
+    }
+
+    // msr runs each package's semantic-release (and thus the exec plugin's
+    // commands) with cwd = the package directory, so any relative path in
+    // prepareCmd/publishCmd resolves against the wrong directory.
+    // The farm derives versions and pins from pixi.toml at the tagged rev, so
+    // the bump MUST be committed even with --changelog false — otherwise the
+    // tag lands on a rev whose manifest still carries the old version.
+    #[test]
+    fn pixi_toml_is_always_a_release_asset() {
+        let dir = std::env::temp_dir().join("mise-release-asset-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x", "--changelog", "false"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let git = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/git")
+            .expect("git plugin present even with changelog=false");
+        let assets = git[1]["assets"].as_array().unwrap();
+        assert!(assets.iter().any(|a| a == "**/pixi.toml"));
+        assert!(!assets.iter().any(|a| a == "CHANGELOG.md"));
+    }
+
+    #[test]
+    fn exec_cmd_paths_are_absolute() {
+        let dir = std::env::temp_dir().join("mise-release-abs-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x", "--package-dir", "packages"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let exec = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/exec")
+            .unwrap()[1]
+            .clone();
+        for key in ["prepareCmd", "publishCmd"] {
+            let cmd = exec[key].as_str().unwrap();
+            assert!(
+                !cmd.contains("--package-dir=packages"),
+                "{key} must not contain cwd-relative paths: {cmd}"
+            );
+            assert!(cmd.contains("--package-dir=/"), "{key} absolute: {cmd}");
+        }
+    }
+
+    #[test]
+    fn prepare_cmd_runs_verify_siblings_before_bump() {
+        let dir = std::env::temp_dir().join("mise-release-verify-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let prepare = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/exec")
+            .unwrap()[1]["prepareCmd"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let verify_pos = prepare
+            .find("verify-siblings")
+            .expect("verify-siblings present");
+        let bump_pos = prepare.find("bump-pixi").unwrap();
+        assert!(
+            verify_pos < bump_pos,
+            "guard must run before the bump: {prepare}"
+        );
+    }
+
+    #[test]
+    fn package_json_encodes_sibling_deps_for_msr_ordering() {
+        let mut deps = std::collections::BTreeSet::new();
+        deps.insert("geolocation".to_string());
+        let js = package_json_for("geolocation_node", "1.37.0", &deps);
+        let v: serde_json::Value = serde_json::from_str(&js).unwrap();
+        assert_eq!(v["name"], "geolocation_node");
+        assert_eq!(v["version"], "1.37.0");
+        // NOT private: msr's ignorePrivate would skip the package outright.
+        assert_eq!(v.get("private"), None);
+        assert_eq!(v["dependencies"]["geolocation"], "*");
+    }
+
+    #[test]
+    fn ensure_root_workspaces_merges_into_existing_tooling_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("package.json");
+        std::fs::write(&root, r#"{"name":"mise-release-tooling","private":true}"#).unwrap();
+        ensure_root_workspaces(&root, &["packages/geolocation".into()]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
+        assert_eq!(v["name"], "mise-release-tooling"); // existing fields kept
+        assert_eq!(v["workspaces"][0], "packages/geolocation");
+    }
+
+    #[test]
+    fn ensure_root_workspaces_creates_minimal_json_when_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().join("package.json");
+        ensure_root_workspaces(&root, &["packages/a".into(), "packages/b".into()]).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
+        assert_eq!(v["private"], true);
+        assert_eq!(v["workspaces"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn workspace_globs_are_cwd_relative() {
+        // Test absolute path under cwd becomes relative
+        let cwd = std::env::current_dir().unwrap();
+        let abs_path = cwd.join("packages/x");
+        let rel = cwd_relative(&abs_path);
+        assert_eq!(rel, std::path::PathBuf::from("packages/x"));
+
+        // Test relative path is unchanged
+        let rel_path = std::path::PathBuf::from("packages/y");
+        let result = cwd_relative(&rel_path);
+        assert_eq!(result, rel_path);
     }
 }

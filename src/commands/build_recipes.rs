@@ -220,6 +220,7 @@ fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
 }
 
 use anyhow::Context;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -406,6 +407,8 @@ pub(crate) struct UpstreamPixiToml {
     pub package: UpstreamPackage,
     #[serde(default)]
     pub workspace: Option<UpstreamWorkspace>,
+    #[serde(default)]
+    dependencies: Option<toml::value::Table>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -414,6 +417,12 @@ pub(crate) struct UpstreamPackage {
     pub version: String,
     #[serde(default)]
     pub build: Option<UpstreamBuild>,
+    #[serde(default, rename = "run-dependencies")]
+    run_dependencies: Option<toml::value::Table>,
+    #[serde(default, rename = "host-dependencies")]
+    host_dependencies: Option<toml::value::Table>,
+    #[serde(default, rename = "build-dependencies")]
+    build_dependencies: Option<toml::value::Table>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -494,6 +503,318 @@ impl UpstreamPixiToml {
         let target_str = target.arch().to_string();
         ws.platforms.iter().any(|p| p == &target_str)
     }
+
+    /// Relative `path =` values from all dependency tables, excluding the
+    /// self-as-workspace-member idiom (`path = "."`).
+    pub fn path_dep_rel_paths(&self) -> Vec<String> {
+        let tables = [
+            self.dependencies.as_ref(),
+            self.package.run_dependencies.as_ref(),
+            self.package.host_dependencies.as_ref(),
+            self.package.build_dependencies.as_ref(),
+        ];
+        let mut out = Vec::new();
+        for table in tables.into_iter().flatten() {
+            for value in table.values() {
+                if let Some(p) = value.get("path").and_then(|p| p.as_str())
+                    && p != "."
+                {
+                    out.push(p.to_string());
+                }
+            }
+        }
+        out
+    }
+}
+
+/// A sibling package whose `path =` dep was rewritten to a derived `==version`
+/// pin in the temp checkout.
+#[derive(Debug)]
+pub struct ResolvedDep {
+    /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
+    /// This is the channel artifact name, which is what `version_published` /
+    /// `built_this_job` / the local-build guard key off of. It is NOT
+    /// necessarily the sibling's `package.name` — in package-xml mode the
+    /// sibling manifest may have no `package.name` at all, and even when it
+    /// does, the published artifact is prefixed/transformed relative to it.
+    /// The dep key is guaranteed correct because the consumer's manifest can
+    /// only solve against the real channel name.
+    pub name: String,
+    pub version: String,
+    /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
+    pub manifest: PathBuf,
+}
+
+/// Rewrite `path =` deps in a single table-like section (e.g. `[dependencies]`
+/// or `[package.run-dependencies]`) to `"==<version>"`, skipping the
+/// self-as-workspace-member idiom (`path = "."`). Lifted out of
+/// `resolve_path_deps` as a free fn because the closure form fights the
+/// borrow checker across the `doc.get_mut` calls.
+fn visit_table(
+    table: &mut dyn toml_edit::TableLike,
+    manifest_dir: &Path,
+    resolved: &mut Vec<ResolvedDep>,
+) -> anyhow::Result<()> {
+    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for key in keys {
+        let Some(item) = table.get(&key) else {
+            continue;
+        };
+        let Some(path) = item
+            .as_table_like()
+            .and_then(|t| t.get("path"))
+            .and_then(|p| p.as_str())
+        else {
+            continue;
+        };
+        if path == "." {
+            continue;
+        }
+        let sib_manifest = manifest_dir.join(path).join("pixi.toml");
+        let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
+            format!(
+                "path dep {key}: no pixi.toml at {} in checkout",
+                sib_manifest.display()
+            )
+        })?;
+        // Only `package.version` is read from the sibling manifest: the
+        // dependency key (not the sibling's `package.name`, which may not
+        // even exist in package-xml mode) is the channel artifact name.
+        let sib_doc: toml::Value = toml::from_str(&sib_text)
+            .with_context(|| format!("parse sibling manifest for {key}"))?;
+        let version = sib_doc
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str())
+            .with_context(|| {
+                format!(
+                    "path dep {key}: sibling manifest {} has no package.version",
+                    sib_manifest.display()
+                )
+            })?
+            .to_string();
+        table.insert(&key, toml_edit::value(format!("=={version}")));
+        resolved.push(ResolvedDep {
+            name: key.clone(),
+            version,
+            manifest: sib_manifest,
+        });
+    }
+    Ok(())
+}
+
+/// Rewrite every non-self `path =` dep in the temp-checkout manifest to
+/// `"==<version>"`, reading the version from the sibling manifest at the same
+/// rev. The derived pin is deterministic: same rev -> same sibling manifest
+/// -> same pin. Committed manifests are never touched.
+fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
+    let manifest_dir = manifest_path.parent().unwrap();
+    let text = fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+
+    let mut resolved = Vec::new();
+
+    if let Some(table) = doc
+        .get_mut("dependencies")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        visit_table(table, manifest_dir, &mut resolved)?;
+    }
+    if let Some(pkg) = doc
+        .get_mut("package")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        for section in [
+            "run-dependencies",
+            "host-dependencies",
+            "build-dependencies",
+        ] {
+            if let Some(table) = pkg
+                .get_mut(section)
+                .and_then(toml_edit::Item::as_table_like_mut)
+            {
+                visit_table(table, manifest_dir, &mut resolved)?;
+            }
+        }
+    }
+
+    fs::write(manifest_path, doc.to_string())?;
+    Ok(resolved)
+}
+
+/// Front-insert channels into [workspace].channels of the temp manifest, so
+/// local just-built artifacts win over the real channel during the solve.
+fn prepend_channels(manifest_path: &Path, channels: &[String]) -> anyhow::Result<()> {
+    let text = fs::read_to_string(manifest_path)?;
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    let arr = doc["workspace"]["channels"].as_array_mut().ok_or_else(|| {
+        anyhow::anyhow!("{}: no workspace.channels array", manifest_path.display())
+    })?;
+    for (i, ch) in channels.iter().enumerate() {
+        arr.insert(i, ch.as_str());
+    }
+    fs::write(manifest_path, doc.to_string())?;
+    Ok(())
+}
+
+/// Push `s` onto `v` unless it's already present.
+fn push_unique(v: &mut Vec<String>, s: String) {
+    if !v.iter().any(|x| x == &s) {
+        v.push(s);
+    }
+}
+
+/// Guard for `build_local_dep`'s recursion, factored out so it's testable
+/// without invoking pixi. `Ok(false)` means skip (already built this entry),
+/// `Ok(true)` means proceed, `Err` means a cycle was detected among the
+/// sibling path deps being built as local fallbacks.
+fn check_local_build_guard(
+    name: &str,
+    visiting: &[String],
+    local_built: &BTreeSet<String>,
+) -> anyhow::Result<bool> {
+    if visiting.iter().any(|v| v == name) {
+        anyhow::bail!(
+            "path-dep cycle among local fallback builds: {} -> {}",
+            visiting.join(" -> "),
+            name
+        );
+    }
+    if local_built.contains(name) {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Build a path-dep sibling from the consumer's checkout into a local-only
+/// file channel. Recurses through the sibling's own path deps first.
+/// `local_built` and `visiting` are scoped per top-level entry (fresh at each
+/// call site in the main build loop): `local_built` dedupes a diamond
+/// dependency shared by two siblings, and `visiting` catches a cycle among
+/// path deps before it reaches pixi's solver.
+/// ponytail: duplicate build when the sibling lives in another matrix job;
+/// layered farm stages are the upgrade path if this gets slow in practice.
+fn build_local_dep(
+    dep: &ResolvedDep,
+    local_deps_dir: &Path,
+    channel_url: &str,
+    target_platform: TargetPlatform,
+    local_built: &mut BTreeSet<String>,
+    visiting: &mut Vec<String>,
+) -> anyhow::Result<()> {
+    if !check_local_build_guard(&dep.name, visiting, local_built)? {
+        return Ok(());
+    }
+    fs::create_dir_all(local_deps_dir)?;
+    visiting.push(dep.name.clone());
+    let nested = resolve_path_deps(&dep.manifest)?;
+    let mut built_any_nested = false;
+    for n in &nested {
+        if !version_published(&n.name, &n.version, channel_url, target_platform) {
+            build_local_dep(
+                n,
+                local_deps_dir,
+                channel_url,
+                target_platform,
+                local_built,
+                visiting,
+            )?;
+            built_any_nested = true;
+        }
+    }
+    visiting.pop();
+    if built_any_nested {
+        prepend_channels(
+            &dep.manifest,
+            &[format!("file://{}", local_deps_dir.display())],
+        )?;
+    }
+    let target_channel = format!("file://{}", local_deps_dir.display());
+    process::run(
+        "pixi",
+        &[
+            "publish",
+            "--path",
+            dep.manifest.to_str().unwrap(),
+            "--target-channel",
+            &target_channel,
+            "--target-platform",
+            &target_platform.arch().to_string(),
+        ],
+    )?;
+    local_built.insert(dep.name.clone());
+    Ok(())
+}
+
+/// A pixi-native entry selected for building, along with the info needed to
+/// order it relative to other builds (see `topo_sort_builds`).
+#[derive(Debug)]
+pub(crate) struct BuildItem<'a> {
+    pub entry: &'a PixiNativeEntry,
+    pub effective_build: u64,
+    pub name: String,
+    pub rel_path_deps: Vec<String>,
+}
+
+/// Order build items so same-repo path-dep targets build before consumers.
+/// Edge rule: consumer.subdir/rel_path (normalized) == target.subdir, same url.
+fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
+    use crate::commands::ci::siblings::normalize;
+    use std::collections::BTreeMap;
+
+    let key = |e: &PixiNativeEntry| {
+        (
+            format!("{}/{}", e.url.owner, e.url.repo),
+            normalize(e.subdir.as_deref().unwrap_or(Path::new("."))),
+        )
+    };
+    let index: BTreeMap<_, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| (key(it.entry), i))
+        .collect();
+
+    let mut indegree = vec![0usize; items.len()];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); items.len()];
+    for (i, it) in items.iter().enumerate() {
+        let (repo, subdir) = key(it.entry);
+        for rel in &it.rel_path_deps {
+            let target = normalize(&subdir.join(rel));
+            if let Some(&j) = index.get(&(repo.clone(), target)) {
+                dependents[j].push(i);
+                indegree[i] += 1;
+            }
+        }
+    }
+    let mut ready: std::collections::BTreeSet<usize> = indegree
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| **d == 0)
+        .map(|(i, _)| i)
+        .collect();
+    let mut order = Vec::new();
+    while let Some(&i) = ready.iter().next() {
+        ready.remove(&i);
+        order.push(i);
+        for &d in &dependents[i] {
+            indegree[d] -= 1;
+            if indegree[d] == 0 {
+                ready.insert(d);
+            }
+        }
+    }
+    if order.len() != items.len() {
+        anyhow::bail!("path-dep cycle among pixi-native entries");
+    }
+    // Reorder without cloning items.
+    let mut slots: Vec<Option<BuildItem>> = items.into_iter().map(Some).collect();
+    Ok(order
+        .into_iter()
+        .map(|i| slots[i].take().unwrap())
+        .collect())
 }
 
 use crate::types::{GithubRepoUrl, PixiNativeEntry, Sha40};
@@ -647,12 +968,74 @@ fn package_published(
     false
 }
 
+/// Check whether *any* build of `name == version` exists in `channel_url` for
+/// `target_platform`. Same `pixi search --json` call as `package_published`,
+/// but without the build-number equality check — for dep satisfaction we only
+/// care that some build of the pinned version is available. Returns `false`
+/// on any failure (the caller treats that as not-yet-published).
+fn version_published(
+    name: &str,
+    version: &str,
+    channel_url: &str,
+    target_platform: TargetPlatform,
+) -> bool {
+    let arch = target_platform.arch().to_string();
+    let pkg_spec = format!("{name}=={version}");
+
+    let output = Command::new("pixi")
+        .args([
+            "search",
+            "--json",
+            &pkg_spec,
+            "-c",
+            channel_url,
+            "-p",
+            &arch,
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::info!("pixi search for {pkg_spec} failed to spawn: {e}");
+            return false;
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::info!(
+            "pixi search for {pkg_spec} exited {}: {}",
+            output.status,
+            stderr.trim(),
+        );
+        return false;
+    }
+
+    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::info!("pixi search for {pkg_spec} returned non-JSON stdout: {e}");
+            return false;
+        }
+    };
+
+    let Some(candidates) = parsed.get(&arch).and_then(|v| v.as_array()) else {
+        return false;
+    };
+    candidates.iter().any(|pkg| {
+        pkg.get("name").and_then(|v| v.as_str()) == Some(name)
+            && pkg.get("version").and_then(|v| v.as_str()) == Some(version)
+    })
+}
+
 enum CheckOutcome {
     Build {
         name: String,
         version: String,
         upstream_build: u64,
         effective_build: u64,
+        upstream: Box<UpstreamPixiToml>,
     },
     SkipPlatformUnsupported {
         name: String,
@@ -711,10 +1094,11 @@ fn check_entry(
     }
 
     Ok(CheckOutcome::Build {
-        name: upstream.package.name,
-        version: upstream.package.version,
+        name: upstream.package.name.clone(),
+        version: upstream.package.version.clone(),
         upstream_build,
         effective_build,
+        upstream: Box::new(upstream),
     })
 }
 
@@ -833,7 +1217,7 @@ fn pixi(
                 .collect()
         });
 
-    let mut to_build: Vec<(&PixiNativeEntry, u64)> = Vec::new();
+    let mut to_build: Vec<BuildItem> = Vec::new();
     let mut build_labels: Vec<String> = Vec::new();
     for (entry, outcome) in outcomes {
         match outcome? {
@@ -842,6 +1226,7 @@ fn pixi(
                 version,
                 upstream_build,
                 effective_build,
+                upstream,
             } => {
                 if rebuild_epoch > 0 {
                     build_labels.push(format!(
@@ -851,7 +1236,12 @@ fn pixi(
                 } else {
                     build_labels.push(format!("{name} {version}"));
                 }
-                to_build.push((entry, effective_build));
+                to_build.push(BuildItem {
+                    entry,
+                    effective_build,
+                    name: upstream.package.name.clone(),
+                    rel_path_deps: upstream.path_dep_rel_paths(),
+                });
             }
             CheckOutcome::SkipPlatformUnsupported { name, version } => {
                 tracing::info!(
@@ -882,7 +1272,13 @@ fn pixi(
         build_labels.join(", "),
     );
 
-    for (entry, effective_build) in to_build {
+    let to_build = topo_sort_builds(to_build)?;
+
+    let mut built_this_job: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for item in to_build {
+        let entry = item.entry;
+        let effective_build = item.effective_build;
+        tracing::debug!("building {} (build order name: {})", entry.name, item.name);
         let tmp = tempfile::Builder::new()
             .prefix(&format!("pixi-native-{}-", entry.name))
             .tempdir()
@@ -911,6 +1307,50 @@ fn pixi(
             })?;
         }
 
+        // Resolve path deps ephemerally in the temp checkout: derived pins in
+        // the published artifact, and local channels for anything the real
+        // channel can't satisfy yet.
+        let local_deps_dir = tmp.path().join("local-deps");
+        let resolved = resolve_path_deps(&manifest_path)?;
+        let mut extra_channels: Vec<String> = Vec::new();
+        let mut local_built: BTreeSet<String> = BTreeSet::new();
+        let mut visiting: Vec<String> = Vec::new();
+        for dep in &resolved {
+            let output_channel = format!("file://{}", abs_output.display());
+            if built_this_job.contains(&dep.name)
+                || version_published(&dep.name, &dep.version, &output_channel, target_platform)
+            {
+                push_unique(&mut extra_channels, output_channel);
+            } else if version_published(&dep.name, &dep.version, &channel_url, target_platform) {
+                // Satisfied by the real channel; nothing to do.
+            } else {
+                // Fallback: build the sibling from this same checkout (correct
+                // rev by construction) into a local-only channel. Not drained;
+                // the sibling's own entry / linux-64 stays the canonical publisher.
+                tracing::info!(
+                    "entry {}: sibling {} =={} not in channel and not built this job; fallback local build",
+                    entry.name,
+                    dep.name,
+                    dep.version,
+                );
+                build_local_dep(
+                    dep,
+                    &local_deps_dir,
+                    &channel_url,
+                    target_platform,
+                    &mut local_built,
+                    &mut visiting,
+                )?;
+                push_unique(
+                    &mut extra_channels,
+                    format!("file://{}", local_deps_dir.display()),
+                );
+            }
+        }
+        if !extra_channels.is_empty() {
+            prepend_channels(&manifest_path, &extra_channels)?;
+        }
+
         // No lockfile gate before publish: like conda-forge, a source build
         // re-resolves build/host/run from the manifest + current channels.
         // `pixi publish` re-resolves regardless, and the backend re-derives
@@ -935,6 +1375,7 @@ fn pixi(
                 &arch,
             ],
         )?;
+        built_this_job.insert(item.name.clone());
     }
 
     Ok(())
@@ -1009,6 +1450,79 @@ mod tests {
 
     fn is_noarch(toml: &str) -> bool {
         UpstreamPixiToml::parse(toml).unwrap().is_noarch()
+    }
+
+    fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
+        PixiNativeEntry {
+            name: name.into(),
+            url: GithubRepoUrl::parse("https://github.com/gr/repo").unwrap(),
+            rev: Sha40::new("a".repeat(40)).unwrap(),
+            subdir: Some(PathBuf::from(subdir)),
+            runner_size: RunnerSize::default(),
+        }
+    }
+
+    #[test]
+    fn path_dep_rel_paths_excludes_self_idiom() {
+        let t = UpstreamPixiToml::parse(
+            "[dependencies]\nnode = { path = \".\" }\n\
+             [package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+             [package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n\
+             [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n",
+        )
+        .unwrap();
+        let mut got = t.path_dep_rel_paths();
+        got.sort();
+        assert_eq!(got, vec!["../lib".to_string(), "../msgs".to_string()]);
+    }
+
+    #[test]
+    fn topo_sort_builds_orders_same_repo_path_deps() {
+        let lib = test_entry("lib", "packages/lib");
+        let node = test_entry("node", "packages/node");
+        let items = vec![
+            BuildItem {
+                entry: &node,
+                effective_build: 0,
+                name: "node".into(),
+                rel_path_deps: vec!["../lib".into()],
+            },
+            BuildItem {
+                entry: &lib,
+                effective_build: 0,
+                name: "lib".into(),
+                rel_path_deps: vec![],
+            },
+        ];
+        let sorted = topo_sort_builds(items).unwrap();
+        assert_eq!(sorted[0].name, "lib");
+        assert_eq!(sorted[1].name, "node");
+    }
+
+    #[test]
+    fn topo_sort_builds_rejects_cycles() {
+        let a = test_entry("a", "packages/a");
+        let b = test_entry("b", "packages/b");
+        let items = vec![
+            BuildItem {
+                entry: &a,
+                effective_build: 0,
+                name: "a".into(),
+                rel_path_deps: vec!["../b".into()],
+            },
+            BuildItem {
+                entry: &b,
+                effective_build: 0,
+                name: "b".into(),
+                rel_path_deps: vec!["../a".into()],
+            },
+        ];
+        assert!(
+            topo_sort_builds(items)
+                .unwrap_err()
+                .to_string()
+                .contains("cycle")
+        );
     }
 
     #[test]
@@ -1440,6 +1954,148 @@ ci = "test"
         let (_tmp, path) = write_tmp_pixi_toml(original);
         let err = rewrite_build_number(&path, 1).unwrap_err();
         assert!(format!("{err:#}").contains("missing [package]"));
+    }
+
+    fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
+        let dir = root.join("packages").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("pixi.toml");
+        std::fs::write(
+            &p,
+            format!(
+                "[workspace]\nname = \"{name}\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+                 [dependencies]\n{name} = {{ path = \".\" }}\n\
+                 [package]\nname = \"{name}\"\nversion = \"2.5.0\"\n{extra}"
+            ),
+        )
+        .unwrap();
+        p
+    }
+
+    #[test]
+    fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_checkout_pkg(root, "lib", "");
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n",
+        );
+        let resolved = resolve_path_deps(&consumer).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "lib");
+        assert_eq!(resolved[0].version, "2.5.0");
+
+        let text = std::fs::read_to_string(&consumer).unwrap();
+        assert!(text.contains("lib = \"==2.5.0\""), "rewritten: {text}");
+        assert!(
+            text.contains("node = { path = \".\" }"),
+            "self idiom untouched: {text}"
+        );
+        assert!(
+            text.contains("ros-kilted-rclpy"),
+            "externals untouched: {text}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        // Sibling dir/manifest is named "lib" (e.g. package-xml mode: no
+        // stable relationship between package.name and the channel artifact
+        // name), but the consumer depends on it under the artifact-name key
+        // "ros-kilted-lib".
+        write_checkout_pkg(root, "lib", "");
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nros-kilted-lib = { path = \"../lib\" }\n",
+        );
+        let resolved = resolve_path_deps(&consumer).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "ros-kilted-lib");
+        assert_eq!(resolved[0].version, "2.5.0");
+
+        let text = std::fs::read_to_string(&consumer).unwrap();
+        assert!(
+            text.contains("ros-kilted-lib = \"==2.5.0\""),
+            "rewritten under the dep key: {text}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let dir = root.join("packages").join("lib");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("pixi.toml"),
+            "[workspace]\nname = \"lib\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+             [dependencies]\nlib = { path = \".\" }\n\
+             [package]\nname = \"lib\"\n",
+        )
+        .unwrap();
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+        );
+        let err = resolve_path_deps(&consumer).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("package.version"),
+            "got: {err:#}"
+        );
+    }
+
+    #[test]
+    fn check_local_build_guard_detects_cycle() {
+        let visiting = vec!["a".to_string(), "b".to_string()];
+        let local_built = BTreeSet::new();
+        let err = check_local_build_guard("a", &visiting, &local_built).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cycle"), "message: {msg}");
+        assert!(msg.contains("a -> b -> a"), "message: {msg}");
+    }
+
+    #[test]
+    fn check_local_build_guard_skips_already_built() {
+        let visiting: Vec<String> = Vec::new();
+        let mut local_built = BTreeSet::new();
+        local_built.insert("lib".to_string());
+        assert!(!check_local_build_guard("lib", &visiting, &local_built).unwrap());
+        // Not yet built and not visiting: proceed.
+        assert!(check_local_build_guard("other", &visiting, &local_built).unwrap());
+    }
+
+    #[test]
+    fn prepend_channels_front_inserts() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("pixi.toml");
+        std::fs::write(
+            &p,
+            "[workspace]\nname = \"x\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+             [package]\nname = \"x\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        prepend_channels(&p, &["file:///out".into(), "file:///local-deps".into()]).unwrap();
+        let doc: toml::Value = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        let ch: Vec<&str> = doc["workspace"]["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(
+            ch,
+            vec![
+                "file:///out",
+                "file:///local-deps",
+                "https://prefix.dev/conda-forge"
+            ]
+        );
     }
 
     #[test]

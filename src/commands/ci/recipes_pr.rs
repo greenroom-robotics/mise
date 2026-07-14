@@ -58,18 +58,26 @@ impl RecipesPr {
                     let pkg = pixi_meta::read(pixi)?;
                     // Path from the source-repo root to the dir holding this
                     // package's pixi.toml. "" or "." means the package sits at
-                    // the repo root. recipes-pr runs at the source repo root
-                    // (cwd); when --package-dir was passed as an absolute path
-                    // the discovered pixi path is also absolute, so strip the
-                    // cwd to keep the subdir repo-root-relative.
+                    // the repo root. Anchor on the git toplevel, not cwd:
+                    // multi-semantic-release runs the publish step with cwd =
+                    // the package dir, and --package-dir arrives absolute, so
+                    // cwd-stripping would leak an absolute subdir.
+                    let toplevel = source_repo_toplevel()?;
                     let parent = pixi
                         .parent()
                         .map(|p| {
-                            let rel = std::env::current_dir()
-                                .ok()
-                                .and_then(|cwd| p.strip_prefix(&cwd).ok().map(|r| r.to_owned()))
-                                .unwrap_or_else(|| p.to_owned());
-                            rel.to_string_lossy().into_owned()
+                            let abs = if p.is_absolute() {
+                                p.to_owned()
+                            } else {
+                                std::env::current_dir()
+                                    .map(|cwd| cwd.join(p))
+                                    .unwrap_or_else(|_| p.to_owned())
+                            };
+                            abs.strip_prefix(&toplevel)
+                                .map(|r| r.to_owned())
+                                .unwrap_or(abs)
+                                .to_string_lossy()
+                                .into_owned()
                         })
                         .unwrap_or_default();
                     let subdir = match parent.as_str() {
@@ -86,25 +94,27 @@ impl RecipesPr {
         let src_url = source_repo_https_url()?;
         let src_short = source_repo_short_name(&src_url)?;
         let tag = format!("v{}", self.version);
+        let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
         // 3. Clone the recipes repo into a tempdir.
         let tmp = tempfile::TempDir::new()?;
         let recipes_root = tmp.path().join("recipes");
         clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
 
-        // 4. Create the release branch. The branch name is intentionally
-        //    version-independent so every release of this source repo lands on
-        //    the SAME rolling PR (force-pushed each time) rather than opening a
-        //    fresh PR per version. A per-version branch leaves superseded PRs
-        //    open, and an older one merging after a newer one downgrades the
-        //    pin. Mirrors `mise bump`'s `bump/<pkg>` branch.
-        //
-        //    Multi-package repos get a per-package rolling branch
-        //    (release/<repo>/<package>) so each package's release lands on its
-        //    own PR. Single-package repos (where --package matches the repo
-        //    name, or is absent) stay at release/<repo>.
-        let branch = release_branch(&src_short, self.package.as_deref());
-        run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
+        // 4. Create or continue the rolling release branch. If an earlier
+        //    package of this same CI run already pushed the branch, append to
+        //    it so the whole coupled release lands in one PR; otherwise reset
+        //    it from main.
+        let branch = release_branch(&src_short);
+        let head_msg = remote_branch_head_message(&recipes_root, &branch)?;
+        if should_append(head_msg.as_deref(), run_id.as_deref()) {
+            run_in(
+                &recipes_root,
+                &["git", "checkout", "-b", &branch, "FETCH_HEAD"],
+            )?;
+        } else {
+            run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
+        }
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
         use std::collections::BTreeSet;
@@ -162,7 +172,10 @@ impl RecipesPr {
         let (git_name, git_email) = git_identity();
         let name_cfg = format!("user.name={git_name}");
         let email_cfg = format!("user.email={git_email}");
-        let commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
+        let mut commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
+        if let Some(id) = &run_id {
+            commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
+        }
         run_in(
             &recipes_root,
             &[
@@ -222,17 +235,96 @@ impl RecipesPr {
     }
 }
 
-/// Version-independent branch for a source repo's rolling release PR.
-///
-/// Multi-package repos get a per-package branch (`release/<repo>/<package>`) so
-/// each package lands on its own rolling PR. Single-package repos — where no
-/// `--package` is passed, or it matches the repo name — stay at
-/// `release/<repo>` and avoid a redundant `release/mise/mise`.
-fn release_branch(src_short: &str, package: Option<&str>) -> String {
-    match package {
-        Some(pkg) if pkg != src_short => format!("release/{src_short}/{pkg}"),
-        _ => format!("release/{src_short}"),
+/// Version-independent rolling branch, one per source repo. Packages released
+/// in the same CI run append commits to it (see should_append); a new run
+/// resets it from main. Shared so coupled sibling releases land in ONE
+/// recipes PR and build together in one pr-validate run.
+fn release_branch(src_short: &str) -> String {
+    format!("release/{src_short}")
+}
+
+fn run_marker(run_id: &str) -> String {
+    format!("[mise-run:{run_id}]")
+}
+
+/// Append to the existing branch only when its head commit carries this CI
+/// run's marker — i.e. an earlier package of the same release run wrote it.
+/// Anything else (stale branch, standalone run) starts fresh from main.
+fn should_append(branch_head_msg: Option<&str>, run_id: Option<&str>) -> bool {
+    match (branch_head_msg, run_id) {
+        (Some(msg), Some(id)) => msg.contains(&run_marker(id)),
+        _ => false,
     }
+}
+
+/// Result of classifying `git ls-remote --exit-code`'s exit status.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteRefStatus {
+    /// Exit 0: the ref exists on the remote.
+    Exists,
+    /// Exit 2: the ref is genuinely absent from the remote.
+    Absent,
+    /// Anything else: the check itself failed (network/auth/etc), not a verdict.
+    Unknown,
+}
+
+/// Maps `git ls-remote --exit-code`'s process exit code to a verdict. `None`
+/// (e.g. killed by signal) is treated the same as an unrecognized code.
+fn classify_ls_remote_status(code: Option<i32>) -> RemoteRefStatus {
+    match code {
+        Some(0) => RemoteRefStatus::Exists,
+        Some(2) => RemoteRefStatus::Absent,
+        _ => RemoteRefStatus::Unknown,
+    }
+}
+
+/// Fetch the remote rolling branch and return its head commit message.
+/// `None` when the branch genuinely doesn't exist on the remote. A transient
+/// failure to check or fetch the branch is a hard error, not `None` — treating
+/// it as "branch doesn't exist" would reset the branch from main and clobber
+/// an earlier sibling's recipe bump with `push --force`.
+fn remote_branch_head_message(
+    recipes_root: &std::path::Path,
+    branch: &str,
+) -> anyhow::Result<Option<String>> {
+    let ls_remote_status = std::process::Command::new("git")
+        .args([
+            "ls-remote",
+            "--exit-code",
+            "origin",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(recipes_root)
+        .status()?;
+    match classify_ls_remote_status(ls_remote_status.code()) {
+        RemoteRefStatus::Absent => return Ok(None),
+        RemoteRefStatus::Unknown => {
+            anyhow::bail!(
+                "git ls-remote --exit-code origin refs/heads/{branch} failed with {}",
+                ls_remote_status
+            );
+        }
+        RemoteRefStatus::Exists => {}
+    }
+
+    let fetched = std::process::Command::new("git")
+        .args(["fetch", "--depth=1", "origin", branch])
+        .current_dir(recipes_root)
+        .status()?;
+    if !fetched.success() {
+        anyhow::bail!("git fetch --depth=1 origin {branch} failed with {fetched}");
+    }
+    let out = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%B", "FETCH_HEAD"])
+        .current_dir(recipes_root)
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git log -1 --format=%B FETCH_HEAD failed with {}",
+            out.status
+        );
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
 /// PR title / commit message, mirroring `release_branch`: per-package repos read
@@ -381,6 +473,20 @@ fn pr_automerge_args(repo: &str, branch: &str) -> Vec<String> {
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+/// Absolute path of the source repo's working-tree root, from wherever the
+/// command runs (msr invokes the publish step with cwd = the package dir).
+fn source_repo_toplevel() -> anyhow::Result<std::path::PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("git rev-parse --show-toplevel failed");
+    }
+    Ok(std::path::PathBuf::from(
+        String::from_utf8(out.stdout)?.trim(),
+    ))
 }
 
 fn source_repo_https_url() -> anyhow::Result<String> {
@@ -555,6 +661,21 @@ mod tests {
         );
     }
 
+    // Only a clean exit-code 2 means the branch is genuinely absent; anything
+    // else (network/auth failure, killed by signal, ...) must be a hard error
+    // so we never mistake "couldn't check" for "doesn't exist".
+    #[test]
+    fn classify_ls_remote_status_only_treats_exit_2_as_absent() {
+        assert_eq!(classify_ls_remote_status(Some(0)), RemoteRefStatus::Exists);
+        assert_eq!(classify_ls_remote_status(Some(2)), RemoteRefStatus::Absent);
+        assert_eq!(classify_ls_remote_status(Some(1)), RemoteRefStatus::Unknown);
+        assert_eq!(
+            classify_ls_remote_status(Some(128)),
+            RemoteRefStatus::Unknown
+        );
+        assert_eq!(classify_ls_remote_status(None), RemoteRefStatus::Unknown);
+    }
+
     // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
     // label — `--label automerge` only attaches a literal label and the PR
     // never merges.
@@ -577,26 +698,35 @@ mod tests {
     // an older release merge over a newer one.
     #[test]
     fn release_branch_is_version_independent() {
-        let a = release_branch("mise", None);
+        let a = release_branch("mise");
         assert_eq!(a, "release/mise");
         assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
     }
 
-    // Multi-package repos get a per-package rolling branch so each package's
-    // release lands on its own PR instead of sharing one repo-level PR.
+    // Shared per-repo branch: every package of a multi-package repo lands on ONE
+    // rolling PR so coupled releases build together in one pr-validate run.
     #[test]
-    fn release_branch_is_per_package_when_package_differs() {
+    fn release_branch_is_per_repo_not_per_package() {
         assert_eq!(
-            release_branch("platform_toolbox", Some("topic_utils")),
-            "release/platform_toolbox/topic_utils"
+            release_branch("platform_toolbox"),
+            "release/platform_toolbox"
         );
+        assert_eq!(release_branch("mise"), "release/mise");
     }
 
-    // Single-package repos pass --package == repo name; don't produce a
-    // redundant release/mise/mise.
     #[test]
-    fn release_branch_collapses_when_package_matches_repo() {
-        assert_eq!(release_branch("mise", Some("mise")), "release/mise");
+    fn should_append_only_for_same_run_marker() {
+        let msg = format!("release: r geolocation@1.2.0\n\n{}", run_marker("12345"));
+        // same run -> append
+        assert!(should_append(Some(&msg), Some("12345")));
+        // different run -> reset
+        assert!(!should_append(Some(&msg), Some("99999")));
+        // no marker on branch head -> reset
+        assert!(!should_append(Some("release: r x@1.0.0"), Some("12345")));
+        // no branch -> reset
+        assert!(!should_append(None, Some("12345")));
+        // standalone run (no run id) -> always reset
+        assert!(!should_append(Some(&msg), None));
     }
 
     // Title mirrors the branch: per-package vs repo-level.
