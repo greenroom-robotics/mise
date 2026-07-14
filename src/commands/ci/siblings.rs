@@ -105,14 +105,13 @@ pub fn topo_order(graph: &SiblingGraph) -> Result<Vec<String>> {
     let mut dependents: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for (consumer, targets) in graph.path_deps.iter().chain(graph.pin_deps.iter()) {
         for t in targets {
-            if graph.dirs.contains_key(t) {
-                if dependents
+            if graph.dirs.contains_key(t)
+                && dependents
                     .entry(t.as_str())
                     .or_default()
                     .insert(consumer.as_str())
-                {
-                    *indegree.get_mut(consumer.as_str()).unwrap() += 1;
-                }
+            {
+                *indegree.get_mut(consumer.as_str()).unwrap() += 1;
             }
         }
     }
