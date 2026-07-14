@@ -79,9 +79,15 @@ runs:
         publish_one() {
           local label="$1" tag="$2" pkg_arg="$3" ver sha
           [ -n "$tag" ] || return 0
-          # Skip tags that already existed before this run (ancestors of the
-          # dispatch SHA). Peel `${tag}^{}` so this is correct for annotated tags.
-          if git merge-base --is-ancestor "${tag}^{}" "$DISPATCH_SHA" 2>/dev/null; then
+          # Skip tags that already existed before this run: those whose commit
+          # is a *strict* ancestor of the dispatch SHA. A fresh release whose
+          # tag lands directly on the dispatch commit (semantic-release tags
+          # HEAD for packages it doesn't bump a version file for, e.g. vendored
+          # ament packages with no pixi.toml) is new, not old — the `!=` keeps
+          # it from being mistaken for a pre-existing tag. Peel `${tag}^{}` so
+          # this is correct for annotated tags.
+          if [ "$(git rev-parse "${tag}^{}")" != "$DISPATCH_SHA" ] \
+            && git merge-base --is-ancestor "${tag}^{}" "$DISPATCH_SHA" 2>/dev/null; then
             return 0
           fi
           ver="${tag#*@}"
