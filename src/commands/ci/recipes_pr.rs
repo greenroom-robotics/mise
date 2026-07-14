@@ -231,6 +231,14 @@ impl RecipesPr {
                 .collect::<Vec<_>>(),
         )?;
 
+        // Drop a link to the recipes PR into the Actions run summary so the
+        // release job's page points straight at it. Best-effort: a missing URL
+        // or no $GITHUB_STEP_SUMMARY (local run) must not fail the release.
+        if let Some(url) = pr_url(&self.recipes_repo, &branch) {
+            println!("recipes PR: {url}");
+            write_step_summary(&format!("### Recipes PR\n\n[{title}]({url})\n"));
+        }
+
         Ok(())
     }
 }
@@ -549,6 +557,33 @@ fn run_in(cwd: &std::path::Path, argv: &[&str]) -> anyhow::Result<()> {
         anyhow::bail!("{} {:?} failed in {}", cmd, rest, cwd.display());
     }
     Ok(())
+}
+
+/// URL of the PR for `branch`. `None` if gh fails or prints nothing — the
+/// caller treats the summary link as best-effort.
+fn pr_url(repo: &str, branch: &str) -> Option<String> {
+    let out = std::process::Command::new("gh")
+        .args([
+            "pr", "view", branch, "--repo", repo, "--json", "url", "--jq", ".url",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!url.is_empty()).then_some(url)
+}
+
+/// Append a Markdown section to the GitHub Actions run summary. No-op when
+/// $GITHUB_STEP_SUMMARY is unset (local/standalone runs).
+fn write_step_summary(md: &str) {
+    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
+            let _ = writeln!(f, "{md}");
+        }
+    }
 }
 
 fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
