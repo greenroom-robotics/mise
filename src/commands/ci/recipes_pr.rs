@@ -257,26 +257,72 @@ fn should_append(branch_head_msg: Option<&str>, run_id: Option<&str>) -> bool {
     }
 }
 
+/// Result of classifying `git ls-remote --exit-code`'s exit status.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoteRefStatus {
+    /// Exit 0: the ref exists on the remote.
+    Exists,
+    /// Exit 2: the ref is genuinely absent from the remote.
+    Absent,
+    /// Anything else: the check itself failed (network/auth/etc), not a verdict.
+    Unknown,
+}
+
+/// Maps `git ls-remote --exit-code`'s process exit code to a verdict. `None`
+/// (e.g. killed by signal) is treated the same as an unrecognized code.
+fn classify_ls_remote_status(code: Option<i32>) -> RemoteRefStatus {
+    match code {
+        Some(0) => RemoteRefStatus::Exists,
+        Some(2) => RemoteRefStatus::Absent,
+        _ => RemoteRefStatus::Unknown,
+    }
+}
+
 /// Fetch the remote rolling branch and return its head commit message.
-/// `None` when the branch doesn't exist on the remote.
+/// `None` when the branch genuinely doesn't exist on the remote. A transient
+/// failure to check or fetch the branch is a hard error, not `None` — treating
+/// it as "branch doesn't exist" would reset the branch from main and clobber
+/// an earlier sibling's recipe bump with `push --force`.
 fn remote_branch_head_message(
     recipes_root: &std::path::Path,
     branch: &str,
 ) -> anyhow::Result<Option<String>> {
+    let ls_remote_status = std::process::Command::new("git")
+        .args([
+            "ls-remote",
+            "--exit-code",
+            "origin",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(recipes_root)
+        .status()?;
+    match classify_ls_remote_status(ls_remote_status.code()) {
+        RemoteRefStatus::Absent => return Ok(None),
+        RemoteRefStatus::Unknown => {
+            anyhow::bail!(
+                "git ls-remote --exit-code origin refs/heads/{branch} failed with {}",
+                ls_remote_status
+            );
+        }
+        RemoteRefStatus::Exists => {}
+    }
+
     let fetched = std::process::Command::new("git")
         .args(["fetch", "--depth=1", "origin", branch])
         .current_dir(recipes_root)
-        .status()?
-        .success();
-    if !fetched {
-        return Ok(None);
+        .status()?;
+    if !fetched.success() {
+        anyhow::bail!("git fetch --depth=1 origin {branch} failed with {fetched}");
     }
     let out = std::process::Command::new("git")
         .args(["log", "-1", "--format=%B", "FETCH_HEAD"])
         .current_dir(recipes_root)
         .output()?;
     if !out.status.success() {
-        return Ok(None);
+        anyhow::bail!(
+            "git log -1 --format=%B FETCH_HEAD failed with {}",
+            out.status
+        );
     }
     Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
@@ -613,6 +659,21 @@ mod tests {
             recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, true),
             RecipeAction::Skip
         );
+    }
+
+    // Only a clean exit-code 2 means the branch is genuinely absent; anything
+    // else (network/auth failure, killed by signal, ...) must be a hard error
+    // so we never mistake "couldn't check" for "doesn't exist".
+    #[test]
+    fn classify_ls_remote_status_only_treats_exit_2_as_absent() {
+        assert_eq!(classify_ls_remote_status(Some(0)), RemoteRefStatus::Exists);
+        assert_eq!(classify_ls_remote_status(Some(2)), RemoteRefStatus::Absent);
+        assert_eq!(classify_ls_remote_status(Some(1)), RemoteRefStatus::Unknown);
+        assert_eq!(
+            classify_ls_remote_status(Some(128)),
+            RemoteRefStatus::Unknown
+        );
+        assert_eq!(classify_ls_remote_status(None), RemoteRefStatus::Unknown);
     }
 
     // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
