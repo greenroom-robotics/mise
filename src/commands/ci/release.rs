@@ -235,18 +235,19 @@ impl Release {
                 { "assets": [], "successComment": false }
             ]));
         }
-        if self.changelog || !self.extra_git_asset.is_empty() {
-            let mut assets: Vec<String> = Vec::new();
-            if self.changelog {
-                assets.push("CHANGELOG.md".to_string());
-            }
-            assets.push("**/pixi.toml".to_string());
-            assets.extend(self.extra_git_asset.iter().cloned());
-            plugins.push(serde_json::json!([
-                "@semantic-release/git",
-                { "assets": assets }
-            ]));
+        // The git plugin is unconditional: the farm reads versions and derived
+        // pins from pixi.toml at the tagged rev, so the bump must always be
+        // committed. --changelog only controls the CHANGELOG.md asset.
+        let mut assets: Vec<String> = Vec::new();
+        if self.changelog {
+            assets.push("CHANGELOG.md".to_string());
         }
+        assets.push("**/pixi.toml".to_string());
+        assets.extend(self.extra_git_asset.iter().cloned());
+        plugins.push(serde_json::json!([
+            "@semantic-release/git",
+            { "assets": assets }
+        ]));
 
         let releaserc = serde_json::json!({
             "branches": branches,
@@ -347,6 +348,29 @@ mod tests {
     // msr runs each package's semantic-release (and thus the exec plugin's
     // commands) with cwd = the package directory, so any relative path in
     // prepareCmd/publishCmd resolves against the wrong directory.
+    // The farm derives versions and pins from pixi.toml at the tagged rev, so
+    // the bump MUST be committed even with --changelog false — otherwise the
+    // tag lands on a rev whose manifest still carries the old version.
+    #[test]
+    fn pixi_toml_is_always_a_release_asset() {
+        let dir = std::env::temp_dir().join("mise-release-asset-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x", "--changelog", "false"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let git = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/git")
+            .expect("git plugin present even with changelog=false");
+        let assets = git[1]["assets"].as_array().unwrap();
+        assert!(assets.iter().any(|a| a == "**/pixi.toml"));
+        assert!(!assets.iter().any(|a| a == "CHANGELOG.md"));
+    }
+
     #[test]
     fn exec_cmd_paths_are_absolute() {
         let dir = std::env::temp_dir().join("mise-release-abs-test");
