@@ -220,7 +220,7 @@ fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
 }
 
 use anyhow::Context;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -525,6 +525,52 @@ impl UpstreamPixiToml {
         }
         out
     }
+
+    /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string
+    /// across all dep tables. These are committed opt-out pins (a released
+    /// consumer that was decoupled from its sibling, see `pin-siblings`).
+    fn exact_pins(&self) -> Vec<(String, String)> {
+        let tables = [
+            self.dependencies.as_ref(),
+            self.package.run_dependencies.as_ref(),
+            self.package.host_dependencies.as_ref(),
+            self.package.build_dependencies.as_ref(),
+        ];
+        let mut out = Vec::new();
+        for table in tables.into_iter().flatten() {
+            for (key, value) in table {
+                if let Some(v) = value.as_str().and_then(exact_pin_version) {
+                    out.push((key.clone(), v.to_string()));
+                }
+            }
+        }
+        out
+    }
+
+    /// Dep keys of exact `==X.Y.Z` pins. Mirrors `path_dep_rel_paths` for the
+    /// committed-pin farm ordering rule.
+    pub fn exact_pin_dep_names(&self) -> Vec<String> {
+        self.exact_pins().into_iter().map(|(k, _)| k).collect()
+    }
+}
+
+/// If `s` is an exact `==X.Y.Z` pin, return the version (`X.Y.Z[-pre]`); else
+/// `None`. Exact means `==` + a single concrete version with three numeric
+/// core components. Ranges (`>=`, `<`), wildcards (`==1.2.*`), and build specs
+/// are not pins.
+fn exact_pin_version(s: &str) -> Option<&str> {
+    let v = s.trim().strip_prefix("==")?;
+    let core = v.split('-').next().unwrap_or(v);
+    let parts: Vec<&str> = core.split('.').collect();
+    if parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        Some(v)
+    } else {
+        None
+    }
 }
 
 /// A sibling package whose `path =` dep was rewritten to a derived `==version`
@@ -603,11 +649,14 @@ fn visit_table(
     Ok(())
 }
 
-/// Rewrite every non-self `path =` dep in the temp-checkout manifest to
-/// `"==<version>"`, reading the version from the sibling manifest at the same
-/// rev. The derived pin is deterministic: same rev -> same sibling manifest
-/// -> same pin. Committed manifests are never touched.
-fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
+/// Rewrite every non-self `path =` dep in the manifest to `"==<version>"`,
+/// reading the version from the sibling manifest at the same rev. The derived
+/// pin is deterministic: same rev -> same sibling manifest -> same pin.
+///
+/// The farm calls this on ephemeral temp checkouts. The release path
+/// (`mise ci pin-siblings`) deliberately calls it on the *committed* manifest
+/// to convert an opt-in path dep into a committed `==` pin at release time.
+pub(crate) fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
     let manifest_dir = manifest_path.parent().unwrap();
     let text = fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
@@ -643,6 +692,75 @@ fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
 
     fs::write(manifest_path, doc.to_string())?;
     Ok(resolved)
+}
+
+/// Resolve committed `==X.Y.Z` pins that reference a same-repo sibling, so the
+/// fallback local build can satisfy a coupled cross-bucket dependency the real
+/// channel hasn't drained yet. Unlike `resolve_path_deps` this rewrites
+/// nothing — pins are already pins.
+///
+/// `sibling_subdirs` maps dep-name -> repo-relative subdir for the current
+/// entry's same-repo siblings. Only pins whose key is in that map and whose
+/// sibling checkout version equals the pin are returned (fallback-capable). A
+/// pin to an older release (checkout version differs — normal under opt-in) is
+/// skipped: the real channel must satisfy it.
+fn resolve_sibling_pins(
+    manifest_path: &Path,
+    workdir: &Path,
+    sibling_subdirs: &BTreeMap<String, PathBuf>,
+) -> anyhow::Result<Vec<ResolvedDep>> {
+    let text = fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let upstream = UpstreamPixiToml::parse(&text)
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+
+    let mut out = Vec::new();
+    for (name, pin) in upstream.exact_pins() {
+        let Some(subdir) = sibling_subdirs.get(&name) else {
+            continue; // not a same-repo sibling; real channel owns it
+        };
+        let sib_manifest = workdir.join(subdir).join("pixi.toml");
+        let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
+            format!(
+                "pin dep {name}: no pixi.toml at {} in checkout",
+                sib_manifest.display()
+            )
+        })?;
+        let sib_version = UpstreamPixiToml::parse(&sib_text)
+            .with_context(|| format!("parse sibling manifest for {name}"))?
+            .package
+            .version;
+        if sib_version == pin {
+            out.push(ResolvedDep {
+                name,
+                version: pin,
+                manifest: sib_manifest,
+            });
+        } else {
+            tracing::info!(
+                "pin dep {name} =={pin} differs from sibling checkout version \
+                 {sib_version}; leaving it for the real channel",
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// dep-name -> repo-relative subdir for `entry`'s same-repo siblings (excluding
+/// `entry` itself). The entry `name` is the channel artifact name, i.e. the dep
+/// key a consumer's pin uses.
+fn sibling_subdirs(entry: &PixiNativeEntry, all: &[PixiNativeEntry]) -> BTreeMap<String, PathBuf> {
+    all.iter()
+        .filter(|e| {
+            e.url.owner == entry.url.owner && e.url.repo == entry.url.repo && e.name != entry.name
+        })
+        .map(|e| {
+            (
+                e.name.clone(),
+                e.subdir.clone().unwrap_or_else(|| PathBuf::from(".")),
+            )
+        })
+        .collect()
 }
 
 /// Front-insert channels into [workspace].channels of the temp manifest, so
@@ -689,39 +807,45 @@ fn check_local_build_guard(
     Ok(true)
 }
 
+/// Immutable context shared across a `build_local_dep` recursion (fixed for
+/// one top-level entry). Split out to keep the recursive fn's arg count sane.
+struct LocalBuildCtx<'a> {
+    local_deps_dir: &'a Path,
+    channel_url: &'a str,
+    target_platform: TargetPlatform,
+    /// Repo checkout root, for resolving same-repo sibling pins.
+    workdir: &'a Path,
+    /// dep-name -> repo-relative subdir for same-repo siblings.
+    sibling_subdirs: &'a BTreeMap<String, PathBuf>,
+}
+
 /// Build a path-dep sibling from the consumer's checkout into a local-only
-/// file channel. Recurses through the sibling's own path deps first.
-/// `local_built` and `visiting` are scoped per top-level entry (fresh at each
-/// call site in the main build loop): `local_built` dedupes a diamond
-/// dependency shared by two siblings, and `visiting` catches a cycle among
-/// path deps before it reaches pixi's solver.
+/// file channel. Recurses through the sibling's own path deps and same-repo
+/// pins first. `local_built` and `visiting` are scoped per top-level entry
+/// (fresh at each call site in the main build loop): `local_built` dedupes a
+/// diamond dependency shared by two siblings, and `visiting` catches a cycle
+/// among path deps before it reaches pixi's solver.
 /// ponytail: duplicate build when the sibling lives in another matrix job;
 /// layered farm stages are the upgrade path if this gets slow in practice.
 fn build_local_dep(
     dep: &ResolvedDep,
-    local_deps_dir: &Path,
-    channel_url: &str,
-    target_platform: TargetPlatform,
+    ctx: &LocalBuildCtx<'_>,
     local_built: &mut BTreeSet<String>,
     visiting: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     if !check_local_build_guard(&dep.name, visiting, local_built)? {
         return Ok(());
     }
-    fs::create_dir_all(local_deps_dir)?;
+    fs::create_dir_all(ctx.local_deps_dir)?;
     visiting.push(dep.name.clone());
-    let nested = resolve_path_deps(&dep.manifest)?;
+    // Same read-before-rewrite ordering as the main loop.
+    let sibling_pins = resolve_sibling_pins(&dep.manifest, ctx.workdir, ctx.sibling_subdirs)?;
+    let mut nested = resolve_path_deps(&dep.manifest)?;
+    nested.extend(sibling_pins);
     let mut built_any_nested = false;
     for n in &nested {
-        if !version_published(&n.name, &n.version, channel_url, target_platform) {
-            build_local_dep(
-                n,
-                local_deps_dir,
-                channel_url,
-                target_platform,
-                local_built,
-                visiting,
-            )?;
+        if !version_published(&n.name, &n.version, ctx.channel_url, ctx.target_platform) {
+            build_local_dep(n, ctx, local_built, visiting)?;
             built_any_nested = true;
         }
     }
@@ -729,10 +853,10 @@ fn build_local_dep(
     if built_any_nested {
         prepend_channels(
             &dep.manifest,
-            &[format!("file://{}", local_deps_dir.display())],
+            &[format!("file://{}", ctx.local_deps_dir.display())],
         )?;
     }
-    let target_channel = format!("file://{}", local_deps_dir.display());
+    let target_channel = format!("file://{}", ctx.local_deps_dir.display());
     process::run(
         "pixi",
         &[
@@ -742,7 +866,7 @@ fn build_local_dep(
             "--target-channel",
             &target_channel,
             "--target-platform",
-            &target_platform.arch().to_string(),
+            &ctx.target_platform.arch().to_string(),
         ],
     )?;
     local_built.insert(dep.name.clone());
@@ -757,13 +881,17 @@ pub(crate) struct BuildItem<'a> {
     pub effective_build: u64,
     pub name: String,
     pub rel_path_deps: Vec<String>,
+    /// Dep keys of committed `==` pins (channel artifact names). A same-repo
+    /// sibling matching one must build first (opt-out coupling still needs
+    /// same-bucket ordering).
+    pub pin_dep_names: Vec<String>,
 }
 
-/// Order build items so same-repo path-dep targets build before consumers.
-/// Edge rule: consumer.subdir/rel_path (normalized) == target.subdir, same url.
+/// Order build items so same-repo dependency targets build before consumers.
+/// Path-dep edge: consumer.subdir/rel_path (normalized) == target.subdir, same
+/// url. Pin edge: consumer's `==` pin key == target `entry.name`, same url.
 fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
     use crate::commands::ci::siblings::normalize;
-    use std::collections::BTreeMap;
 
     let key = |e: &PixiNativeEntry| {
         (
@@ -771,10 +899,17 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'
             normalize(e.subdir.as_deref().unwrap_or(Path::new("."))),
         )
     };
+    let repo_of = |e: &PixiNativeEntry| format!("{}/{}", e.url.owner, e.url.repo);
     let index: BTreeMap<_, usize> = items
         .iter()
         .enumerate()
         .map(|(i, it)| (key(it.entry), i))
+        .collect();
+    // (repo, entry.name) -> index, for pin edges keyed on the artifact name.
+    let name_index: BTreeMap<(String, String), usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| ((repo_of(it.entry), it.entry.name.clone()), i))
         .collect();
 
     let mut indegree = vec![0usize; items.len()];
@@ -784,6 +919,14 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'
         for rel in &it.rel_path_deps {
             let target = normalize(&subdir.join(rel));
             if let Some(&j) = index.get(&(repo.clone(), target)) {
+                dependents[j].push(i);
+                indegree[i] += 1;
+            }
+        }
+        for pin in &it.pin_dep_names {
+            if let Some(&j) = name_index.get(&(repo.clone(), pin.clone()))
+                && j != i
+            {
                 dependents[j].push(i);
                 indegree[i] += 1;
             }
@@ -1241,6 +1384,7 @@ fn pixi(
                     effective_build,
                     name: upstream.package.name.clone(),
                     rel_path_deps: upstream.path_dep_rel_paths(),
+                    pin_dep_names: upstream.exact_pin_dep_names(),
                 });
             }
             CheckOutcome::SkipPlatformUnsupported { name, version } => {
@@ -1311,10 +1455,22 @@ fn pixi(
         // the published artifact, and local channels for anything the real
         // channel can't satisfy yet.
         let local_deps_dir = tmp.path().join("local-deps");
-        let resolved = resolve_path_deps(&manifest_path)?;
+        let sib_subdirs = sibling_subdirs(entry, &manifest.packages);
+        // Read committed `==` pins before resolve_path_deps rewrites path deps
+        // into pins (else those freshly-written pins would be re-detected here).
+        let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
+        let mut resolved = resolve_path_deps(&manifest_path)?;
+        resolved.extend(sibling_pins);
         let mut extra_channels: Vec<String> = Vec::new();
         let mut local_built: BTreeSet<String> = BTreeSet::new();
         let mut visiting: Vec<String> = Vec::new();
+        let local_ctx = LocalBuildCtx {
+            local_deps_dir: &local_deps_dir,
+            channel_url: &channel_url,
+            target_platform,
+            workdir: &workdir,
+            sibling_subdirs: &sib_subdirs,
+        };
         for dep in &resolved {
             let output_channel = format!("file://{}", abs_output.display());
             if built_this_job.contains(&dep.name)
@@ -1333,14 +1489,7 @@ fn pixi(
                     dep.name,
                     dep.version,
                 );
-                build_local_dep(
-                    dep,
-                    &local_deps_dir,
-                    &channel_url,
-                    target_platform,
-                    &mut local_built,
-                    &mut visiting,
-                )?;
+                build_local_dep(dep, &local_ctx, &mut local_built, &mut visiting)?;
                 push_unique(
                     &mut extra_channels,
                     format!("file://{}", local_deps_dir.display()),
@@ -1486,12 +1635,40 @@ mod tests {
                 effective_build: 0,
                 name: "node".into(),
                 rel_path_deps: vec!["../lib".into()],
+                pin_dep_names: vec![],
             },
             BuildItem {
                 entry: &lib,
                 effective_build: 0,
                 name: "lib".into(),
                 rel_path_deps: vec![],
+                pin_dep_names: vec![],
+            },
+        ];
+        let sorted = topo_sort_builds(items).unwrap();
+        assert_eq!(sorted[0].name, "lib");
+        assert_eq!(sorted[1].name, "node");
+    }
+
+    #[test]
+    fn topo_sort_builds_orders_same_repo_pin_deps() {
+        // node pins lib by its channel artifact name (entry.name), not a path.
+        let lib = test_entry("lib", "packages/lib");
+        let node = test_entry("node", "packages/node");
+        let items = vec![
+            BuildItem {
+                entry: &node,
+                effective_build: 0,
+                name: "node".into(),
+                rel_path_deps: vec![],
+                pin_dep_names: vec!["lib".into()],
+            },
+            BuildItem {
+                entry: &lib,
+                effective_build: 0,
+                name: "lib".into(),
+                rel_path_deps: vec![],
+                pin_dep_names: vec![],
             },
         ];
         let sorted = topo_sort_builds(items).unwrap();
@@ -1509,12 +1686,14 @@ mod tests {
                 effective_build: 0,
                 name: "a".into(),
                 rel_path_deps: vec!["../b".into()],
+                pin_dep_names: vec![],
             },
             BuildItem {
                 entry: &b,
                 effective_build: 0,
                 name: "b".into(),
                 rel_path_deps: vec!["../a".into()],
+                pin_dep_names: vec![],
             },
         ];
         assert!(
@@ -2048,6 +2227,85 @@ ci = "test"
             format!("{err:#}").contains("package.version"),
             "got: {err:#}"
         );
+    }
+
+    #[test]
+    fn exact_pin_version_parses_only_concrete_triples() {
+        assert_eq!(exact_pin_version("==2.5.0"), Some("2.5.0"));
+        assert_eq!(exact_pin_version("==2.5.0-alpha.1"), Some("2.5.0-alpha.1"));
+        assert_eq!(exact_pin_version(">=2.5.0"), None);
+        assert_eq!(exact_pin_version("==2.5.*"), None);
+        assert_eq!(exact_pin_version("*"), None);
+        assert_eq!(exact_pin_version("==2.5"), None); // not three components
+    }
+
+    #[test]
+    fn exact_pin_dep_names_lists_pin_keys_across_tables() {
+        let t = UpstreamPixiToml::parse(
+            "[package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+             [package.run-dependencies]\nlib = \"==2.5.0\"\nros-kilted-rclpy = \"*\"\n\
+             [package.host-dependencies]\nmsgs = \"==1.2.3\"\n",
+        )
+        .unwrap();
+        let mut got = t.exact_pin_dep_names();
+        got.sort();
+        assert_eq!(got, vec!["lib".to_string(), "msgs".to_string()]);
+    }
+
+    /// dep-name -> subdir map for `resolve_sibling_pins`, matching how the main
+    /// loop derives it from same-repo `manifest.packages` entries.
+    fn subdirs(pairs: &[(&str, &str)]) -> BTreeMap<String, PathBuf> {
+        pairs
+            .iter()
+            .map(|(n, d)| (n.to_string(), PathBuf::from(d)))
+            .collect()
+    }
+
+    #[test]
+    fn resolve_sibling_pins_resolves_matching_pin() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_checkout_pkg(root, "lib", ""); // version 2.5.0
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = \"==2.5.0\"\n",
+        );
+        let map = subdirs(&[("lib", "packages/lib")]);
+        let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "lib");
+        assert_eq!(resolved[0].version, "2.5.0");
+        assert_eq!(resolved[0].manifest, root.join("packages/lib/pixi.toml"));
+    }
+
+    #[test]
+    fn resolve_sibling_pins_skips_version_mismatch() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_checkout_pkg(root, "lib", ""); // checkout is 2.5.0
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = \"==2.4.0\"\n", // older pin
+        );
+        let map = subdirs(&[("lib", "packages/lib")]);
+        let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
+        assert!(resolved.is_empty(), "older pin left to the real channel");
+    }
+
+    #[test]
+    fn resolve_sibling_pins_ignores_non_sibling_pins() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nros-kilted-rclpy = \"==1.0.0\"\n",
+        );
+        let map = subdirs(&[("lib", "packages/lib")]); // rclpy not in map
+        let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
+        assert!(resolved.is_empty());
     }
 
     #[test]
