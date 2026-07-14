@@ -1,3 +1,10 @@
+## [5.16.0](https://github.com/greenroom-robotics/mise/compare/mise@5.15.1...mise@5.16.0) (2026-07-14)
+
+
+### Features
+
+* **ci:** ephemeral path deps — pin-back at release, farm fallback for committed pins ([#56](https://github.com/greenroom-robotics/mise/issues/56)) ([9b21989](https://github.com/greenroom-robotics/mise/commit/9b21989b6632a3153e817bcb0c0617c115544583))
+
 ## [5.15.1](https://github.com/greenroom-robotics/mise/compare/mise@5.15.0...mise@5.15.1) (2026-07-14)
 
 

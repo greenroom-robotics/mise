@@ -1,6 +1,6 @@
 [package]
 name = "mise"
-version = "5.15.1"
+version = "5.16.0"
 edition = "2024"
 
 [dependencies]
