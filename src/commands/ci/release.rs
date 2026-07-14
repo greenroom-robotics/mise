@@ -59,6 +59,17 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
 /// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
 /// private workspace packages entirely (observed as "Queued 0 packages").
 /// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
+/// Sibling deps that msr should order and cascade on for `name`: **path deps
+/// only**. Committed `==` pins are deliberately excluded — coupling is opt-in
+/// per changeset (via a path dep), and a released consumer carries a pin that
+/// must NOT trigger a re-release when the sibling releases.
+fn msr_ordering_deps(
+    graph: &crate::commands::ci::siblings::SiblingGraph,
+    name: &str,
+) -> BTreeSet<String> {
+    graph.path_deps.get(name).cloned().unwrap_or_default()
+}
+
 fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
     let deps_obj: serde_json::Map<String, serde_json::Value> = deps
         .iter()
@@ -122,8 +133,9 @@ impl Release {
         let multi = self.package.is_none() && pixis.len() > 1;
 
         // Sibling graph: drives msr's topological release order (multi mode)
-        // via synthesized package.json files. Both dep kinds order; only path
-        // deps are guarded (verify-siblings).
+        // via synthesized package.json files. Only path deps order and cascade
+        // (opt-in coupling); pin deps neither. Path deps are guarded
+        // (verify-siblings) and pinned back at release (pin-siblings).
         let graph = crate::commands::ci::siblings::analyze(&pixis)?;
 
         // Write a .releaserc (and, in multi mode, a package.json encoding
@@ -135,14 +147,7 @@ impl Release {
             std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
             if multi {
                 let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
-                let empty = BTreeSet::new();
-                let deps: BTreeSet<String> = graph
-                    .path_deps
-                    .get(&pkg.name)
-                    .unwrap_or(&empty)
-                    .union(graph.pin_deps.get(&pkg.name).unwrap_or(&empty))
-                    .cloned()
-                    .collect();
+                let deps = msr_ordering_deps(&graph, &pkg.name);
                 std::fs::write(
                     pkg_dir.join("package.json"),
                     package_json_for(&pkg.name, &pkg.version, &deps),
@@ -202,7 +207,8 @@ impl Release {
         let abs_pkgdir = absolute(&self.package_dir);
         let mut prepare_cmd = format!(
             "mise ci verify-siblings --pixi-toml={pixi} --package-dir={pkgdir} && \
-             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi}",
+             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi} && \
+             mise ci pin-siblings --pixi-toml={pixi}",
             pixi = abs_pixi.display(),
             pkgdir = abs_pkgdir.display(),
         );
@@ -419,9 +425,14 @@ mod tests {
             .find("verify-siblings")
             .expect("verify-siblings present");
         let bump_pos = prepare.find("bump-pixi").unwrap();
+        let pin_pos = prepare.find("pin-siblings").expect("pin-siblings present");
         assert!(
             verify_pos < bump_pos,
             "guard must run before the bump: {prepare}"
+        );
+        assert!(
+            bump_pos < pin_pos,
+            "pin-back must run after the bump: {prepare}"
         );
     }
 
@@ -436,6 +447,23 @@ mod tests {
         // NOT private: msr's ignorePrivate would skip the package outright.
         assert_eq!(v.get("private"), None);
         assert_eq!(v["dependencies"]["geolocation"], "*");
+    }
+
+    #[test]
+    fn msr_ordering_deps_encodes_path_deps_not_pins() {
+        use crate::commands::ci::siblings::SiblingGraph;
+        use std::collections::BTreeSet;
+        let mut graph = SiblingGraph::default();
+        graph
+            .path_deps
+            .insert("node".into(), BTreeSet::from(["lib".to_string()]));
+        graph
+            .pin_deps
+            .insert("node".into(), BTreeSet::from(["msgs".to_string()]));
+        let deps = msr_ordering_deps(&graph, "node");
+        // Path dep orders/cascades; committed pin does not.
+        assert!(deps.contains("lib"));
+        assert!(!deps.contains("msgs"), "pins must not be encoded: {deps:?}");
     }
 
     #[test]
