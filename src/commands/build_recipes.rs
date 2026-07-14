@@ -711,6 +711,7 @@ fn build_local_dep(
     fs::create_dir_all(local_deps_dir)?;
     visiting.push(dep.name.clone());
     let nested = resolve_path_deps(&dep.manifest)?;
+    let mut built_any_nested = false;
     for n in &nested {
         if !version_published(&n.name, &n.version, channel_url, target_platform) {
             build_local_dep(
@@ -721,10 +722,11 @@ fn build_local_dep(
                 local_built,
                 visiting,
             )?;
+            built_any_nested = true;
         }
     }
     visiting.pop();
-    if !nested.is_empty() {
+    if built_any_nested {
         prepend_channels(
             &dep.manifest,
             &[format!("file://{}", local_deps_dir.display())],
@@ -1314,11 +1316,11 @@ fn pixi(
         let mut local_built: BTreeSet<String> = BTreeSet::new();
         let mut visiting: Vec<String> = Vec::new();
         for dep in &resolved {
-            if built_this_job.contains(&dep.name) {
-                push_unique(
-                    &mut extra_channels,
-                    format!("file://{}", abs_output.display()),
-                );
+            let output_channel = format!("file://{}", abs_output.display());
+            if built_this_job.contains(&dep.name)
+                || version_published(&dep.name, &dep.version, &output_channel, target_platform)
+            {
+                push_unique(&mut extra_channels, output_channel);
             } else if version_published(&dep.name, &dep.version, &channel_url, target_platform) {
                 // Satisfied by the real channel; nothing to do.
             } else {
