@@ -1,3 +1,10 @@
+## [5.16.2](https://github.com/greenroom-robotics/mise/compare/mise@5.16.1...mise@5.16.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* gracefully handle publish period ([c3b5e23](https://github.com/greenroom-robotics/mise/commit/c3b5e233a34f810900bdeac7b42863a677690951))
+
 ## [5.16.1](https://github.com/greenroom-robotics/mise/compare/mise@5.16.0...mise@5.16.1) (2026-07-14)
 
 
