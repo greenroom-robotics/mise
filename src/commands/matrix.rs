@@ -23,10 +23,10 @@ const GLOBAL_BOTH_PREFIXES: &[&str] = &[".github/workflows/", ".github/actions/"
 
 /// The two archs and their default runner template (used by the vinca pipeline).
 const ARCHS: &[(Arch, &str)] = &[
-    (Arch::Linux64, "runs-on={run_id}/runner=4cpu-linux-x64"),
+    (Arch::Linux64, "runs-on={run_id}/runner=8cpu-linux-x64"),
     (
         Arch::LinuxAarch64,
-        "runs-on={run_id}/runner=4cpu-linux-arm64",
+        "runs-on={run_id}/runner=8cpu-linux-arm64",
     ),
 ];
 
