@@ -1,3 +1,10 @@
+## [5.17.0](https://github.com/greenroom-robotics/mise/compare/mise@5.16.2...mise@5.17.0) (2026-07-14)
+
+
+### Features
+
+* add recipes-pr url to actions page ([ccb45b0](https://github.com/greenroom-robotics/mise/commit/ccb45b0956080f1735ec3baefdaee3bb1a42d853))
+
 ## [5.16.2](https://github.com/greenroom-robotics/mise/compare/mise@5.16.1...mise@5.16.2) (2026-07-14)
 
 
