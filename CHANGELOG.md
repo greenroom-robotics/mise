@@ -1,3 +1,10 @@
+## [5.16.1](https://github.com/greenroom-robotics/mise/compare/mise@5.16.0...mise@5.16.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **ci:** path deps order but don't cascade (--deps.release=inherit) ([#57](https://github.com/greenroom-robotics/mise/issues/57)) ([86e6f9b](https://github.com/greenroom-robotics/mise/commit/86e6f9b6b532098a1c6d5b1d7747fd3d69aa0d76))
+
 ## [5.16.0](https://github.com/greenroom-robotics/mise/compare/mise@5.15.1...mise@5.16.0) (2026-07-14)
 
 
