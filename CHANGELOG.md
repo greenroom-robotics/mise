@@ -1,3 +1,10 @@
+## [5.15.1](https://github.com/greenroom-robotics/mise/compare/mise@5.15.0...mise@5.15.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **recipes-pr:** don't skip fresh release tags on the dispatch commit ([#55](https://github.com/greenroom-robotics/mise/issues/55)) ([2ea23d7](https://github.com/greenroom-robotics/mise/commit/2ea23d75d22db32323d3908b5abb680c11ac4532))
+
 ## [5.15.0](https://github.com/greenroom-robotics/mise/compare/mise@5.14.1...mise@5.15.0) (2026-07-14)
 
 
