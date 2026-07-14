@@ -115,8 +115,12 @@ runs:
     #
     # The version is read from THIS repo's root pixi.toml [package].version —
     # bumped on every release, with the major tag (v<MAJOR>) slid onto that
-    # commit — so `setup@vN` always installs the mise built at vN. The channel
-    # is the proxy's private `general` channel (dynamic localhost port, hence a
+    # commit. The spec is `<=version` (a ceiling, not `==`): between the bump
+    # commit landing (tag moves, version reads as new) and the new mise being
+    # published to the channel, `==` can't resolve and every action fails.
+    # `<=` falls back to the latest *published* version during that gap while
+    # never installing something newer than the action ships. The channel is
+    # the proxy's private `general` channel (dynamic localhost port, hence a
     # generated rather than committed manifest), where mise is published.
     - name: Install mise
       if: inputs.skip-pixi != 'true'
@@ -139,9 +143,9 @@ runs:
         platforms = ["linux-64", "linux-aarch64"]
 
         [dependencies]
-        mise = "==${version}"
+        mise = "<=${version}"
         EOF
-        echo "Installing mise==${version} from a dedicated tool manifest"
+        echo "Installing mise<=${version} (latest published, ceiling ${version}) from a dedicated tool manifest"
         pixi install --manifest-path "${manifest_dir}/pixi.toml"
         # Export the manifest path so downstream actions invoke mise from it.
         echo "MISE_MANIFEST=${manifest_dir}/pixi.toml" >> "$GITHUB_ENV"
