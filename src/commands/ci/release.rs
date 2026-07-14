@@ -52,17 +52,11 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
     }
 }
 
-/// Per-workspace package.json synthesized at release time so the patched
-/// multi-semantic-release discovers packages and releases them in topological
-/// order of sibling deps. Never committed (repos don't track package.json).
-///
-/// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
-/// private workspace packages entirely (observed as "Queued 0 packages").
-/// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
-/// Sibling deps that msr should order and cascade on for `name`: **path deps
-/// only**. Committed `==` pins are deliberately excluded — coupling is opt-in
-/// per changeset (via a path dep), and a released consumer carries a pin that
-/// must NOT trigger a re-release when the sibling releases.
+/// Sibling deps that msr should **order** on for `name`: path deps only. These
+/// are encoded as `"*"` in the synthesized package.json, which (with
+/// `--deps.release=inherit`, see `release_argv`) orders a coupled release
+/// sibling-first WITHOUT triggering a dependency-only cascade. Committed `==`
+/// pins are excluded — a released consumer is decoupled and needs no ordering.
 fn msr_ordering_deps(
     graph: &crate::commands::ci::siblings::SiblingGraph,
     name: &str,
@@ -70,6 +64,36 @@ fn msr_ordering_deps(
     graph.path_deps.get(name).cloned().unwrap_or_default()
 }
 
+/// `npx` argv for the release. Multi-package mode adds `--deps.release=inherit`:
+/// with the synthesized package.json ranges pinned to `"*"`, a sibling release
+/// always satisfies the range, so multi-semantic-release orders the coupled
+/// release sibling-first but never cascade-releases a consumer that has no
+/// commits of its own. A consumer re-pins to a sibling only when it releases on
+/// its own merits (its prepare runs `pin-siblings`).
+fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
+    let bin = if multi {
+        "multi-semantic-release"
+    } else {
+        "semantic-release"
+    };
+    let mut argv = vec![
+        "--no-install".to_string(),
+        bin.to_string(),
+        format!("--tag-format={tag_format}"),
+    ];
+    if multi {
+        argv.push("--deps.release=inherit".to_string());
+    }
+    argv
+}
+
+/// Per-workspace package.json synthesized at release time so the patched
+/// multi-semantic-release discovers packages and releases them in topological
+/// order of sibling deps. Never committed (repos don't track package.json).
+///
+/// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
+/// private workspace packages entirely (observed as "Queued 0 packages").
+/// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
 fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
     let deps_obj: serde_json::Map<String, serde_json::Value> = deps
         .iter()
@@ -132,10 +156,11 @@ impl Release {
         }
         let multi = self.package.is_none() && pixis.len() > 1;
 
-        // Sibling graph: drives msr's topological release order (multi mode)
-        // via synthesized package.json files. Only path deps order and cascade
-        // (opt-in coupling); pin deps neither. Path deps are guarded
-        // (verify-siblings) and pinned back at release (pin-siblings).
+        // Sibling graph: drives msr's topological release *order* (multi mode)
+        // via synthesized package.json files — NOT a cascade (see release_argv:
+        // --deps.release=inherit). Only path deps participate; pin deps don't.
+        // Path deps are guarded (verify-siblings) and pinned back at the
+        // consumer's own release (pin-siblings).
         let graph = crate::commands::ci::siblings::analyze(&pixis)?;
 
         // Write a .releaserc (and, in multi mode, a package.json encoding
@@ -165,15 +190,10 @@ impl Release {
         let single_pkg = crate::commands::ci::pixi_meta::read(&pixis[0])?;
         let tag_format = tag_format(multi, &single_pkg.name);
 
-        let bin = if multi {
-            "multi-semantic-release"
-        } else {
-            "semantic-release"
-        };
+        let argv = release_argv(multi, &tag_format);
+        let bin = argv[1].clone();
         let mut cmd = Command::new("npx");
-        cmd.arg("--no-install")
-            .arg(bin)
-            .arg(format!("--tag-format={tag_format}"));
+        cmd.args(&argv);
         let status = cmd
             .status()
             .map_err(|e| anyhow::anyhow!("failed to spawn npx {bin}: {e}"))?;
@@ -461,9 +481,28 @@ mod tests {
             .pin_deps
             .insert("node".into(), BTreeSet::from(["msgs".to_string()]));
         let deps = msr_ordering_deps(&graph, "node");
-        // Path dep orders/cascades; committed pin does not.
+        // Path dep orders the release; committed pin is not encoded at all.
         assert!(deps.contains("lib"));
         assert!(!deps.contains("msgs"), "pins must not be encoded: {deps:?}");
+    }
+
+    #[test]
+    fn release_argv_multi_orders_without_cascade() {
+        let argv = release_argv(true, "${name}@${version}");
+        assert_eq!(argv[1], "multi-semantic-release");
+        // The flag that turns the package.json dep graph into ordering-only:
+        // a "*" range always satisfies, so no dependency-only cascade fires.
+        assert!(
+            argv.iter().any(|a| a == "--deps.release=inherit"),
+            "multi mode must suppress the cascade: {argv:?}"
+        );
+    }
+
+    #[test]
+    fn release_argv_single_has_no_deps_flag() {
+        let argv = release_argv(false, "v${version}");
+        assert_eq!(argv[1], "semantic-release");
+        assert!(!argv.iter().any(|a| a.starts_with("--deps")));
     }
 
     #[test]
