@@ -1,3 +1,10 @@
+## [5.15.0](https://github.com/greenroom-robotics/mise/compare/mise@5.14.1...mise@5.15.0) (2026-07-14)
+
+
+### Features
+
+* sibling path deps with farm-derived pins ([#54](https://github.com/greenroom-robotics/mise/issues/54)) ([a4e956a](https://github.com/greenroom-robotics/mise/commit/a4e956a17ada256c2c9822b5209a6cf556c4f6a3))
+
 ## [5.14.1](https://github.com/greenroom-robotics/mise/compare/mise@5.14.0...mise@5.14.1) (2026-07-14)
 
 
