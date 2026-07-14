@@ -1,3 +1,10 @@
+## [5.14.1](https://github.com/greenroom-robotics/mise/compare/mise@5.14.0...mise@5.14.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* bump vinca ci runners to 8cpu ([#53](https://github.com/greenroom-robotics/mise/issues/53)) ([948c16a](https://github.com/greenroom-robotics/mise/commit/948c16a60376d43401925d0c6857641e42573c51))
+
 ## [5.14.0](https://github.com/greenroom-robotics/mise/compare/mise@5.13.0...mise@5.14.0) (2026-07-13)
 
 
