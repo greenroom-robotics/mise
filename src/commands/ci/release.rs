@@ -72,6 +72,20 @@ fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> Strin
     .expect("static json")
 }
 
+/// Absolutize a path against cwd. multi-semantic-release runs each package's
+/// semantic-release — and therefore the exec plugin's shell commands — with
+/// cwd = the package directory, so paths embedded in prepareCmd/publishCmd
+/// must be absolute to survive.
+fn absolute(p: &std::path::Path) -> std::path::PathBuf {
+    if p.is_absolute() {
+        p.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(p))
+            .unwrap_or_else(|_| p.to_owned())
+    }
+}
+
 /// Convert an absolute path to a relative path from cwd if possible;
 /// otherwise return the path unchanged. Workspace globs in package.json
 /// must be cwd-relative for npm/yarn/msr discovery to work correctly.
@@ -184,11 +198,13 @@ impl Release {
         // context env vars at runtime.
         let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
 
+        let abs_pixi = absolute(pixi);
+        let abs_pkgdir = absolute(&self.package_dir);
         let mut prepare_cmd = format!(
             "mise ci verify-siblings --pixi-toml={pixi} --package-dir={pkgdir} && \
              mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi}",
-            pixi = pixi.display(),
-            pkgdir = self.package_dir.display(),
+            pixi = abs_pixi.display(),
+            pkgdir = abs_pkgdir.display(),
         );
         if let Some(extra) = &self.extra_prepare_cmd {
             prepare_cmd.push_str(" && ");
@@ -198,7 +214,7 @@ impl Release {
         let publish_cmd = format!(
             "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --ros-distro={} --package={} --sha=${{nextRelease.gitHead}}",
             self.recipes_repo,
-            self.package_dir.display(),
+            abs_pkgdir.display(),
             self.ros_distro,
             pkg.name,
         );
@@ -326,6 +342,35 @@ mod tests {
         assert!(assets.iter().any(|a| a == "**/pixi.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.toml"));
         assert!(assets.iter().any(|a| a == "Cargo.lock"));
+    }
+
+    // msr runs each package's semantic-release (and thus the exec plugin's
+    // commands) with cwd = the package directory, so any relative path in
+    // prepareCmd/publishCmd resolves against the wrong directory.
+    #[test]
+    fn exec_cmd_paths_are_absolute() {
+        let dir = std::env::temp_dir().join("mise-release-abs-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+        let cli = TestCli::parse_from(["x", "--package-dir", "packages"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let exec = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/exec")
+            .unwrap()[1]
+            .clone();
+        for key in ["prepareCmd", "publishCmd"] {
+            let cmd = exec[key].as_str().unwrap();
+            assert!(
+                !cmd.contains("--package-dir=packages"),
+                "{key} must not contain cwd-relative paths: {cmd}"
+            );
+            assert!(cmd.contains("--package-dir=/"), "{key} absolute: {cmd}");
+        }
     }
 
     #[test]

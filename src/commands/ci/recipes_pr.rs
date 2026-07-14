@@ -58,18 +58,26 @@ impl RecipesPr {
                     let pkg = pixi_meta::read(pixi)?;
                     // Path from the source-repo root to the dir holding this
                     // package's pixi.toml. "" or "." means the package sits at
-                    // the repo root. recipes-pr runs at the source repo root
-                    // (cwd); when --package-dir was passed as an absolute path
-                    // the discovered pixi path is also absolute, so strip the
-                    // cwd to keep the subdir repo-root-relative.
+                    // the repo root. Anchor on the git toplevel, not cwd:
+                    // multi-semantic-release runs the publish step with cwd =
+                    // the package dir, and --package-dir arrives absolute, so
+                    // cwd-stripping would leak an absolute subdir.
+                    let toplevel = source_repo_toplevel()?;
                     let parent = pixi
                         .parent()
                         .map(|p| {
-                            let rel = std::env::current_dir()
-                                .ok()
-                                .and_then(|cwd| p.strip_prefix(&cwd).ok().map(|r| r.to_owned()))
-                                .unwrap_or_else(|| p.to_owned());
-                            rel.to_string_lossy().into_owned()
+                            let abs = if p.is_absolute() {
+                                p.to_owned()
+                            } else {
+                                std::env::current_dir()
+                                    .map(|cwd| cwd.join(p))
+                                    .unwrap_or_else(|_| p.to_owned())
+                            };
+                            abs.strip_prefix(&toplevel)
+                                .map(|r| r.to_owned())
+                                .unwrap_or(abs)
+                                .to_string_lossy()
+                                .into_owned()
                         })
                         .unwrap_or_default();
                     let subdir = match parent.as_str() {
@@ -419,6 +427,20 @@ fn pr_automerge_args(repo: &str, branch: &str) -> Vec<String> {
     .into_iter()
     .map(String::from)
     .collect()
+}
+
+/// Absolute path of the source repo's working-tree root, from wherever the
+/// command runs (msr invokes the publish step with cwd = the package dir).
+fn source_repo_toplevel() -> anyhow::Result<std::path::PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("git rev-parse --show-toplevel failed");
+    }
+    Ok(std::path::PathBuf::from(
+        String::from_utf8(out.stdout)?.trim(),
+    ))
 }
 
 fn source_repo_https_url() -> anyhow::Result<String> {
