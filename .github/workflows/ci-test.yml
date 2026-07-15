@@ -135,7 +135,7 @@ jobs:
           # paths-filter map: one `pkg: '<dir>/pkg/**'` line per package.
           {
             echo 'map<<__EOF__'
-            printf '%s' "$names" | while IFS= read -r n; do
+            printf '%s\n' "$names" | while IFS= read -r n; do
               [ -n "$n" ] && printf "%s: '%s/%s/**'\n" "$n" "$PACKAGE_DIR" "$n"
             done
             echo '__EOF__'
