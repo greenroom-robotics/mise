@@ -1,3 +1,10 @@
+## [5.17.1](https://github.com/greenroom-robotics/mise/compare/mise@5.17.0...mise@5.17.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* stop silently dropping last package ([9e7a489](https://github.com/greenroom-robotics/mise/commit/9e7a489f49bd155cac9aa39ad4791b0dc26ff635))
+
 ## [5.17.0](https://github.com/greenroom-robotics/mise/compare/mise@5.16.2...mise@5.17.0) (2026-07-14)
 
 
