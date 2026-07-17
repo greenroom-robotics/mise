@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: runs-on=${{ github.run_id }}/runner=1cpu-linux-x64
+    runs-on: ubuntu-latest
     env:
       # Retry crates.io fetches — registry reads occasionally drop with an SSL
       # eof on the runners; without this a single blip fails the whole job.

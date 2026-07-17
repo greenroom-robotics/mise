@@ -4,7 +4,7 @@ on:
     branches: [main]
 jobs:
   release:
-    runs-on: runs-on=${{ github.run_id }}/runner=1cpu-linux-x64
+    runs-on: ubuntu-latest
     permissions:
       id-token: write # Azure OIDC login in the release action
       contents: write # semantic-release commits CHANGELOG + cuts tags
@@ -61,7 +61,7 @@ jobs:
   # any workflows since the tag is pushed by github app
   update-major-tag:
     needs: release
-    runs-on: runs-on=${{ github.run_id }}/runner=1cpu-linux-x64
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
