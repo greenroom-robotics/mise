@@ -88,7 +88,7 @@ runs:
 
     - name: Start conda-channel-proxy
       id: proxy
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v3
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v5
       with:
         version: ${{ inputs.proxy-version }}
         gh-token: ${{ steps.app-token.outputs.token }}
