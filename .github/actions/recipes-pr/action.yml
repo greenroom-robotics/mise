@@ -141,4 +141,4 @@ runs:
         echo "Processed $published package(s) for conda recipe PRs."
 
     - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v5

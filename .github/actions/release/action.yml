@@ -119,4 +119,4 @@ runs:
         pixi run --manifest-path "$MISE_MANIFEST" mise ci release "${args[@]}"
 
     - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3
+      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v5
