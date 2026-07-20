@@ -21,7 +21,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
-    default: v0.5.1
+    default: v0.5.2
   package:
     description: Single package to release (default - all packages under package-dir).
     required: false
