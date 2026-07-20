@@ -21,7 +21,7 @@ inputs:
   proxy-version:
     description: conda-channel-proxy release tag.
     required: false
-    default: v0.5.2
+    default: v5.2.0
   dispatch-sha:
     description: 'SHA the run was dispatched on. Tags that are NOT ancestors of this SHA were created by the deb release this run; pre-existing tags are skipped.'
     required: true

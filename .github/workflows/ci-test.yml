@@ -66,7 +66,7 @@ on:
         description: conda-channel-proxy release tag.
         required: false
         type: string
-        default: v0.5.2
+        default: v5.2.0
       changed-only:
         description: On pull_request, test only packages whose files changed (push/dispatch always test all).
         required: false
