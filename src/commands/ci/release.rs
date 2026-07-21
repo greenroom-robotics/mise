@@ -270,9 +270,17 @@ impl Release {
         }
         assets.push("**/pixi.toml".to_string());
         assets.extend(self.extra_git_asset.iter().cloned());
+        // Name the package in the release commit subject so `git log` says what
+        // was bumped. msr runs each package's own semantic-release with this
+        // per-package .releaserc, so `pkg.name` is exactly the package being
+        // released here. The rest matches @semantic-release/git's default.
+        let git_message = format!(
+            "chore(release): {name} ${{nextRelease.version}} [skip ci]\n\n${{nextRelease.notes}}",
+            name = pkg.name,
+        );
         plugins.push(serde_json::json!([
             "@semantic-release/git",
-            { "assets": assets }
+            { "assets": assets, "message": git_message }
         ]));
 
         let releaserc = serde_json::json!({
@@ -395,6 +403,40 @@ mod tests {
         let assets = git[1]["assets"].as_array().unwrap();
         assert!(assets.iter().any(|a| a == "**/pixi.toml"));
         assert!(!assets.iter().any(|a| a == "CHANGELOG.md"));
+    }
+
+    // The release commit subject must name the package so `git log` shows what
+    // each `chore(release)` bumped, not just a bare version.
+    #[test]
+    fn git_commit_message_names_the_package() {
+        let dir = std::env::temp_dir().join("mise-release-msg-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let pixi = dir.join("pixi.toml");
+        std::fs::write(
+            &pixi,
+            "[package]\nname = \"object_tracker\"\nversion = \"1.0.0\"\n",
+        )
+        .unwrap();
+        let cli = TestCli::parse_from(["x"]);
+        let rc = cli.release.releaserc_json(&pixi).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+        let git = v["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p[0] == "@semantic-release/git")
+            .unwrap()[1]
+            .clone();
+        let msg = git["message"].as_str().unwrap();
+        assert!(
+            msg.starts_with("chore(release): object_tracker ${nextRelease.version} [skip ci]"),
+            "commit subject must name the package: {msg}"
+        );
+        // Release notes must still ride in the body.
+        assert!(
+            msg.contains("${nextRelease.notes}"),
+            "notes preserved: {msg}"
+        );
     }
 
     #[test]
