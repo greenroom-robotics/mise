@@ -89,6 +89,18 @@ runs:
       shell: bash
       run: yarn install --frozen-lockfile
 
+    # Push the release commit/tag AS the App, not just labelled as it. Setup
+    # configures a global `url.insteadOf` rewrite that embeds the App token in
+    # every github.com URL, but the caller's checkout persisted the default
+    # GITHUB_TOKEN in the remote's auth extraheader, and that Authorization
+    # header shadows the rewritten URL's App token. Drop the extraheader so
+    # @semantic-release/git pushes via the App token instead of the default one.
+    - name: Push release as the App bot
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --local --unset-all "http.https://github.com/.extraheader" || true
+
     - name: Run mise ci release
       shell: bash
       env:
