@@ -14,7 +14,7 @@ jobs:
     runs-on: 2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - uses: greenroom-robotics/mise/.github/actions/test@v4
+      - uses: greenroom-robotics/mise/.github/actions/test@v6
         with:
           gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -30,7 +30,7 @@ That's the whole workflow. Add `package` or `package-dir` inputs to filter or re
 To fan out across environments — for example a standard build, a Boost-Asio build variant, and a lint env — pass `jobs` as newline-separated `<env>:<task>` pairs:
 
 ```yaml
-      - uses: greenroom-robotics/mise/.github/actions/test@v4
+      - uses: greenroom-robotics/mise/.github/actions/test@v6
         with:
           jobs: |
             tests:test

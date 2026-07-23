@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # full history so the ancestor check works
-      - uses: greenroom-robotics/mise/.github/actions/recipes-pr@v4
+      - uses: greenroom-robotics/mise/.github/actions/recipes-pr@v6
         with:
           dispatch-sha: ${{ github.sha }}
           package: ${{ inputs.package }}    # empty = all released this run

@@ -10,7 +10,7 @@
 #
 #   jobs:
 #     test:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v5
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v6
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
@@ -171,7 +171,7 @@ jobs:
         if: inputs.host-setup != ''
         shell: bash
         run: ${{ inputs.host-setup }}
-      - uses: greenroom-robotics/mise/.github/actions/test@v5
+      - uses: greenroom-robotics/mise/.github/actions/test@v6
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}
