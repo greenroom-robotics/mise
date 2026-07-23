@@ -1,3 +1,10 @@
+## [6.0.2](https://github.com/greenroom-robotics/mise/compare/mise@6.0.1...mise@6.0.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* append to open recipes PR, treat up-to-date recipe as no-op ([#63](https://github.com/greenroom-robotics/mise/issues/63)) ([79d681c](https://github.com/greenroom-robotics/mise/commit/79d681cc9641d89b18e998f57b03cdc8e3cd9766))
+
 ## [6.0.1](https://github.com/greenroom-robotics/mise/compare/mise@6.0.0...mise@6.0.1) (2026-07-23)
 
 
