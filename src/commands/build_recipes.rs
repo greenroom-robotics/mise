@@ -528,7 +528,7 @@ impl UpstreamPixiToml {
 
     /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string
     /// across all dep tables. These are committed opt-out pins (a released
-    /// consumer that was decoupled from its sibling, see `pin-siblings`).
+    /// consumer that was decoupled from its sibling), hand-written or legacy.
     fn exact_pins(&self) -> Vec<(String, String)> {
         let tables = [
             self.dependencies.as_ref(),
@@ -653,9 +653,8 @@ fn visit_table(
 /// reading the version from the sibling manifest at the same rev. The derived
 /// pin is deterministic: same rev -> same sibling manifest -> same pin.
 ///
-/// The farm calls this on ephemeral temp checkouts. The release path
-/// (`mise ci pin-siblings`) deliberately calls it on the *committed* manifest
-/// to convert an opt-in path dep into a committed `==` pin at release time.
+/// This is only ever called by the farm (via `mise build-recipes`) on
+/// ephemeral temp checkouts; the committed manifest keeps its path deps.
 pub(crate) fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
     let manifest_dir = manifest_path.parent().unwrap();
     let text = fs::read_to_string(manifest_path)

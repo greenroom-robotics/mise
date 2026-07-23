@@ -114,46 +114,13 @@ jobs:
         env:
           PACKAGE: ${{ inputs.package }}
           PACKAGE_DIR: ${{ inputs.package-dir }}
-        # ponytail: ~10 lines replacing the repos' colcon-list detect step.
-        # The composite's --package wants the *directory* name, which is exactly
-        # what we emit — so no colcon needed to resolve real paths. Ceiling:
-        # assumes dir-name == package name (true for these flat repos) and
-        # ignores root-[package] single-package repos (they use the composite).
-        run: |
-          set -euo pipefail
-          if [ -n "$PACKAGE" ]; then
-            names="$PACKAGE"
-          else
-            names=$(find "$PACKAGE_DIR" -mindepth 1 -maxdepth 1 -type d \
-              -exec test -e '{}/pixi.toml' ';' -printf '%f\n' | sort)
-          fi
-          all=$(printf '%s' "$names" | jq -Rsc 'split("\n") | map(select(length>0))')
-          if [ "$all" = "[]" ]; then
-            echo "::error::no packages with pixi.toml found under $PACKAGE_DIR"; exit 1
-          fi
-          echo "all=$all" >> "$GITHUB_OUTPUT"
-          # paths-filter map: each package's filter is its own dir plus the
-          # dirs of any sibling it references via a `path = "../sibling"` dep
-          # (one level deep). Reverse direction matters: a change to a
-          # dependency must also trigger its consumers, otherwise a consumer's
-          # committed pixi.lock can go stale unnoticed until an unrelated
-          # later PR trips over it. Path deps are found by grepping each
-          # package's pixi.toml; the self-referential `path = "."` idiom
-          # doesn't match (no `../`) so it's naturally excluded.
-          {
-            echo 'map<<__EOF__'
-            printf '%s\n' "$names" | while IFS= read -r n; do
-              [ -n "$n" ] || continue
-              deps=$(grep -oE 'path[[:space:]]*=[[:space:]]*"\.\./[^"]+"' "$PACKAGE_DIR/$n/pixi.toml" 2>/dev/null \
-                | sed -E 's#.*"\.\./([^"]+)".*#\1#' | sort -u)
-              printf '%s:\n' "$n"
-              printf "  - '%s/%s/**'\n" "$PACKAGE_DIR" "$n"
-              printf '%s\n' "$deps" | while IFS= read -r d; do
-                [ -n "$d" ] && printf "  - '%s/%s/**'\n" "$PACKAGE_DIR" "$d"
-              done
-            done
-            echo '__EOF__'
-          } >> "$GITHUB_OUTPUT"
+        # Discover package dirs (dir-name == package name, true for these flat
+        # repos) and emit `all` (JSON array) + `map` (paths-filter map). The
+        # map's filter for each package is its own dir plus the dirs of its
+        # TRANSITIVE path-dep closure, so a change to a leaf retriggers every
+        # consumer whose committed pixi.lock transitively pins it. Single
+        # root-[package] repos use the composite directly, not this workflow.
+        run: python3 .github/scripts/discover_packages.py
 
       - id: filter
         if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}

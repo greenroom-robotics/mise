@@ -69,7 +69,8 @@ fn msr_ordering_deps(
 /// always satisfies the range, so multi-semantic-release orders the coupled
 /// release sibling-first but never cascade-releases a consumer that has no
 /// commits of its own. Path deps stay committed as the permanent state; the
-/// buildfarm derives `==` pins ephemerally at build time (resolve_path_deps).
+/// buildfarm derives `==` pins ephemerally at build time via `mise
+/// build-recipes` (resolve_path_deps) on a temp checkout — not pixi.
 fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
     let bin = if multi {
         "multi-semantic-release"
@@ -160,7 +161,8 @@ impl Release {
         // via synthesized package.json files — NOT a cascade (see release_argv:
         // --deps.release=inherit). Only path deps participate; pin deps don't.
         // Path deps are guarded (verify-siblings) and stay committed permanently
-        // — the buildfarm derives `==` pins ephemerally at build time.
+        // — the buildfarm derives `==` pins ephemerally at build time via
+        // `mise build-recipes` (resolve_path_deps), not pixi.
         let graph = crate::commands::ci::siblings::analyze(&pixis)?;
 
         // Write a .releaserc (and, in multi mode, a package.json encoding

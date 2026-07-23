@@ -324,8 +324,7 @@ fn ci_test_discovers_fixture_package() {
             "test",
             "--package",
             "foo",
-            "--locked",
-            "false",
+            "--no-locked",
             "--package-dir",
         ])
         .arg(&fixture)
