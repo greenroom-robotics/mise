@@ -101,13 +101,18 @@ impl RecipesPr {
         let recipes_root = tmp.path().join("recipes");
         clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
 
-        // 4. Create or continue the rolling release branch. If an earlier
-        //    package of this same CI run already pushed the branch, append to
-        //    it so the whole coupled release lands in one PR; otherwise reset
-        //    it from main.
+        // 4. Create or continue the rolling release branch. The rolling PR
+        //    being open is the sole signal: pending entries on an open
+        //    rolling PR are never clobbered — the upsert is block-scoped per
+        //    package, so appending preserves sibling entries; a closed
+        //    (unmerged) PR means the content was rejected and starting fresh
+        //    from main is correct. This also covers same-run coupled
+        //    releases: the first package's push creates the PR, so the
+        //    second package sees it open and appends.
         let branch = release_branch(&src_short);
-        let head_msg = remote_branch_head_message(&recipes_root, &branch)?;
-        if should_append(head_msg.as_deref(), run_id.as_deref()) {
+        let pr_open = pr_exists(&self.recipes_repo, &branch)?;
+        if pr_open {
+            fetch_recipes_branch(&recipes_root, &branch)?;
             run_in(
                 &recipes_root,
                 &["git", "checkout", "-b", &branch, "FETCH_HEAD"],
@@ -165,30 +170,53 @@ impl RecipesPr {
             &recipes_root,
             &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
-        // Commit as the App bot. The release action exports its identity via
-        // GIT_AUTHOR_*/GIT_COMMITTER_*, which git honours natively; we mirror
-        // it onto -c so a standalone run still has a usable identity, falling
-        // back to the greenroom-bot label only when the env is unset.
-        let (git_name, git_email) = git_identity();
-        let name_cfg = format!("user.name={git_name}");
-        let email_cfg = format!("user.email={git_email}");
-        let mut commit_msg = release_title(&src_short, self.package.as_deref(), &tag);
-        if let Some(id) = &run_id {
-            commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
+        let title = release_title(&src_short, self.package.as_deref(), &tag);
+        // A package can be a no-op against the recipes checkout: an earlier CI
+        // run (e.g. a sibling release workflow sweeping the same tag) may have
+        // already staged the identical recipe content, in which case `git
+        // diff --cached --quiet` reports nothing staged and `git commit`
+        // would fail with "nothing to commit, working tree clean". What to do
+        // about that depends on the baseline: if we reset from main (no open
+        // PR), there's nothing new to publish at all, so bail out before the
+        // push/PR steps rather than force-pushing main-as-is and opening an
+        // empty PR. If we appended to an open PR, the branch carries prior
+        // pending content that still needs to reach the remote, so we skip
+        // only the commit and continue through push + PR refresh.
+        match classify_noop(nothing_staged(&recipes_root)?, pr_open) {
+            NoopOutcome::EarlyReturn => {
+                println!("recipe for {title} already up to date; nothing to publish");
+                return Ok(());
+            }
+            NoopOutcome::SkipCommitKeepPush => {
+                tracing::info!("recipe for {title} already up to date; skipping commit");
+            }
+            NoopOutcome::Commit => {
+                // Commit as the App bot. The release action exports its identity via
+                // GIT_AUTHOR_*/GIT_COMMITTER_*, which git honours natively; we mirror
+                // it onto -c so a standalone run still has a usable identity, falling
+                // back to the greenroom-bot label only when the env is unset.
+                let (git_name, git_email) = git_identity();
+                let name_cfg = format!("user.name={git_name}");
+                let email_cfg = format!("user.email={git_email}");
+                let mut commit_msg = title.clone();
+                if let Some(id) = &run_id {
+                    commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
+                }
+                run_in(
+                    &recipes_root,
+                    &[
+                        "git",
+                        "-c",
+                        &name_cfg,
+                        "-c",
+                        &email_cfg,
+                        "commit",
+                        "-m",
+                        &commit_msg,
+                    ],
+                )?;
+            }
         }
-        run_in(
-            &recipes_root,
-            &[
-                "git",
-                "-c",
-                &name_cfg,
-                "-c",
-                &email_cfg,
-                "commit",
-                "-m",
-                &commit_msg,
-            ],
-        )?;
         // Plain --force, not --force-with-lease: the recipes repo is cloned
         // shallow on `main` only, so there's no remote-tracking ref for the
         // rolling branch and --force-with-lease would reject the push.
@@ -202,8 +230,7 @@ impl RecipesPr {
         let old = diff_ref(&old_refs, &self.sha);
         let body = pr_body(old.map(|o| compare_url(&src_url, o, &self.sha)).as_deref());
 
-        let title = release_title(&src_short, self.package.as_deref(), &tag);
-        if pr_exists(&self.recipes_repo, &branch)? {
+        if pr_open {
             // The rolling PR already exists from a previous release; refresh its
             // title and body so the version and diff link aren't stale.
             let edit_args = pr_edit_args(&self.recipes_repo, &branch, &title, &body);
@@ -243,8 +270,8 @@ impl RecipesPr {
     }
 }
 
-/// Version-independent rolling branch, one per source repo. Packages released
-/// in the same CI run append commits to it (see should_append); a new run
+/// Version-independent rolling branch, one per source repo. Packages land on
+/// it as long as the rolling PR is open (see `pr_exists`); a closed/absent PR
 /// resets it from main. Shared so coupled sibling releases land in ONE
 /// recipes PR and build together in one pr-validate run.
 fn release_branch(src_short: &str) -> String {
@@ -255,84 +282,18 @@ fn run_marker(run_id: &str) -> String {
     format!("[mise-run:{run_id}]")
 }
 
-/// Append to the existing branch only when its head commit carries this CI
-/// run's marker — i.e. an earlier package of the same release run wrote it.
-/// Anything else (stale branch, standalone run) starts fresh from main.
-fn should_append(branch_head_msg: Option<&str>, run_id: Option<&str>) -> bool {
-    match (branch_head_msg, run_id) {
-        (Some(msg), Some(id)) => msg.contains(&run_marker(id)),
-        _ => false,
-    }
-}
-
-/// Result of classifying `git ls-remote --exit-code`'s exit status.
-#[derive(Debug, PartialEq, Eq)]
-enum RemoteRefStatus {
-    /// Exit 0: the ref exists on the remote.
-    Exists,
-    /// Exit 2: the ref is genuinely absent from the remote.
-    Absent,
-    /// Anything else: the check itself failed (network/auth/etc), not a verdict.
-    Unknown,
-}
-
-/// Maps `git ls-remote --exit-code`'s process exit code to a verdict. `None`
-/// (e.g. killed by signal) is treated the same as an unrecognized code.
-fn classify_ls_remote_status(code: Option<i32>) -> RemoteRefStatus {
-    match code {
-        Some(0) => RemoteRefStatus::Exists,
-        Some(2) => RemoteRefStatus::Absent,
-        _ => RemoteRefStatus::Unknown,
-    }
-}
-
-/// Fetch the remote rolling branch and return its head commit message.
-/// `None` when the branch genuinely doesn't exist on the remote. A transient
-/// failure to check or fetch the branch is a hard error, not `None` — treating
-/// it as "branch doesn't exist" would reset the branch from main and clobber
-/// an earlier sibling's recipe bump with `push --force`.
-fn remote_branch_head_message(
-    recipes_root: &std::path::Path,
-    branch: &str,
-) -> anyhow::Result<Option<String>> {
-    let ls_remote_status = std::process::Command::new("git")
-        .args([
-            "ls-remote",
-            "--exit-code",
-            "origin",
-            &format!("refs/heads/{branch}"),
-        ])
-        .current_dir(recipes_root)
-        .status()?;
-    match classify_ls_remote_status(ls_remote_status.code()) {
-        RemoteRefStatus::Absent => return Ok(None),
-        RemoteRefStatus::Unknown => {
-            anyhow::bail!(
-                "git ls-remote --exit-code origin refs/heads/{branch} failed with {}",
-                ls_remote_status
-            );
-        }
-        RemoteRefStatus::Exists => {}
-    }
-
-    let fetched = std::process::Command::new("git")
+/// Fetch the remote rolling branch so `FETCH_HEAD` is populated for `git
+/// checkout -b <branch> FETCH_HEAD` (the append path). Only called when the
+/// rolling PR is open, so the branch is known to exist on the remote.
+fn fetch_recipes_branch(recipes_root: &std::path::Path, branch: &str) -> anyhow::Result<()> {
+    let status = std::process::Command::new("git")
         .args(["fetch", "--depth=1", "origin", branch])
         .current_dir(recipes_root)
         .status()?;
-    if !fetched.success() {
-        anyhow::bail!("git fetch --depth=1 origin {branch} failed with {fetched}");
+    if !status.success() {
+        anyhow::bail!("git fetch --depth=1 origin {branch} failed with {status}");
     }
-    let out = std::process::Command::new("git")
-        .args(["log", "-1", "--format=%B", "FETCH_HEAD"])
-        .current_dir(recipes_root)
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!(
-            "git log -1 --format=%B FETCH_HEAD failed with {}",
-            out.status
-        );
-    }
-    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+    Ok(())
 }
 
 /// PR title / commit message, mirroring `release_branch`: per-package repos read
@@ -545,6 +506,51 @@ fn recipes_repo_https_url(repo: &str) -> String {
     }
 }
 
+/// Whether nothing is staged in the index relative to HEAD (`git diff
+/// --cached --quiet`). `git commit` fails with "nothing to commit, working
+/// tree clean" in this case, so callers must check first rather than let the
+/// commit error out. Unlike `git status --porcelain`, this ignores untracked
+/// files: an untracked file left behind in the checkout must not be mistaken
+/// for a real change to commit.
+fn nothing_staged(recipes_root: &std::path::Path) -> anyhow::Result<bool> {
+    let status = std::process::Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(recipes_root)
+        .status()?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => anyhow::bail!(
+            "git diff --cached --quiet failed in {} with {status}",
+            recipes_root.display()
+        ),
+    }
+}
+
+/// The three things that can happen with a staged upsert, depending on
+/// whether anything is actually staged and whether the rolling PR is open
+/// (i.e. whether the branch was appended-to or reset from main).
+#[derive(Debug, PartialEq, Eq)]
+enum NoopOutcome {
+    /// Something is staged: commit it normally.
+    Commit,
+    /// Nothing staged, but we appended to an open PR: the branch still
+    /// carries prior pending content, so skip the commit but keep pushing
+    /// and refreshing the PR.
+    SkipCommitKeepPush,
+    /// Nothing staged and we reset from main (no open PR): there is nothing
+    /// new to publish at all — return before push/PR steps.
+    EarlyReturn,
+}
+
+fn classify_noop(nothing_staged: bool, pr_open: bool) -> NoopOutcome {
+    match (nothing_staged, pr_open) {
+        (false, _) => NoopOutcome::Commit,
+        (true, true) => NoopOutcome::SkipCommitKeepPush,
+        (true, false) => NoopOutcome::EarlyReturn,
+    }
+}
+
 fn run_in(cwd: &std::path::Path, argv: &[&str]) -> anyhow::Result<()> {
     let (cmd, rest) = argv
         .split_first()
@@ -696,21 +702,6 @@ mod tests {
         );
     }
 
-    // Only a clean exit-code 2 means the branch is genuinely absent; anything
-    // else (network/auth failure, killed by signal, ...) must be a hard error
-    // so we never mistake "couldn't check" for "doesn't exist".
-    #[test]
-    fn classify_ls_remote_status_only_treats_exit_2_as_absent() {
-        assert_eq!(classify_ls_remote_status(Some(0)), RemoteRefStatus::Exists);
-        assert_eq!(classify_ls_remote_status(Some(2)), RemoteRefStatus::Absent);
-        assert_eq!(classify_ls_remote_status(Some(1)), RemoteRefStatus::Unknown);
-        assert_eq!(
-            classify_ls_remote_status(Some(128)),
-            RemoteRefStatus::Unknown
-        );
-        assert_eq!(classify_ls_remote_status(None), RemoteRefStatus::Unknown);
-    }
-
     // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
     // label — `--label automerge` only attaches a literal label and the PR
     // never merges.
@@ -747,21 +738,6 @@ mod tests {
             "release/platform_toolbox"
         );
         assert_eq!(release_branch("mise"), "release/mise");
-    }
-
-    #[test]
-    fn should_append_only_for_same_run_marker() {
-        let msg = format!("release: r geolocation@1.2.0\n\n{}", run_marker("12345"));
-        // same run -> append
-        assert!(should_append(Some(&msg), Some("12345")));
-        // different run -> reset
-        assert!(!should_append(Some(&msg), Some("99999")));
-        // no marker on branch head -> reset
-        assert!(!should_append(Some("release: r x@1.0.0"), Some("12345")));
-        // no branch -> reset
-        assert!(!should_append(None, Some("12345")));
-        // standalone run (no run id) -> always reset
-        assert!(!should_append(Some(&msg), None));
     }
 
     // Title mirrors the branch: per-package vs repo-level.
@@ -817,6 +793,82 @@ mod tests {
             compare_url("https://github.com/gr/mise.git", "v1.0.0", "abc123"),
             "https://github.com/gr/mise/compare/v1.0.0...abc123"
         );
+    }
+
+    // Guards against re-running `git commit` when an earlier sibling run
+    // already staged the identical recipe content: `git commit` errors with
+    // "nothing to commit, working tree clean" in that case, so the caller
+    // must detect it beforehand via `nothing_staged` and skip the commit.
+    #[test]
+    fn nothing_staged_detects_no_pending_index_changes() {
+        let td = tempfile::TempDir::new().unwrap();
+        let repo = td.path();
+        run_in(repo, &["git", "init"]).unwrap();
+        run_in(
+            repo,
+            &[
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t.com",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ],
+        )
+        .unwrap();
+
+        // Nothing staged after a fresh checkout -> nothing staged.
+        assert!(nothing_staged(repo).unwrap());
+
+        // Writing and staging a file the same as an already-committed one
+        // (i.e. re-applying an identical recipe update) leaves nothing
+        // staged -> still nothing staged.
+        std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
+        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
+        run_in(
+            repo,
+            &[
+                "git",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t.com",
+                "commit",
+                "-m",
+                "add recipe",
+            ],
+        )
+        .unwrap();
+        std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
+        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
+        assert!(nothing_staged(repo).unwrap());
+
+        // An untracked file left behind in the checkout (e.g. a build
+        // artifact) must not be mistaken for something to commit — unlike
+        // `git status --porcelain`, `git diff --cached` ignores it.
+        std::fs::write(repo.join("untracked.tmp"), "leftover\n").unwrap();
+        assert!(nothing_staged(repo).unwrap());
+        std::fs::remove_file(repo.join("untracked.tmp")).unwrap();
+
+        // A genuine content change leaves something staged -> not clean.
+        std::fs::write(repo.join("recipe.yaml"), "different content\n").unwrap();
+        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
+        assert!(!nothing_staged(repo).unwrap());
+    }
+
+    // The three-way outcome that gates commit/push/PR: only "nothing staged
+    // AND no open PR" is safe to bail out on before push — an open rolling PR
+    // means the branch carries prior pending content that must still reach
+    // the remote even when this package's upsert was itself a no-op.
+    #[test]
+    fn classify_noop_outcomes() {
+        assert_eq!(classify_noop(false, false), NoopOutcome::Commit);
+        assert_eq!(classify_noop(false, true), NoopOutcome::Commit);
+        assert_eq!(classify_noop(true, true), NoopOutcome::SkipCommitKeepPush);
+        assert_eq!(classify_noop(true, false), NoopOutcome::EarlyReturn);
     }
 
     #[test]
