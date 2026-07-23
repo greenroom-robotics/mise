@@ -1,3 +1,10 @@
+## [6.0.1](https://github.com/greenroom-robotics/mise/compare/mise@6.0.0...mise@6.0.1) (2026-07-23)
+
+
+### Bug Fixes
+
+* bump internal action self-refs to v6 ([#62](https://github.com/greenroom-robotics/mise/issues/62)) ([30d9b43](https://github.com/greenroom-robotics/mise/commit/30d9b433ad157c28ff63420999647a46d1beb45f))
+
 ## [6.0.0](https://github.com/greenroom-robotics/mise/compare/mise@5.17.1...mise@6.0.0) (2026-07-23)
 
 
