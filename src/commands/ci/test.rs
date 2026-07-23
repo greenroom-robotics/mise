@@ -23,12 +23,27 @@ pub struct Test {
     #[arg(long = "job")]
     pub jobs: Vec<String>,
     /// Require the committed pixi.lock to satisfy the manifest and fail on
-    /// drift (`pixi run --locked`). Off by default: re-resolve from the
-    /// manifest (conda-forge style), since the backend re-derives source
-    /// metadata at build time so a lock predating a backend change would
-    /// otherwise flake CI.
-    #[arg(long)]
+    /// drift (`pixi run --locked`). On by default: the committed pixi.lock is
+    /// the permanent state and CI should catch drift against it. Pass
+    /// `--locked=false` to opt out and re-resolve from the manifest instead
+    /// (conda-forge style) — useful when a lock predates a backend change.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub locked: bool,
+}
+
+/// Fail fast with an actionable message when `--locked` is requested but the
+/// package has no committed pixi.lock: `pixi run --locked` would otherwise
+/// fail with a much less helpful error.
+fn check_lockfile_committed(pkg_dir: &Path) -> anyhow::Result<()> {
+    let lockfile = pkg_dir.join("pixi.lock");
+    if !lockfile.exists() {
+        anyhow::bail!(
+            "no pixi.lock committed for {} — run 'pixi lock' in {} and commit it",
+            pkg_dir.display(),
+            pkg_dir.display()
+        );
+    }
+    Ok(())
 }
 
 /// A single `<env>:<task>` unit of work run against a package.
@@ -72,6 +87,9 @@ impl Test {
         let mut failed = Vec::new();
         for pixi in pkgs {
             let pkg_dir = pixi.parent().unwrap();
+            if self.locked {
+                check_lockfile_committed(pkg_dir)?;
+            }
             for job in &jobs {
                 println!(
                     "==> mise ci test :: {} [{}:{}]",
@@ -79,8 +97,8 @@ impl Test {
                     job.env,
                     job.task
                 );
-                // Lockfile is advisory by default (re-resolve from the
-                // manifest); --locked opts into strict lock satisfaction.
+                // Lockfile satisfaction is strict by default; --locked=false
+                // opts out and re-resolves from the manifest instead.
                 let mut cmd = std::process::Command::new("pixi");
                 cmd.arg("run");
                 if self.locked {
@@ -266,5 +284,26 @@ mod tests {
         assert!(parse_jobs(&["noselector".to_string()]).is_err());
         assert!(parse_jobs(&[":test".to_string()]).is_err());
         assert!(parse_jobs(&["tests:".to_string()]).is_err());
+    }
+
+    #[test]
+    fn check_lockfile_committed_errors_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let pkg_dir = tmp.path().join("packages/foo");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        let err = check_lockfile_committed(&pkg_dir).unwrap_err();
+        assert!(
+            err.to_string().contains("no pixi.lock committed"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn check_lockfile_committed_passes_when_present() {
+        let tmp = TempDir::new().unwrap();
+        let pkg_dir = tmp.path().join("packages/foo");
+        fs::create_dir_all(&pkg_dir).unwrap();
+        fs::write(pkg_dir.join("pixi.lock"), "").unwrap();
+        assert!(check_lockfile_committed(&pkg_dir).is_ok());
     }
 }

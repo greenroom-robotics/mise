@@ -58,10 +58,10 @@ on:
         type: string
         default: ""
       locked:
-        description: Require the committed pixi.lock to satisfy the manifest and fail on drift. Off by default - re-resolve from the manifest (conda-forge style).
+        description: Require the committed pixi.lock to satisfy the manifest and fail on drift. On by default; set false to opt out and re-resolve from the manifest (conda-forge style).
         required: false
         type: boolean
-        default: false
+        default: true
       proxy-version:
         description: conda-channel-proxy release tag.
         required: false
@@ -132,11 +132,25 @@ jobs:
             echo "::error::no packages with pixi.toml found under $PACKAGE_DIR"; exit 1
           fi
           echo "all=$all" >> "$GITHUB_OUTPUT"
-          # paths-filter map: one `pkg: '<dir>/pkg/**'` line per package.
+          # paths-filter map: each package's filter is its own dir plus the
+          # dirs of any sibling it references via a `path = "../sibling"` dep
+          # (one level deep). Reverse direction matters: a change to a
+          # dependency must also trigger its consumers, otherwise a consumer's
+          # committed pixi.lock can go stale unnoticed until an unrelated
+          # later PR trips over it. Path deps are found by grepping each
+          # package's pixi.toml; the self-referential `path = "."` idiom
+          # doesn't match (no `../`) so it's naturally excluded.
           {
             echo 'map<<__EOF__'
             printf '%s\n' "$names" | while IFS= read -r n; do
-              [ -n "$n" ] && printf "%s: '%s/%s/**'\n" "$n" "$PACKAGE_DIR" "$n"
+              [ -n "$n" ] || continue
+              deps=$(grep -oE 'path[[:space:]]*=[[:space:]]*"\.\./[^"]+"' "$PACKAGE_DIR/$n/pixi.toml" 2>/dev/null \
+                | sed -E 's#.*"\.\./([^"]+)".*#\1#' | sort -u)
+              printf '%s:\n' "$n"
+              printf "  - '%s/%s/**'\n" "$PACKAGE_DIR" "$n"
+              printf '%s\n' "$deps" | while IFS= read -r d; do
+                [ -n "$d" ] && printf "  - '%s/%s/**'\n" "$PACKAGE_DIR" "$d"
+              done
             done
             echo '__EOF__'
           } >> "$GITHUB_OUTPUT"

@@ -319,7 +319,15 @@ fn ci_test_discovers_fixture_package() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci/packages");
     let out = mise()
-        .args(["ci", "test", "--package", "foo", "--package-dir"])
+        .args([
+            "ci",
+            "test",
+            "--package",
+            "foo",
+            "--locked",
+            "false",
+            "--package-dir",
+        ])
         .arg(&fixture)
         .output()
         .unwrap();
