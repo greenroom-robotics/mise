@@ -1,0 +1,31 @@
+name: Discover packages
+description: 'Discover per-package pixi workspaces under package-dir and emit `all` (JSON array of package names) and `map` (a dorny/paths-filter YAML map keyed by package, each including its transitive path-dep closure). Ships its own script so it works from any caller''s checkout, not just this repo''s.'
+author: Greenroom Robotics
+
+inputs:
+  package:
+    description: Single package to discover (default - all packages under package-dir).
+    required: false
+    default: ""
+  package-dir:
+    description: Directory containing per-package pixi workspaces.
+    required: false
+    default: packages
+
+outputs:
+  all:
+    description: Compact JSON array of discovered package dir-names.
+    value: ${{ steps.discover.outputs.all }}
+  map:
+    description: dorny/paths-filter YAML map — each package's filter is its own dir glob plus the dir globs of every sibling it transitively path-depends on.
+    value: ${{ steps.discover.outputs.map }}
+
+runs:
+  using: composite
+  steps:
+    - id: discover
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+        PACKAGE_DIR: ${{ inputs.package-dir }}
+      run: python3 "$GITHUB_ACTION_PATH/discover_packages.py"
