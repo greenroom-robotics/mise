@@ -1,3 +1,20 @@
+## [6.0.0](https://github.com/greenroom-robotics/mise/compare/mise@5.17.1...mise@6.0.0) (2026-07-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* default --locked in ci test, drop pin-siblings, dependent-awar… (#61)
+
+### Features
+
+* attribute release commit to app bot, name package, push as app ([#60](https://github.com/greenroom-robotics/mise/issues/60)) ([a267e6c](https://github.com/greenroom-robotics/mise/commit/a267e6c7e12cfdc01774e0ec82febe53902a5191))
+* default --locked in ci test, drop pin-siblings, dependent-awar… ([#61](https://github.com/greenroom-robotics/mise/issues/61)) ([ff9c12c](https://github.com/greenroom-robotics/mise/commit/ff9c12c8c68cb5f539698edbe0b44dfdb6ce889c))
+
+
+### Bug Fixes
+
+* pin conda-channel-proxy default to v5.2.0 ([8230cf6](https://github.com/greenroom-robotics/mise/commit/8230cf6400562a7555bd21f32db14bf2f5cff36c))
+
 ## [5.17.1](https://github.com/greenroom-robotics/mise/compare/mise@5.17.0...mise@5.17.1) (2026-07-15)
 
 
