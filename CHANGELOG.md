@@ -1,3 +1,10 @@
+## [6.0.3](https://github.com/greenroom-robotics/mise/compare/mise@6.0.2...mise@6.0.3) (2026-07-23)
+
+
+### Bug Fixes
+
+* ship package discovery as composite action for external ci-test callers ([#64](https://github.com/greenroom-robotics/mise/issues/64)) ([0404874](https://github.com/greenroom-robotics/mise/commit/0404874b7a8ee5f63c3d471bf17b077f0b928053))
+
 ## [6.0.2](https://github.com/greenroom-robotics/mise/compare/mise@6.0.1...mise@6.0.2) (2026-07-23)
 
 
