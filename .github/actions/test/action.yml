@@ -49,9 +49,9 @@ inputs:
     required: false
     default: ""
   locked:
-    description: Require the committed pixi.lock to satisfy the manifest and fail on drift (`mise ci test --locked`). Off by default - re-resolve from the manifest (conda-forge style).
+    description: Require the committed pixi.lock to satisfy the manifest and fail on drift. On by default; set to "false" to re-resolve from the manifest instead (conda-forge style), which passes `--no-locked` to `mise ci test`.
     required: false
-    default: "false"
+    default: "true"
 
 runs:
   using: composite
@@ -72,8 +72,8 @@ runs:
         if [ -n "${{ inputs.package }}" ]; then
           args+=(--package "${{ inputs.package }}")
         fi
-        if [ "${{ inputs.locked }}" = "true" ]; then
-          args+=(--locked)
+        if [ "${{ inputs.locked }}" = "false" ]; then
+          args+=(--no-locked)
         fi
         # Each non-empty line of `jobs` becomes a --job <env>:<task>.
         while IFS= read -r job; do

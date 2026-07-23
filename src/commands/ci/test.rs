@@ -22,12 +22,12 @@ pub struct Test {
     /// `--job tests:test --job tests-boost:test --job lint:lint`.
     #[arg(long = "job")]
     pub jobs: Vec<String>,
-    /// Require the committed pixi.lock to satisfy the manifest and fail on
-    /// drift (`pixi run --locked`). Off by default: re-resolve from the
-    /// manifest (conda-forge style), since the backend re-derives source
-    /// metadata at build time so a lock predating a backend change would
-    /// otherwise flake CI.
-    #[arg(long)]
+    /// Opt out of lockfile-strict runs. By default `pixi run --locked` requires
+    /// the committed pixi.lock to satisfy the manifest and fails on drift — the
+    /// committed lock is the permanent state and CI should catch drift against
+    /// it. Pass `--no-locked` to re-resolve from the manifest instead
+    /// (conda-forge style) — useful when a lock predates a backend change.
+    #[arg(long = "no-locked", action = clap::ArgAction::SetFalse, default_value_t = true)]
     pub locked: bool,
 }
 
@@ -79,8 +79,8 @@ impl Test {
                     job.env,
                     job.task
                 );
-                // Lockfile is advisory by default (re-resolve from the
-                // manifest); --locked opts into strict lock satisfaction.
+                // Lockfile satisfaction is strict by default; --no-locked
+                // opts out and re-resolves from the manifest instead.
                 let mut cmd = std::process::Command::new("pixi");
                 cmd.arg("run");
                 if self.locked {

@@ -68,8 +68,9 @@ fn msr_ordering_deps(
 /// with the synthesized package.json ranges pinned to `"*"`, a sibling release
 /// always satisfies the range, so multi-semantic-release orders the coupled
 /// release sibling-first but never cascade-releases a consumer that has no
-/// commits of its own. A consumer re-pins to a sibling only when it releases on
-/// its own merits (its prepare runs `pin-siblings`).
+/// commits of its own. Path deps stay committed as the permanent state; the
+/// buildfarm derives `==` pins ephemerally at build time via `mise
+/// build-recipes` (resolve_path_deps) on a temp checkout — not pixi.
 fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
     let bin = if multi {
         "multi-semantic-release"
@@ -159,8 +160,9 @@ impl Release {
         // Sibling graph: drives msr's topological release *order* (multi mode)
         // via synthesized package.json files — NOT a cascade (see release_argv:
         // --deps.release=inherit). Only path deps participate; pin deps don't.
-        // Path deps are guarded (verify-siblings) and pinned back at the
-        // consumer's own release (pin-siblings).
+        // Path deps are guarded (verify-siblings) and stay committed permanently
+        // — the buildfarm derives `==` pins ephemerally at build time via
+        // `mise build-recipes` (resolve_path_deps), not pixi.
         let graph = crate::commands::ci::siblings::analyze(&pixis)?;
 
         // Write a .releaserc (and, in multi mode, a package.json encoding
@@ -227,8 +229,7 @@ impl Release {
         let abs_pkgdir = absolute(&self.package_dir);
         let mut prepare_cmd = format!(
             "mise ci verify-siblings --pixi-toml={pixi} --package-dir={pkgdir} && \
-             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi} && \
-             mise ci pin-siblings --pixi-toml={pixi}",
+             mise ci bump-pixi --version=${{nextRelease.version}} --pixi-toml={pixi}",
             pixi = abs_pixi.display(),
             pkgdir = abs_pkgdir.display(),
         );
@@ -487,14 +488,13 @@ mod tests {
             .find("verify-siblings")
             .expect("verify-siblings present");
         let bump_pos = prepare.find("bump-pixi").unwrap();
-        let pin_pos = prepare.find("pin-siblings").expect("pin-siblings present");
         assert!(
             verify_pos < bump_pos,
             "guard must run before the bump: {prepare}"
         );
         assert!(
-            bump_pos < pin_pos,
-            "pin-back must run after the bump: {prepare}"
+            !prepare.contains("pin-siblings"),
+            "pin-siblings must no longer be part of prepare: {prepare}"
         );
     }
 
