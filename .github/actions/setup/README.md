@@ -13,7 +13,7 @@ Public action — call it directly from any workflow.
 ## Usage
 
 ```yaml
-- uses: greenroom-robotics/mise/.github/actions/setup@v5
+- uses: greenroom-robotics/mise/.github/actions/setup@v6
   with:
     gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
     gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
