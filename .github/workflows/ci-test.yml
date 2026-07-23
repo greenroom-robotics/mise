@@ -109,18 +109,20 @@ jobs:
         with:
           fetch-depth: 0   # paths-filter diffs against the base ref
 
+      # Discovery lives in a composite action (not an inline script) because
+      # reusable-workflow steps run in the CALLER's checkout — a repo-local
+      # `.github/scripts/...` path 404s for every external caller. The
+      # composite ships its own script, resolved via github.action_path.
+      # Emits `all` (JSON array) + `map` (paths-filter map). The map's filter
+      # for each package is its own dir plus the dirs of its TRANSITIVE
+      # path-dep closure, so a change to a leaf retriggers every consumer
+      # whose committed pixi.lock transitively pins it. Single root-[package]
+      # repos use the test composite directly, not this workflow.
       - id: all
-        shell: bash
-        env:
-          PACKAGE: ${{ inputs.package }}
-          PACKAGE_DIR: ${{ inputs.package-dir }}
-        # Discover package dirs (dir-name == package name, true for these flat
-        # repos) and emit `all` (JSON array) + `map` (paths-filter map). The
-        # map's filter for each package is its own dir plus the dirs of its
-        # TRANSITIVE path-dep closure, so a change to a leaf retriggers every
-        # consumer whose committed pixi.lock transitively pins it. Single
-        # root-[package] repos use the composite directly, not this workflow.
-        run: python3 .github/scripts/discover_packages.py
+        uses: greenroom-robotics/mise/.github/actions/discover@v6
+        with:
+          package: ${{ inputs.package }}
+          package-dir: ${{ inputs.package-dir }}
 
       - id: filter
         if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}
