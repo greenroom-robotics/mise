@@ -1,3 +1,10 @@
+## [6.0.4](https://github.com/greenroom-robotics/mise/compare/mise@6.0.3...mise@6.0.4) (2026-07-26)
+
+
+### Bug Fixes
+
+* **ci-test:** scope LFS fetch to the package under test ([#66](https://github.com/greenroom-robotics/mise/issues/66)) ([8be8a59](https://github.com/greenroom-robotics/mise/commit/8be8a59b3e76a68a104d89535a9e333e4a3ed022))
+
 ## [6.0.3](https://github.com/greenroom-robotics/mise/compare/mise@6.0.2...mise@6.0.3) (2026-07-23)
 
 
