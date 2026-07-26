@@ -1,3 +1,10 @@
+## [7.0.1](https://github.com/greenroom-robotics/mise/compare/mise@7.0.0...mise@7.0.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* actually bump internal stuff to v7 ([b2f01d0](https://github.com/greenroom-robotics/mise/commit/b2f01d07dea2fc53f9f80b6f9c91c9aa3bcce494))
+
 ## [7.0.0](https://github.com/greenroom-robotics/mise/compare/mise@6.0.4...mise@7.0.0) (2026-07-26)
 
 
