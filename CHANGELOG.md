@@ -1,3 +1,16 @@
+## [7.0.0](https://github.com/greenroom-robotics/mise/compare/mise@6.0.4...mise@7.0.0) (2026-07-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* mise ci test now runs default:test when no --job is given
+(was tests:test). Repos still using a tests environment must pass an
+explicit --job tests:test (or the jobs input).
+
+### Features
+
+* default ci test to the pixi default env, not tests ([#65](https://github.com/greenroom-robotics/mise/issues/65)) ([2480204](https://github.com/greenroom-robotics/mise/commit/24802045bf627ad94487e53fab51d7595e65d187))
+
 ## [6.0.4](https://github.com/greenroom-robotics/mise/compare/mise@6.0.3...mise@6.0.4) (2026-07-26)
 
 
