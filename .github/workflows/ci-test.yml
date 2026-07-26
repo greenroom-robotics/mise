@@ -73,10 +73,15 @@ on:
         type: boolean
         default: false
       lfs:
-        description: Check out Git LFS objects in the test job (for repos with LFS test fixtures).
+        description: Fetch Git LFS objects for the package under test (for repos with LFS test fixtures). Scoped to the package's own directory — a leg testing a package with no LFS files downloads nothing.
         required: false
         type: boolean
         default: false
+      lfs-include:
+        description: 'Extra git-lfs include glob(s), comma-separated, fetched on every leg when `lfs` is on. For fixtures shared across packages (e.g. `packages/foo_bin/bin/**`). The package''s own dir is always included.'
+        required: false
+        type: string
+        default: ""
       host-setup:
         description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
         required: false
@@ -167,8 +172,25 @@ jobs:
         package: ${{ fromJSON(needs.discover.outputs.packages) }}
     steps:
       - uses: actions/checkout@v6
-        with:
-          lfs: ${{ inputs.lfs }}
+
+      # Checkout leaves LFS pointers alone; pull only the objects this leg can
+      # actually use. `lfs: true` on checkout would drag the repo's ENTIRE LFS
+      # store onto every matrix leg, including legs whose package has no LFS
+      # files at all. Fixtures shared across packages go in `lfs-include`.
+      - name: Fetch LFS objects for ${{ matrix.package }}
+        if: inputs.lfs
+        shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+          EXTRA: ${{ inputs.lfs-include }}
+        run: |
+          set -euo pipefail
+          include="${PACKAGE_DIR:+$PACKAGE_DIR/}$PACKAGE/**"
+          if [ -n "$EXTRA" ]; then include="$include,$EXTRA"; fi
+          echo "git lfs pull --include=$include"
+          git lfs pull --include="$include"
+
       - name: Host setup
         if: inputs.host-setup != ''
         shell: bash
