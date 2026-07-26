@@ -17,9 +17,10 @@ pub struct Test {
     #[arg(long, default_value = "test-reports")]
     pub report_dir: PathBuf,
     /// A `<env>:<task>` pair to run per package, repeatable. Defaults to
-    /// `tests:test` when none are given, preserving the single-environment
-    /// behaviour. Pass multiple to fan out across environments, e.g.
-    /// `--job tests:test --job tests-boost:test --job lint:lint`.
+    /// `default:test` when none are given — the package's `default` pixi
+    /// environment (test deps come in via an `extras = ["test"]` self-dep).
+    /// Pass multiple to fan out across environments, e.g.
+    /// `--job default:test --job tests-boost:test --job lint:lint`.
     #[arg(long = "job")]
     pub jobs: Vec<String>,
     /// Opt out of lockfile-strict runs. By default `pixi run --locked` requires
@@ -37,18 +38,18 @@ struct Job {
     task: String,
 }
 
-/// Parse `env:task` pairs, defaulting to a single `tests:test` job when empty.
+/// Parse `env:task` pairs, defaulting to a single `default:test` job when empty.
 fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
     if raw.is_empty() {
         return Ok(vec![Job {
-            env: "tests".into(),
+            env: "default".into(),
             task: "test".into(),
         }]);
     }
     raw.iter()
         .map(|spec| {
             let (env, task) = spec.split_once(':').with_context(|| {
-                format!("invalid --job {spec:?}: expected `<env>:<task>` (e.g. tests:test)")
+                format!("invalid --job {spec:?}: expected `<env>:<task>` (e.g. default:test)")
             })?;
             if env.is_empty() || task.is_empty() {
                 anyhow::bail!("invalid --job {spec:?}: env and task must both be non-empty");
@@ -239,10 +240,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_jobs_defaults_to_tests_test() {
+    fn parse_jobs_defaults_to_default_test() {
         let jobs = parse_jobs(&[]).unwrap();
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].env, "tests");
+        assert_eq!(jobs[0].env, "default");
         assert_eq!(jobs[0].task, "test");
     }
 

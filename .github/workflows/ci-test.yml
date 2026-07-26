@@ -16,7 +16,7 @@
 #         package-dir: packages
 #         changed-only: true        # PRs test only changed packages
 #         jobs: |
-#           tests:test
+#           default:test
 #       secrets:
 #         gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
 #         gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
