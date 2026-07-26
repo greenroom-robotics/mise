@@ -7,10 +7,16 @@
 // `setup@vN` ref while forgetting one of the others, which silently leaves
 // external consumers running a stale mise binary. This test is the
 // tripwire: it fails if any internal ref's pinned major doesn't match
-// pixi.toml's current major.
+// the major mise is *about to* release.
+//
+// "about to" matters: pixi.toml is only bumped by the release job after merge,
+// so on the very PR that needs the refs bumped, pixi.toml still holds the old
+// major. So the expected major is pixi.toml's plus one whenever there's a
+// breaking commit since the release tag pixi.toml's version names.
 use regex::Regex;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 #[test]
 fn internal_action_refs_match_pixi_major() {
@@ -19,7 +25,9 @@ fn internal_action_refs_match_pixi_major() {
     let pixi_toml = fs::read_to_string(manifest_dir.join("pixi.toml")).unwrap();
     let pixi: toml::Value = pixi_toml.parse().unwrap();
     let version = pixi["package"]["version"].as_str().unwrap();
-    let major = version.split('.').next().unwrap();
+    let released_major: u32 = version.split('.').next().unwrap().parse().unwrap();
+    let breaking = breaking_since(manifest_dir, &format!("mise@{version}"));
+    let major = released_major + u32::from(breaking);
 
     let ref_re = Regex::new(r#"greenroom-robotics/mise/[^@\s"'#]+@v(\d+)"#).unwrap();
 
@@ -31,7 +39,7 @@ fn internal_action_refs_match_pixi_major() {
         };
         for line in contents.lines() {
             for caps in ref_re.captures_iter(line) {
-                let pinned_major = &caps[1];
+                let pinned_major: u32 = caps[1].parse().unwrap();
                 if pinned_major != major {
                     mismatches.push(format!(
                         "{}: {} (expected v{major})",
@@ -46,9 +54,37 @@ fn internal_action_refs_match_pixi_major() {
     assert!(
         mismatches.is_empty(),
         "internal `greenroom-robotics/mise/...@vN` refs must be bumped to v{major} \
-         (pixi.toml package.version is {version}):\n{}",
+         (pixi.toml package.version is {version}{}):\n{}",
+        if breaking {
+            ", plus a breaking commit since that release"
+        } else {
+            ""
+        },
         mismatches.join("\n")
     );
+}
+
+/// Does any commit after `tag` declare a breaking change, per conventional
+/// commits (a `!` before the `:`, or a `BREAKING CHANGE` footer)? These are
+/// what make semantic-release bump the major.
+///
+/// Returns false if git can't answer (no tag, shallow clone, no git) — the test
+/// then just checks against the released major, as it did before.
+fn breaking_since(repo: &Path, tag: &str) -> bool {
+    let log = |format: &str| {
+        Command::new("git")
+            .args(["-C"])
+            .arg(repo)
+            .args(["log", format, &format!("{tag}..HEAD")])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+
+    let bang = Regex::new(r"(?m)^[a-zA-Z]+(\([^)]*\))?!:").unwrap();
+    bang.is_match(&log("--format=%s")) || log("--format=%B").contains("BREAKING CHANGE")
 }
 
 fn walk(dir: &Path) -> Vec<std::path::PathBuf> {

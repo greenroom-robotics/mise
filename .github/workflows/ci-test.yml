@@ -10,7 +10,7 @@
 #
 #   jobs:
 #     test:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v6
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v7
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
