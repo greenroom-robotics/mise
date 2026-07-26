@@ -41,11 +41,11 @@ inputs:
   jobs:
     description: |
       Newline-separated `<env>:<task>` pairs to run per package, e.g.
-        tests:test
+        default:test
         tests-boost:test
         lint:lint
       Each line is passed as a `--job` to `mise ci test`. Defaults to
-      `tests:test` (the single-environment behaviour) when empty.
+      `default:test` (the package's `default` pixi environment) when empty.
     required: false
     default: ""
   locked:

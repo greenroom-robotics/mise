@@ -2,7 +2,7 @@
 
 One-liner CI step for pixi-native ROS package repos. Sets up the environment (GitHub App token, Azure login, CCP, pixi), runs `mise ci test`, and tears down the proxy.
 
-`mise ci test` runs one or more `<env>:<task>` jobs per package (failing at the end, not fail-fast) and collects each package's JUnit XML from the standard colcon `build/` location into `report-dir`, namespaced by env so jobs that share a `build/` dir don't overwrite each other's reports. By default it runs a single `tests:test` job; pass the `jobs` input to fan out across environments (e.g. a Boost-Asio build variant and a lint env alongside the standard tests). The action then uploads `report-dir` as the `pixi-test-reports` artifact and publishes a rendered test-report check named `Test Report (pixi)` — distinct from the legacy deb path's `Test Report` check so the two coexist on the same commit.
+`mise ci test` runs one or more `<env>:<task>` jobs per package (failing at the end, not fail-fast) and collects each package's JUnit XML from the standard colcon `build/` location into `report-dir`, namespaced by env so jobs that share a `build/` dir don't overwrite each other's reports. By default it runs a single `default:test` job (the package's `default` pixi environment); pass the `jobs` input to fan out across environments (e.g. a Boost-Asio build variant and a lint env alongside the standard tests). The action then uploads `report-dir` as the `pixi-test-reports` artifact and publishes a rendered test-report check named `Test Report (pixi)` — distinct from the legacy deb path's `Test Report` check so the two coexist on the same commit.
 
 If the test task emits no JUnit XML (e.g. `cargo nextest`), report collection and the publish step are skipped silently — the action's success still reflects whether the tests passed.
 
@@ -33,7 +33,7 @@ To fan out across environments — for example a standard build, a Boost-Asio bu
       - uses: greenroom-robotics/mise/.github/actions/test@v6
         with:
           jobs: |
-            tests:test
+            default:test
             tests-boost:test
             lint:lint
           # ...secrets as above
