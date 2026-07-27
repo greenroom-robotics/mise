@@ -10,7 +10,7 @@
 #
 #   jobs:
 #     test:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v7
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v8
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
@@ -119,7 +119,7 @@ jobs:
       # whose committed pixi.lock transitively pins it. Single root-[package]
       # repos use the test composite directly, not this workflow.
       - id: all
-        uses: greenroom-robotics/mise/.github/actions/discover@v7
+        uses: greenroom-robotics/mise/.github/actions/discover@v8
         with:
           package: ${{ inputs.package }}
           package-dir: ${{ inputs.package-dir }}
@@ -190,7 +190,7 @@ jobs:
         if: inputs.host-setup != ''
         shell: bash
         run: ${{ inputs.host-setup }}
-      - uses: greenroom-robotics/mise/.github/actions/test@v7
+      - uses: greenroom-robotics/mise/.github/actions/test@v8
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}

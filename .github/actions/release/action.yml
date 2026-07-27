@@ -60,7 +60,7 @@ runs:
   steps:
     - id: setup
       if: inputs.skip-setup != 'true'
-      uses: greenroom-robotics/mise/.github/actions/setup@v7
+      uses: greenroom-robotics/mise/.github/actions/setup@v8
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
