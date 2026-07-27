@@ -1,3 +1,19 @@
+## [8.0.0](https://github.com/greenroom-robotics/mise/compare/mise@7.0.1...mise@8.0.0) (2026-07-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* install the pixi fork and read az:// channels natively, drop the proxy (#67)
+
+### Features
+
+* install the pixi fork and read az:// channels natively, drop the proxy ([#67](https://github.com/greenroom-robotics/mise/issues/67)) ([a4117e5](https://github.com/greenroom-robotics/mise/commit/a4117e5d7c58e50f86ce99deea9b0a61d7bd3fb7))
+
+
+### Bug Fixes
+
+* pin internal action refs at v7 so the v8 release can resolve them ([f8d4936](https://github.com/greenroom-robotics/mise/commit/f8d4936993f4c8b9cfa0ba88b31357ee36e3dc29))
+
 ## [7.0.1](https://github.com/greenroom-robotics/mise/compare/mise@7.0.0...mise@7.0.1) (2026-07-26)
 
 
