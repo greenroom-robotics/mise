@@ -1,3 +1,10 @@
+## [8.0.1](https://github.com/greenroom-robotics/mise/compare/mise@8.0.0...mise@8.0.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* ensure major tag exists before the release job resolves nested refs ([caf01f5](https://github.com/greenroom-robotics/mise/commit/caf01f5a6b658b940877ecfd96eac204ce1e4a1c))
+
 ## [8.0.0](https://github.com/greenroom-robotics/mise/compare/mise@7.0.1...mise@8.0.0) (2026-07-27)
 
 
