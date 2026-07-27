@@ -1,6 +1,6 @@
 # mise/.github/actions/build
 
-One-liner CI step for pixi-native ROS package repos. Sets up the environment, runs `mise ci build`, stages outputs at `$RUNNER_TEMP/conda-bld`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos. Sets up the environment, runs `mise ci build`, and stages outputs at `$RUNNER_TEMP/conda-bld`.
 
 ## Usage
 
@@ -10,7 +10,7 @@ jobs:
     runs-on: 2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - uses: greenroom-robotics/mise/.github/actions/build@v7
+      - uses: greenroom-robotics/mise/.github/actions/build@v8
         with:
           gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}

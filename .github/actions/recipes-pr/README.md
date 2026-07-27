@@ -13,8 +13,8 @@ Both repo layouts are supported. **Multi-package** repos keep packages under
 root `pixi.toml`; their release tags may be plain semver (`X.Y.Z`) or
 `<pkg>@<version>` — both are matched.
 
-It bundles `mise/setup`, fetches tags, runs the publish loop, and tears down the
-conda-channel-proxy. No semantic-release, no tagging.
+It bundles `mise/setup`, fetches tags, and runs the publish loop. No
+semantic-release, no tagging.
 
 ## Usage
 
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0   # full history so the ancestor check works
-      - uses: greenroom-robotics/mise/.github/actions/recipes-pr@v7
+      - uses: greenroom-robotics/mise/.github/actions/recipes-pr@v8
         with:
           dispatch-sha: ${{ github.sha }}
           package: ${{ inputs.package }}    # empty = all released this run
@@ -42,5 +42,5 @@ jobs:
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 ```
 
-See `action.yml` for the full input list (`package-dir`, `recipes-repo`,
-`proxy-version` all default sensibly).
+See `action.yml` for the full input list (`package-dir`, `recipes-repo` all
+default sensibly).

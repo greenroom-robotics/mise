@@ -1,5 +1,5 @@
 name: Set up mise CI environment
-description: 'Provision a GitHub App token, Azure credentials, the conda-channel-proxy, the pixi binary, and (unless skip-pixi is set) the mise CLI pinned to this action version. Public action — callable directly from custom workflows. Pair with greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v3 (if: always()) to clean up the proxy.'
+description: 'Provision a GitHub App token, Azure credentials, the Greenroom pixi fork (native az:// channel support), and (unless skip-pixi is set) the mise CLI pinned to this action version. Public action — callable directly from custom workflows.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,25 +18,16 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  proxy-version:
-    description: conda-channel-proxy release tag to install.
+  pixi-version:
+    description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: v5.2.0
+    default: "0.73.0"
   skip-pixi:
-    description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the proxy, App token, Azure login, and git auth still run on the host.
+    description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
     required: false
     default: "false"
 
 outputs:
-  proxy-url:
-    description: Base URL of the running conda-channel-proxy (e.g. http://localhost:12222). Channels live under /general and /overrides; prefer the per-channel outputs below for downstream use.
-    value: ${{ steps.proxy.outputs.url }}
-  proxy-general-url:
-    description: URL of the `general` channel (e.g. http://localhost:12222/general).
-    value: ${{ steps.proxy.outputs.general-url }}
-  proxy-overrides-url:
-    description: URL of the `overrides` channel (e.g. http://localhost:12222/overrides).
-    value: ${{ steps.proxy.outputs.overrides-url }}
   gh-token:
     description: GitHub App installation token for downstream steps.
     value: ${{ steps.app-token.outputs.token }}
@@ -51,8 +42,7 @@ runs:
         client-id: ${{ inputs.gh-app-client-id }}
         private-key: ${{ inputs.gh-app-private-key }}
         # Scope the token to the whole installation, not just the calling
-        # repo, so the proxy step can `gh release download` from the private
-        # conda-channel-proxy repo.
+        # repo, so downstream steps can reach other private org repos.
         owner: ${{ github.repository_owner }}
 
     # Export the App's bot git identity into the job env so every later step
@@ -86,13 +76,6 @@ runs:
         tenant-id: ${{ inputs.azure-tenant-id }}
         subscription-id: ${{ inputs.azure-subscription-id }}
 
-    - name: Start conda-channel-proxy
-      id: proxy
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/setup@v5
-      with:
-        version: ${{ inputs.proxy-version }}
-        gh-token: ${{ steps.app-token.outputs.token }}
-
     - name: Configure git auth for private GitHub deps
       shell: bash
       env:
@@ -100,14 +83,22 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-    # Install only the pixi binary, we do not use a consumers environment for the CI
-    # orchestration tools (e.g. pixi/mise).
-    - name: Set up pixi
+    # Install the Greenroom pixi fork (native az:// Azure Blob channel support;
+    # upstream pixi cannot read our az:// channels). Only the binary — we do not
+    # install a consumer environment for the CI orchestration tools (pixi/mise).
+    # Reading az:// channels only needs the ambient azure/login above (SAS is
+    # minted from it); explicit SAS is only required for writes (reindex).
+    - name: Install pixi (Greenroom fork)
       if: inputs.skip-pixi != 'true'
-      uses: prefix-dev/setup-pixi@v0.9.4
-      with:
-        pixi-version: v0.71.1
-        run-install: false
+      shell: bash
+      env:
+        PIXI_GR_VERSION: ${{ inputs.pixi-version }}
+      run: |
+        set -euo pipefail
+        installer="${RUNNER_TEMP}/install-pixi-gr.sh"
+        curl -fsSL "https://github.com/greenroom-robotics/pixi/releases/download/pixi-gr@${PIXI_GR_VERSION}/install.sh" -o "$installer"
+        sh "$installer"
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
     # Write a dedicated pixi manifest that depends solely on mise, pinned to the
     # exact version this action ships, then install it. Downstream actions run
@@ -120,13 +111,11 @@ runs:
     # published to the channel, `==` can't resolve and every action fails.
     # `<=` falls back to the latest *published* version during that gap while
     # never installing something newer than the action ships. The channel is
-    # the proxy's private `general` channel (dynamic localhost port, hence a
-    # generated rather than committed manifest), where mise is published.
+    # the org's `general` az:// Azure Blob channel, where mise is published;
+    # the pixi fork reads it directly using the ambient azure/login session.
     - name: Install mise
       if: inputs.skip-pixi != 'true'
       shell: bash
-      env:
-        GENERAL_URL: ${{ steps.proxy.outputs.general-url }}
       run: |
         set -euo pipefail
         version="$(python3 -c 'import tomllib; print(tomllib.load(open("'"${GITHUB_ACTION_PATH}"'/../../../pixi.toml","rb"))["package"]["version"])')"
@@ -139,7 +128,7 @@ runs:
         cat > "${manifest_dir}/pixi.toml" <<EOF
         [workspace]
         name = "mise-tool"
-        channels = ["${GENERAL_URL}", "https://prefix.dev/conda-forge"]
+        channels = ["az://stgrcondachannel.blob.core.windows.net/general", "https://prefix.dev/conda-forge"]
         platforms = ["linux-64", "linux-aarch64"]
 
         [dependencies]

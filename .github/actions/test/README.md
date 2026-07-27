@@ -1,6 +1,6 @@
 # mise/.github/actions/test
 
-One-liner CI step for pixi-native ROS package repos. Sets up the environment (GitHub App token, Azure login, CCP, pixi), runs `mise ci test`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos. Sets up the environment (GitHub App token, Azure login, pixi fork) and runs `mise ci test`.
 
 `mise ci test` runs one or more `<env>:<task>` jobs per package (failing at the end, not fail-fast) and collects each package's JUnit XML from the standard colcon `build/` location into `report-dir`, namespaced by env so jobs that share a `build/` dir don't overwrite each other's reports. By default it runs a single `default:test` job (the package's `default` pixi environment); pass the `jobs` input to fan out across environments (e.g. a Boost-Asio build variant and a lint env alongside the standard tests). The action then uploads `report-dir` as the `pixi-test-reports` artifact and publishes a rendered test-report check named `Test Report (pixi)` — distinct from the legacy deb path's `Test Report` check so the two coexist on the same commit.
 
@@ -14,7 +14,7 @@ jobs:
     runs-on: 2vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
-      - uses: greenroom-robotics/mise/.github/actions/test@v7
+      - uses: greenroom-robotics/mise/.github/actions/test@v8
         with:
           gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -30,7 +30,7 @@ That's the whole workflow. Add `package` or `package-dir` inputs to filter or re
 To fan out across environments — for example a standard build, a Boost-Asio build variant, and a lint env — pass `jobs` as newline-separated `<env>:<task>` pairs:
 
 ```yaml
-      - uses: greenroom-robotics/mise/.github/actions/test@v7
+      - uses: greenroom-robotics/mise/.github/actions/test@v8
         with:
           jobs: |
             default:test

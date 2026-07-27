@@ -1,5 +1,5 @@
 name: Run mise ci build
-description: 'Set up the full mise CI environment, run `mise ci build`, and tear down the conda-channel-proxy. Outputs .conda artifacts under $RUNNER_TEMP/conda-bld.'
+description: 'Set up the full mise CI environment, run `mise ci build`. Outputs .conda artifacts under $RUNNER_TEMP/conda-bld.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,10 +18,6 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  proxy-version:
-    description: conda-channel-proxy release tag.
-    required: false
-    default: v5.2.0
   package:
     description: Single package to build (default - all packages under package-dir).
     required: false
@@ -38,14 +34,13 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: greenroom-robotics/mise/.github/actions/setup@v7
+    - uses: greenroom-robotics/mise/.github/actions/setup@v8
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
-        proxy-version: ${{ inputs.proxy-version }}
 
     - name: Run mise ci build
       shell: bash
@@ -59,5 +54,3 @@ runs:
         fi
         pixi run --manifest-path "$MISE_MANIFEST" mise ci build "${args[@]}"
 
-    - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v5
