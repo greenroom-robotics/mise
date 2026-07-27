@@ -3,7 +3,83 @@ on:
   push:
     branches: [main]
 jobs:
+  # Ensures the `v<MAJOR>` tags this commit's internal refs point at actually
+  # exist, BEFORE the release job starts.
+  #
+  # Why this job exists: GitHub resolves *every* nested `uses:` of a composite
+  # action during "Prepare all required actions", which happens at job start —
+  # before any `if:` is evaluated. The release action internally pins
+  # `greenroom-robotics/mise/.github/actions/setup@v<MAJOR>`, and even though
+  # this workflow passes `skip-setup: "true"` so that step never runs, the ref
+  # must still resolve. Releasing major N therefore requires `vN` to already
+  # exist — a chicken-and-egg deadlock, since the release that creates `vN` is
+  # exactly the one that cannot start ("Unable to resolve action
+  # greenroom-robotics/mise@v8, unable to find version v8").
+  #
+  # Why a separate, earlier job and not a step inside `release`: the eager
+  # resolution happens at `release`'s job start, so any step within it runs too
+  # late. `needs:` is what guarantees the tag exists first. Do not inline this.
+  #
+  # This is what makes the "one-step" refs bump that tests/internal_action_refs.rs
+  # enforces viable: the breaking PR bumps the refs itself, so the
+  # `chore(release)` commit inherits correct refs and the tag `update-major-tag`
+  # later slides captures a correct tree.
+  ensure-major-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Same token pattern as update-major-tag below: pushing a ref that points
+      # at a commit touching .github/workflows/ requires the Workflows
+      # permission, which the default GITHUB_TOKEN cannot be granted.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Create missing major tag at HEAD
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          # Target major = the highest major pinned by the internal refs under
+          # .github — literally "the majors this commit must be able to
+          # resolve". Derived from the refs rather than from semantic-release's
+          # next version so we don't duplicate its bump logic.
+          # Note the `.` in the character class: one ref is
+          # `.../workflows/ci-test.yml@v8`, which `[a-z-]+` would miss.
+          MAJOR="$(grep -rhoE 'greenroom-robotics/mise/\.github/[a-z.-]+/[a-z.-]+@v[0-9]+' .github \
+            | grep -oE '[0-9]+$' | sort -n | tail -1)"
+          if [ -z "${MAJOR:-}" ]; then
+            echo "No internal greenroom-robotics/mise refs found; nothing to ensure."
+            exit 0
+          fi
+          SLIDING="v${MAJOR}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${SLIDING}" >/dev/null 2>&1; then
+            echo "${SLIDING} already exists; nothing to do."
+            exit 0
+          fi
+          # Never move an existing tag — update-major-tag owns sliding it after
+          # a release. This only ever creates a tag that is entirely absent.
+          echo "Creating ${SLIDING} at $(git rev-parse HEAD)"
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git tag "$SLIDING" HEAD
+          git push origin "refs/tags/${SLIDING}"
+
   release:
+    needs: ensure-major-tag
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Azure OIDC login in the release action
@@ -59,6 +135,13 @@ jobs:
   #
   # This runs as a job here becase detecting a tag push will not trigger
   # any workflows since the tag is pushed by github app
+  #
+  # With ensure-major-tag above, internal refs are bumped in the breaking PR
+  # itself, so the `chore(release)` commit inherits already-correct refs and the
+  # tree this slide lands on is the correct one. (Bumping refs in a follow-up
+  # commit instead leaves the slid tag pointing at the pre-bump release commit,
+  # which the tripwire test cannot catch — it validates the working tree, not
+  # whatever commit the tag ends up on.)
   update-major-tag:
     needs: release
     runs-on: ubuntu-latest
