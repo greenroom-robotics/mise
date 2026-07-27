@@ -1,5 +1,5 @@
 name: Run mise ci release
-description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `mise ci release`, and tear down the conda-channel-proxy. Replaces the platform_cli release path for pixi-native ROS packages.'
+description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `mise ci release`. Replaces the platform_cli release path for pixi-native ROS packages.'
 author: Greenroom Robotics
 
 inputs:
@@ -18,10 +18,6 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
-  proxy-version:
-    description: conda-channel-proxy release tag.
-    required: false
-    default: v5.2.0
   package:
     description: Single package to release (default - all packages under package-dir).
     required: false
@@ -64,14 +60,13 @@ runs:
   steps:
     - id: setup
       if: inputs.skip-setup != 'true'
-      uses: greenroom-robotics/mise/.github/actions/setup@v7
+      uses: greenroom-robotics/mise/.github/actions/setup@v8
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
-        proxy-version: ${{ inputs.proxy-version }}
 
     - uses: actions/setup-node@v4
       with:
@@ -130,5 +125,3 @@ runs:
         fi
         pixi run --manifest-path "$MISE_MANIFEST" mise ci release "${args[@]}"
 
-    - if: always()
-      uses: greenroom-robotics/conda-channel-proxy/.github/actions/teardown@v5

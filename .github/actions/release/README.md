@@ -1,6 +1,6 @@
 # mise/.github/actions/release
 
-One-liner CI step for pixi-native ROS package repos to run their release process. Sets up the environment (gh-app-token, Azure login, CCP, pixi, Node, semantic-release deps), runs `mise ci release`, and tears down the proxy.
+One-liner CI step for pixi-native ROS package repos to run their release process. Sets up the environment (gh-app-token, Azure login, pixi fork, Node, semantic-release deps) and runs `mise ci release`.
 
 ## Usage
 
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: greenroom-robotics/mise/.github/actions/release@v7
+      - uses: greenroom-robotics/mise/.github/actions/release@v8
         with:
           package: ${{ inputs.package }}
           gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
@@ -38,13 +38,12 @@ jobs:
 
 ## What happens
 
-1. The setup action provisions a GitHub App token, Azure credentials, the conda-channel-proxy, and a pixi environment.
+1. The setup action provisions a GitHub App token, Azure credentials, and the Greenroom pixi fork.
 2. Node 20 is installed alongside `yarn` (via `actions/setup-node`).
 3. `release-tooling/package.json` and `release-tooling/yarn.lock` are copied into the workspace root.
 4. `yarn install --frozen-lockfile` brings in semantic-release + plugins.
 5. `mise ci release ...` writes a `.releaserc` for each package, then runs semantic-release (or multi-semantic-release for the multi-package case).
 6. semantic-release's `@semantic-release/exec` plugin calls back into `mise ci recipes-pr` to open/update the recipes-repo PR.
-7. The conda-channel-proxy teardown action runs unconditionally.
 
 ## Recipes-repo contract
 
