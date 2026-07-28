@@ -1,3 +1,10 @@
+## [8.3.0](https://github.com/greenroom-robotics/mise/compare/mise@8.2.0...mise@8.3.0) (2026-07-28)
+
+
+### Features
+
+* skip workspace-only pixi manifests in package discovery ([#70](https://github.com/greenroom-robotics/mise/issues/70)) ([286d422](https://github.com/greenroom-robotics/mise/commit/286d4224dc561c717780cfbcf93c92f65cbf0796))
+
 ## [8.2.0](https://github.com/greenroom-robotics/mise/compare/mise@8.1.0...mise@8.2.0) (2026-07-28)
 
 
