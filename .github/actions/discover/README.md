@@ -7,6 +7,12 @@ checkout, so it ships its own script (`discover_packages.py`, resolved via
 path — reusable-workflow steps execute in the caller's checkout, not this
 repo's, and a path into this repo would 404 for every external caller.
 
+A subdir whose `pixi.toml` has no `[package]` table is skipped: that's a
+workspace-only manifest — a dev/test environment for something this repo
+doesn't publish (e.g. a package built from a hand-authored recipe in
+ros-recipes) — so it has no matrix leg and nothing to release. `mise ci`'s own
+discovery skips it the same way.
+
 `all` is a compact JSON array of package dir-names. `map` is a
 `dorny/paths-filter` YAML map where each package's filter is its own dir glob
 plus the dir globs of every sibling it TRANSITIVELY path-depends on (via
