@@ -110,7 +110,8 @@ impl RecipesPr {
         //    releases: the first package's push creates the PR, so the
         //    second package sees it open and appends.
         let branch = release_branch(&src_short);
-        let pr_open = pr_exists(&self.recipes_repo, &branch)?;
+        let existing_body = pr_body_of(&self.recipes_repo, &branch);
+        let pr_open = existing_body.is_some();
         if pr_open {
             fetch_recipes_branch(&recipes_root, &branch)?;
             run_in(
@@ -124,6 +125,14 @@ impl RecipesPr {
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
         use std::collections::BTreeSet;
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+        // Package -> tag for everything the PR carries. Seeded from the open
+        // PR's body so a rolling PR that already holds siblings keeps listing
+        // them (at their own versions) instead of being rewritten around
+        // whichever package released last.
+        let mut released: std::collections::BTreeMap<String, String> = existing_body
+            .as_deref()
+            .map(body_packages)
+            .unwrap_or_default();
         // The refs each package was pinned to before this release, for a diff link.
         let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
         for (name, subdir) in &targets {
@@ -154,6 +163,7 @@ impl RecipesPr {
             )?;
             changed.insert(applied.path);
             old_refs.extend(applied.old_ref);
+            released.insert(name.clone(), tag.clone());
         }
 
         // Every target was skipped (sweep tolerating packages with no conda
@@ -170,7 +180,7 @@ impl RecipesPr {
             &recipes_root,
             &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
-        let title = release_title(&src_short, self.package.as_deref(), &tag);
+        let title = release_title(&src_short, &released, &tag);
         // A package can be a no-op against the recipes checkout: an earlier CI
         // run (e.g. a sibling release workflow sweeping the same tag) may have
         // already staged the identical recipe content, in which case `git
@@ -228,7 +238,10 @@ impl RecipesPr {
         // Link to the source-repo diff between what the recipe was pinned to
         // before and this release, so a reviewer sees what changed.
         let old = diff_ref(&old_refs, &self.sha);
-        let body = pr_body(old.map(|o| compare_url(&src_url, o, &self.sha)).as_deref());
+        let body = pr_body(
+            old.map(|o| compare_url(&src_url, o, &self.sha)).as_deref(),
+            &released,
+        );
 
         if pr_open {
             // The rolling PR already exists from a previous release; refresh its
@@ -296,14 +309,40 @@ fn fetch_recipes_branch(recipes_root: &std::path::Path, branch: &str) -> anyhow:
     Ok(())
 }
 
-/// PR title / commit message, mirroring `release_branch`: per-package repos read
-/// `release: <repo>/<package> v<ver>`; single-package repos `release: <repo> v<ver>`.
-fn release_title(src_short: &str, package: Option<&str>, tag: &str) -> String {
-    match package {
-        Some(pkg) if pkg != src_short => format!("release: {src_short}/{pkg} {tag}"),
-        _ => format!("release: {src_short} {tag}"),
+/// PR title / commit message, mirroring `release_branch`. Single-package repos
+/// read `release: <repo> v<ver>`; one package `release: <repo>/<pkg> v<ver>`;
+/// several `release: <repo>/{a v1.2.3, b v0.4.0}`. Packages on a rolling PR are
+/// each at their own version, so the version travels with the name. A list too
+/// long for GitHub's 256-char title collapses to a count — the full list lives
+/// in the PR body, which is what the next append reads back.
+fn release_title(
+    src_short: &str,
+    packages: &std::collections::BTreeMap<String, String>,
+    tag: &str,
+) -> String {
+    let pkgs: Vec<(&str, &str)> = packages
+        .iter()
+        .filter(|(name, _)| name.as_str() != src_short)
+        .map(|(name, tag)| (name.as_str(), tag.as_str()))
+        .collect();
+    let title = match pkgs.as_slice() {
+        [] => format!("release: {src_short} {tag}"),
+        [(name, tag)] => format!("release: {src_short}/{name} {tag}"),
+        many => {
+            let list: Vec<String> = many.iter().map(|(n, t)| format!("{n} {t}")).collect();
+            format!("release: {src_short}/{{{}}}", list.join(", "))
+        }
+    };
+    if title.chars().count() > MAX_TITLE_CHARS {
+        return format!("release: {src_short} ({} packages)", pkgs.len());
     }
+    title
 }
+
+/// Recipes PRs are squash-merged, so the title becomes the commit subject —
+/// keep it inside the conventional 72-char subject line rather than GitHub's
+/// 256-char title cap.
+const MAX_TITLE_CHARS: usize = 72;
 
 /// How `recipes-pr` sources the package(s) to release.
 #[derive(Debug, PartialEq, Eq)]
@@ -410,7 +449,22 @@ const GREMLINS: &[&str] = &[
     "🐉 The gremlin in the build closet insists this recipe is ready. Trust the gremlin.",
 ];
 
-fn pr_body(diff: Option<&str>) -> String {
+/// The body's package list, the authoritative record of what a rolling PR
+/// carries: the title is display-only and gets shortened once it has too many
+/// packages to fit, so it can't be read back. Inverse of the `- <pkg> <tag>`
+/// lines `pr_body` writes.
+fn body_packages(body: &str) -> std::collections::BTreeMap<String, String> {
+    // ponytail: any `- <word> <word>` bullet in the body reads as a package, so
+    // a hand-added bullet can put a bogus name in the title (nothing else). Use
+    // a fenced/HTML-comment block if bodies ever grow other bullet lists.
+    body.lines()
+        .filter_map(|l| l.trim().strip_prefix("- "))
+        .filter_map(|entry| entry.rsplit_once(' '))
+        .map(|(name, tag)| (name.to_string(), tag.to_string()))
+        .collect()
+}
+
+fn pr_body(diff: Option<&str>, packages: &std::collections::BTreeMap<String, String>) -> String {
     // ponytail: nanos-modulo pick, no rng dep needed for flavor text
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -418,6 +472,10 @@ fn pr_body(diff: Option<&str>) -> String {
         .unwrap_or(0)
         % GREMLINS.len();
     let mut body = GREMLINS[idx].to_string();
+    body.push_str("\n\n**Releasing:**\n");
+    for (name, tag) in packages {
+        body.push_str(&format!("- {name} {tag}\n"));
+    }
     if let Some(url) = diff {
         body.push_str(&format!("\n\n**Diff since last release:** {url}"));
     }
@@ -592,26 +650,23 @@ fn write_step_summary(md: &str) {
     }
 }
 
-fn pr_exists(repo: &str, branch: &str) -> anyhow::Result<bool> {
+/// Body of the open rolling PR for `branch`, or `None` if there is no such PR.
+/// Doubles as the PR-exists check, so it must distinguish "no PR" from "PR with
+/// an empty body" — hence the JSON parse rather than a `--jq` string.
+fn pr_body_of(repo: &str, branch: &str) -> Option<String> {
     let out = std::process::Command::new("gh")
         .args([
-            "pr",
-            "list",
-            "--repo",
-            repo,
-            "--head",
-            branch,
-            "--json",
-            "number",
-            "--jq",
-            ".[0].number",
+            "pr", "list", "--repo", repo, "--head", branch, "--json", "body",
         ])
-        .output()?;
+        .output()
+        .ok()?;
     if !out.status.success() {
         // gh exits non-zero if no PR — accept that as "doesn't exist"
-        return Ok(false);
+        return None;
     }
-    Ok(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+    let prs: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    let pr = prs.first()?;
+    Some(pr["body"].as_str().unwrap_or_default().to_string())
 }
 
 #[cfg(test)]
@@ -718,6 +773,81 @@ mod tests {
         assert!(args.contains(&"--squash".to_string()));
     }
 
+    fn pkgs(entries: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(n, t)| (n.to_string(), t.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn release_title_shapes() {
+        assert_eq!(
+            release_title("mise", &pkgs(&[]), "v1.0.0"),
+            "release: mise v1.0.0"
+        );
+        // A root package sharing the repo name isn't a subpath.
+        assert_eq!(
+            release_title("mise", &pkgs(&[("mise", "v1.0.0")]), "v1.0.0"),
+            "release: mise v1.0.0"
+        );
+        assert_eq!(
+            release_title("toolbox", &pkgs(&[("gama", "v1.0.0")]), "v1.0.0"),
+            "release: toolbox/gama v1.0.0"
+        );
+        // Each package carries its own version — a rolling PR accumulates
+        // packages released independently.
+        assert_eq!(
+            release_title(
+                "toolbox",
+                &pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
+                "v1.0.0"
+            ),
+            "release: toolbox/{alpha v0.4.1, gama v1.0.0}"
+        );
+    }
+
+    // The body is the rolling PR's state: every append rewrites it from what
+    // the previous one wrote, so it must round-trip or siblings released
+    // earlier vanish — along with the versions they were released at.
+    #[test]
+    fn body_packages_round_trips() {
+        for names in [
+            pkgs(&[]),
+            pkgs(&[("gama", "v1.0.0")]),
+            pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
+        ] {
+            let body = pr_body(Some("https://example.com/compare/a...b"), &names);
+            assert_eq!(body_packages(&body), names, "{body}");
+        }
+    }
+
+    // Past the title limit the list collapses to a count — but the body still
+    // carries every package, so the next append doesn't lose them.
+    #[test]
+    fn long_package_list_collapses_in_title_only() {
+        let many = pkgs(&[
+            ("gama_bringup", "v1.2.3"),
+            ("gama_msgs", "v0.4.1"),
+            ("gama_navigation", "v2.0.0"),
+            ("topic_utils", "v1.26.0"),
+        ]);
+        let title = release_title("platform_toolbox", &many, "v1.2.3");
+        assert_eq!(title, "release: platform_toolbox (4 packages)");
+        assert!(title.chars().count() <= MAX_TITLE_CHARS);
+        assert_eq!(body_packages(&pr_body(None, &many)), many);
+    }
+
+    // The squash-merged commit subject stays readable no matter how many
+    // packages ride along.
+    #[test]
+    fn title_never_exceeds_subject_limit() {
+        let many: std::collections::BTreeMap<String, String> = (0..40)
+            .map(|i| (format!("some_ros_package_{i}"), "v1.2.3".to_string()))
+            .collect();
+        assert!(release_title("toolbox", &many, "v1.2.3").chars().count() <= MAX_TITLE_CHARS);
+    }
+
     // The rolling-PR contract: the branch name must NOT embed the version, so
     // every release of a source repo force-pushes onto the same branch and
     // updates one PR. A per-version branch leaves superseded PRs open and lets
@@ -738,23 +868,6 @@ mod tests {
             "release/platform_toolbox"
         );
         assert_eq!(release_branch("mise"), "release/mise");
-    }
-
-    // Title mirrors the branch: per-package vs repo-level.
-    #[test]
-    fn release_title_mirrors_branch() {
-        assert_eq!(
-            release_title("platform_toolbox", Some("topic_utils"), "v1.26.0"),
-            "release: platform_toolbox/topic_utils v1.26.0"
-        );
-        assert_eq!(
-            release_title("mise", Some("mise"), "v4.5.2"),
-            "release: mise v4.5.2"
-        );
-        assert_eq!(
-            release_title("mise", None, "v4.5.2"),
-            "release: mise v4.5.2"
-        );
     }
 
     #[test]
@@ -873,10 +986,13 @@ mod tests {
 
     #[test]
     fn pr_body_includes_diff_link_when_present() {
-        let body = pr_body(Some("https://github.com/gr/mise/compare/v1.0.0...v1.1.0"));
+        let body = pr_body(
+            Some("https://github.com/gr/mise/compare/v1.0.0...v1.1.0"),
+            &pkgs(&[]),
+        );
         assert!(body.contains("Diff since last release"));
         assert!(body.contains("compare/v1.0.0...v1.1.0"));
         // No link line when there's no prior tag.
-        assert!(!pr_body(None).contains("Diff since last release"));
+        assert!(!pr_body(None, &pkgs(&[])).contains("Diff since last release"));
     }
 }
