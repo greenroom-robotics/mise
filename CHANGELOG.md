@@ -1,3 +1,10 @@
+## [8.2.0](https://github.com/greenroom-robotics/mise/compare/mise@8.1.0...mise@8.2.0) (2026-07-28)
+
+
+### Features
+
+* name every package a rolling recipes PR carries ([#69](https://github.com/greenroom-robotics/mise/issues/69)) ([2569004](https://github.com/greenroom-robotics/mise/commit/256900468601d4c7a1a2872ab9a30fc26d01ba34))
+
 ## [8.1.0](https://github.com/greenroom-robotics/mise/compare/mise@8.0.1...mise@8.1.0) (2026-07-28)
 
 
