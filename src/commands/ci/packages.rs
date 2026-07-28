@@ -1,9 +1,26 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+/// True when the manifest declares a `[package]` table.
+///
+/// A workspace-only manifest is a dev/test environment for something this repo
+/// does not publish — e.g. a DeepStream-linked package whose artifact comes
+/// from a hand-authored recipe in ros-recipes, but which still wants a pixi env
+/// for colcon and the ROS dev tools. It has no version to release and nothing
+/// for `pixi build` to build, so discovery skips it. Genuine TOML syntax errors
+/// still propagate: only a *valid* manifest with no `[package]` is skippable.
+fn declares_package(pixi_toml: &Path) -> Result<bool> {
+    let text = std::fs::read_to_string(pixi_toml)
+        .with_context(|| format!("reading {}", pixi_toml.display()))?;
+    let doc: toml::Value =
+        toml::from_str(&text).with_context(|| format!("parsing {}", pixi_toml.display()))?;
+    Ok(doc.get("package").is_some())
+}
+
 /// Discover per-package pixi workspaces under `package_dir`.
 ///
 /// If `filter` is `Some(name)`, returns only that package (errors if missing).
+/// Manifests with no `[package]` table are skipped — see `declares_package`.
 /// Returns absolute paths to each package's `pixi.toml`.
 pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>> {
     // Root-package layout: package_dir itself holds the package's pixi.toml
@@ -28,6 +45,15 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>
         if !pixi.exists() {
             anyhow::bail!("package {name} not found at {}", pixi.display());
         }
+        // An explicit request names something unreleasable — say so, rather
+        // than letting the caller trip over `missing field package` later.
+        if !declares_package(&pixi)? {
+            anyhow::bail!(
+                "package {name} has no [package] section in {} — workspace-only \
+                 manifests are dev environments, not releasable packages",
+                pixi.display()
+            );
+        }
         return Ok(vec![pixi]);
     }
 
@@ -37,7 +63,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>
     for entry in entries {
         let entry = entry?;
         let pixi = entry.path().join("pixi.toml");
-        if pixi.exists() {
+        if pixi.exists() && declares_package(&pixi)? {
             out.push(pixi);
         }
     }
@@ -56,7 +82,18 @@ mod tests {
         fs::create_dir_all(&pkg).unwrap();
         fs::write(
             pkg.join("pixi.toml"),
-            format!("[workspace]\nname = \"{name}\"\n"),
+            format!("[workspace]\nname = \"{name}\"\n[package]\nname = \"{name}\"\nversion = \"1.0.0\"\n"),
+        )
+        .unwrap();
+    }
+
+    /// A dev-environment manifest: workspace, no `[package]`.
+    fn make_workspace_only(root: &Path, name: &str) {
+        let pkg = root.join(name);
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("pixi.toml"),
+            format!("[workspace]\nname = \"{name}\"\n[tasks]\nbuild = \"colcon build\"\n"),
         )
         .unwrap();
     }
@@ -116,6 +153,37 @@ mod tests {
         let result = discover(tmp.path(), None).unwrap();
         assert_eq!(result.len(), 1);
         assert!(result[0].ends_with("alpha/pixi.toml"));
+    }
+
+    #[test]
+    fn discover_skips_workspace_only_manifest() {
+        // deepstream_extensions shape: a dev env for a package published from a
+        // hand-authored recipe. It must not break the whole repo's release.
+        let tmp = TempDir::new().unwrap();
+        make_pkg(tmp.path(), "alpha");
+        make_workspace_only(tmp.path(), "deepstream_extensions");
+        let result = discover(tmp.path(), None).unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].ends_with("alpha/pixi.toml"));
+    }
+
+    #[test]
+    fn discover_filter_on_workspace_only_manifest_errors() {
+        let tmp = TempDir::new().unwrap();
+        make_workspace_only(tmp.path(), "devenv");
+        let err = discover(tmp.path(), Some("devenv")).unwrap_err();
+        assert!(err.to_string().contains("no [package] section"));
+    }
+
+    #[test]
+    fn discover_propagates_malformed_manifest() {
+        // A syntax error is a real problem — don't silently skip the package.
+        let tmp = TempDir::new().unwrap();
+        let pkg = tmp.path().join("broken");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("pixi.toml"), "[workspace\nname = ").unwrap();
+        let err = discover(tmp.path(), None).unwrap_err();
+        assert!(format!("{err:#}").contains("parsing"));
     }
 
     #[test]

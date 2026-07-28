@@ -16,9 +16,22 @@ import json
 import os
 import re
 import sys
+import tomllib
 
 # Matches `path = "../NAME"` and `path = '../NAME'` where NAME has no slash.
 PATH_DEP_RE = re.compile(r"""path\s*=\s*["']\.\./([^/"']+)["']""")
+
+
+def declares_package(manifest):
+    """True when the manifest has a [package] table.
+
+    Workspace-only manifests are dev environments for packages this repo does
+    not publish (e.g. one built from a hand-authored recipe elsewhere); they
+    have no tests to fan out to a matrix leg. Mirrors `declares_package` in
+    src/commands/ci/packages.rs — keep the two in step.
+    """
+    with open(manifest, "rb") as f:
+        return "package" in tomllib.load(f)
 
 
 def discover_names(package_dir, package):
@@ -28,6 +41,7 @@ def discover_names(package_dir, package):
         entry
         for entry in os.listdir(package_dir)
         if os.path.isfile(os.path.join(package_dir, entry, "pixi.toml"))
+        and declares_package(os.path.join(package_dir, entry, "pixi.toml"))
     ]
     return sorted(names)
 
@@ -94,6 +108,14 @@ def selftest():
         assert transitive_deps(root, "a") == {"b", "c"}, "A must reach B and C"
         assert transitive_deps(root, "b") == {"c"}
         assert transitive_deps(root, "c") == set()
+        assert discover_names(root, "") == ["a", "b", "c"]
+
+        # A workspace-only manifest is a dev env, not a matrix leg.
+        os.mkdir(os.path.join(root, "devenv"))
+        open(os.path.join(root, "devenv", "pixi.toml"), "w").write(
+            '[workspace]\nname = "devenv"\n[tasks]\nbuild = "colcon build"\n'
+        )
+        assert discover_names(root, "") == ["a", "b", "c"], "devenv must be skipped"
     print("selftest ok")
 
 
