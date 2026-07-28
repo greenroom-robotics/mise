@@ -339,8 +339,10 @@ fn release_title(
     title
 }
 
-/// GitHub rejects PR titles longer than this.
-const MAX_TITLE_CHARS: usize = 256;
+/// Recipes PRs are squash-merged, so the title becomes the commit subject —
+/// keep it inside the conventional 72-char subject line rather than GitHub's
+/// 256-char title cap.
+const MAX_TITLE_CHARS: usize = 72;
 
 /// How `recipes-pr` sources the package(s) to release.
 #[derive(Debug, PartialEq, Eq)]
@@ -824,14 +826,26 @@ mod tests {
     // carries every package, so the next append doesn't lose them.
     #[test]
     fn long_package_list_collapses_in_title_only() {
-        let entries: Vec<(String, String)> = (0..40)
-            .map(|i| (format!("some_ros_package_{i}"), "v1.2.3".to_string()))
-            .collect();
-        let many: std::collections::BTreeMap<String, String> = entries.into_iter().collect();
-        let title = release_title("toolbox", &many, "v1.2.3");
-        assert_eq!(title, "release: toolbox (40 packages)");
+        let many = pkgs(&[
+            ("gama_bringup", "v1.2.3"),
+            ("gama_msgs", "v0.4.1"),
+            ("gama_navigation", "v2.0.0"),
+            ("topic_utils", "v1.26.0"),
+        ]);
+        let title = release_title("platform_toolbox", &many, "v1.2.3");
+        assert_eq!(title, "release: platform_toolbox (4 packages)");
         assert!(title.chars().count() <= MAX_TITLE_CHARS);
         assert_eq!(body_packages(&pr_body(None, &many)), many);
+    }
+
+    // The squash-merged commit subject stays readable no matter how many
+    // packages ride along.
+    #[test]
+    fn title_never_exceeds_subject_limit() {
+        let many: std::collections::BTreeMap<String, String> = (0..40)
+            .map(|i| (format!("some_ros_package_{i}"), "v1.2.3".to_string()))
+            .collect();
+        assert!(release_title("toolbox", &many, "v1.2.3").chars().count() <= MAX_TITLE_CHARS);
     }
 
     // The rolling-PR contract: the branch name must NOT embed the version, so
