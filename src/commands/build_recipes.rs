@@ -573,8 +573,11 @@ fn exact_pin_version(s: &str) -> Option<&str> {
     }
 }
 
-/// A sibling package whose `path =` dep was rewritten to a derived `==version`
-/// pin in the temp checkout.
+/// A sibling package whose `path =` dep was rewritten to a derived
+/// `>=version,<major+1` pin in the temp checkout. `version` is the exact
+/// floor — availability checks and fallback builds key on it, never on
+/// "anything in range", so a coupled release always builds against the
+/// fresh sibling.
 #[derive(Debug)]
 pub struct ResolvedDep {
     /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
@@ -591,8 +594,23 @@ pub struct ResolvedDep {
     pub manifest: PathBuf,
 }
 
+/// Derived pin for a sibling at `version`: `>=<version>,<<major+1>`. The floor
+/// is the sibling's version at the consumer's tagged rev (so a side-by-side
+/// release ratchets it to the fresh version); the major cap is the same trust
+/// model as committed cross-repo internal pins. Prerelease floors are fine:
+/// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
+fn range_pin(version: &str) -> anyhow::Result<String> {
+    let major: u64 = version
+        .split(['.', '-'])
+        .next()
+        .unwrap_or("")
+        .parse()
+        .with_context(|| format!("version {version} does not start with a numeric major"))?;
+    Ok(format!(">={version},<{}", major + 1))
+}
+
 /// Rewrite `path =` deps in a single table-like section (e.g. `[dependencies]`
-/// or `[package.run-dependencies]`) to `"==<version>"`, skipping the
+/// or `[package.run-dependencies]`) to `">=<version>,<major+1>"`, skipping the
 /// self-as-workspace-member idiom (`path = "."`). Lifted out of
 /// `resolve_path_deps` as a free fn because the closure form fights the
 /// borrow checker across the `doc.get_mut` calls.
@@ -639,7 +657,7 @@ fn visit_table(
                 )
             })?
             .to_string();
-        table.insert(&key, toml_edit::value(format!("=={version}")));
+        table.insert(&key, toml_edit::value(range_pin(&version)?));
         resolved.push(ResolvedDep {
             name: key.clone(),
             version,
@@ -649,9 +667,12 @@ fn visit_table(
     Ok(())
 }
 
-/// Rewrite every non-self `path =` dep in the manifest to `"==<version>"`,
-/// reading the version from the sibling manifest at the same rev. The derived
-/// pin is deterministic: same rev -> same sibling manifest -> same pin.
+/// Rewrite every non-self `path =` dep in the manifest to
+/// `">=<version>,<major+1>"`, reading the version from the sibling manifest at
+/// the same rev. The derived pin is deterministic: same rev -> same sibling
+/// manifest -> same pin. The range (rather than `==`) lets already-published
+/// consumers accept future sibling releases within the major without a
+/// re-release.
 ///
 /// This is only ever called by the farm (via `mise build-recipes`) on
 /// ephemeral temp checkouts; the committed manifest keeps its path deps.
@@ -1483,7 +1504,7 @@ fn pixi(
                 // rev by construction) into a local-only channel. Not drained;
                 // the sibling's own entry / linux-64 stays the canonical publisher.
                 tracing::info!(
-                    "entry {}: sibling {} =={} not in channel and not built this job; fallback local build",
+                    "entry {}: sibling {} floor {} not in channel and not built this job; fallback local build",
                     entry.name,
                     dep.name,
                     dep.version,
@@ -2166,7 +2187,7 @@ ci = "test"
         assert_eq!(resolved[0].version, "2.5.0");
 
         let text = std::fs::read_to_string(&consumer).unwrap();
-        assert!(text.contains("lib = \"==2.5.0\""), "rewritten: {text}");
+        assert!(text.contains("lib = \">=2.5.0,<3\""), "rewritten: {text}");
         assert!(
             text.contains("node = { path = \".\" }"),
             "self idiom untouched: {text}"
@@ -2198,7 +2219,7 @@ ci = "test"
 
         let text = std::fs::read_to_string(&consumer).unwrap();
         assert!(
-            text.contains("ros-kilted-lib = \"==2.5.0\""),
+            text.contains("ros-kilted-lib = \">=2.5.0,<3\""),
             "rewritten under the dep key: {text}"
         );
     }
@@ -2226,6 +2247,35 @@ ci = "test"
             format!("{err:#}").contains("package.version"),
             "got: {err:#}"
         );
+    }
+
+    #[test]
+    fn range_pin_derives_major_cap() {
+        assert_eq!(range_pin("2.5.0").unwrap(), ">=2.5.0,<3");
+        assert_eq!(range_pin("1.24.0-alpha.2").unwrap(), ">=1.24.0-alpha.2,<2");
+        assert_eq!(range_pin("0.3.1").unwrap(), ">=0.3.1,<1");
+    }
+
+    #[test]
+    fn range_pin_rejects_non_numeric_major() {
+        let err = range_pin("rolling").unwrap_err();
+        assert!(format!("{err:#}").contains("numeric major"), "got: {err:#}");
+    }
+
+    #[test]
+    fn resolved_dep_version_stays_the_bare_floor() {
+        // Fallback/availability machinery keys on the exact floor version, not
+        // the range — a regression here would break cross-bucket builds.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_checkout_pkg(root, "lib", "");
+        let consumer = write_checkout_pkg(
+            root,
+            "node",
+            "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+        );
+        let resolved = resolve_path_deps(&consumer).unwrap();
+        assert_eq!(resolved[0].version, "2.5.0");
     }
 
     #[test]
