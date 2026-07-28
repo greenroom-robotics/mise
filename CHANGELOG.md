@@ -1,3 +1,10 @@
+## [8.1.0](https://github.com/greenroom-robotics/mise/compare/mise@8.0.1...mise@8.1.0) (2026-07-28)
+
+
+### Features
+
+* derive major-range pins for sibling path deps instead of exact pins ([#68](https://github.com/greenroom-robotics/mise/issues/68)) ([1dd9502](https://github.com/greenroom-robotics/mise/commit/1dd9502210f79b72180ae46d036f8c72d6d37ad1))
+
 ## [8.0.1](https://github.com/greenroom-robotics/mise/compare/mise@8.0.0...mise@8.0.1) (2026-07-27)
 
 
