@@ -104,9 +104,13 @@ runs:
           # Root single-package layout: package-dir points at the package itself
           # (mirrors `packages::discover`). Tags are plain semver (X.Y.Z); some
           # single-package repos still tag <pkg>@<ver>, so match both.
+          # `for-each-ref --count=1` rather than `git tag | head -n1`: head
+          # exits after the first line, so git's next write to the closed pipe
+          # dies with SIGPIPE and `pipefail` fails the step. A race, hit only
+          # once a package has enough tags to need a second write (~4 KB).
           globs=('[0-9]*.[0-9]*.[0-9]*')
           [ -n "$ONLY_PACKAGE" ] && globs+=("${ONLY_PACKAGE}@*")
-          tag="$(git tag --list "${globs[@]}" --sort=-v:refname | head -n1)"
+          tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "${globs[@]/#/refs/tags/}")"
           publish_one "${ONLY_PACKAGE:-$(basename "$PWD")}" "$tag" "$ONLY_PACKAGE"
         else
           # Multi-package layout: packages/<pkg>/{pixi.toml|package.xml}, <pkg>@<ver> tags.
@@ -114,7 +118,7 @@ runs:
             # Explicit target: release exactly this package (may be a vendored
             # package with no pixi.toml). No gate — a missing recipe is a user
             # error the CLI reports loudly.
-            tag="$(git tag --list "${ONLY_PACKAGE}@*" --sort=-v:refname | head -n1)"
+            tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${ONLY_PACKAGE}@*")"
             publish_one "$ONLY_PACKAGE" "$tag" "$ONLY_PACKAGE"
           else
             # Sweep: every current package (has pixi.toml or package.xml — the
@@ -128,7 +132,7 @@ runs:
               # (ROS, incl. vendored packages like deepstream_extensions with no
               # pixi.toml). Union keeps both; junk/renamed dirs (neither) drop.
               { [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || [ -f "$PACKAGE_DIR/$pkg/package.xml" ]; } || continue
-              tag="$(git tag --list "${pkg}@*" --sort=-v:refname | head -n1)"
+              tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${pkg}@*")"
               publish_one "$pkg" "$tag" "$pkg"
             done
           fi
