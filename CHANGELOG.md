@@ -1,3 +1,10 @@
+## [8.4.2](https://github.com/greenroom-robotics/mise/compare/mise@8.4.1...mise@8.4.2) (2026-07-29)
+
+
+### Bug Fixes
+
+* make pixi-native already-published check routing-aware ([#73](https://github.com/greenroom-robotics/mise/issues/73)) ([43920d7](https://github.com/greenroom-robotics/mise/commit/43920d75610799c60d01b55d33561dc73376d249))
+
 ## [8.4.1](https://github.com/greenroom-robotics/mise/compare/mise@8.4.0...mise@8.4.1) (2026-07-29)
 
 
