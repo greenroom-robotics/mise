@@ -68,7 +68,7 @@ on:
         type: boolean
         default: false
       lfs:
-        description: Fetch Git LFS objects for the package under test (for repos with LFS test fixtures). Scoped to the package's own directory — a leg testing a package with no LFS files downloads nothing.
+        description: Fetch Git LFS objects for the package under test (for repos with LFS test fixtures). Scoped to the package's own directory — a leg testing a package with no LFS files downloads nothing. A repo .lfsconfig `fetchexclude` still applies unless `lfs-ignore-config-exclude` is set.
         required: false
         type: boolean
         default: false
@@ -77,6 +77,16 @@ on:
         required: false
         type: string
         default: ""
+      lfs-ignore-config-exclude:
+        description: 'Ignore the repo .lfsconfig `fetchexclude` for the CI pull, making the include list authoritative. ONLY for repos whose fetchexclude is a blanket `*` (set to stop local auto-fetch). Leave false where fetchexclude names specific paths — overriding it there re-downloads exactly the artefacts it exists to skip, on every matrix leg.'
+        required: false
+        type: boolean
+        default: false
+      timeout-minutes:
+        description: Per-package test job timeout. Bounds a hung test (e.g. a DDS teardown deadlock that no per-test timeout can catch) instead of inheriting GitHub's 360-minute default.
+        required: false
+        type: number
+        default: 60
       host-setup:
         description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
         required: false
@@ -131,18 +141,43 @@ jobs:
           filters: ${{ steps.all.outputs.map }}
           list-files: none
 
+      # A change outside package-dir and docs/ — a workflow, a root config, a shared
+      # test fixture — can affect any package, and there is no reliable way to
+      # attribute it to one. Run everything instead of silently testing nothing.
+      #
+      # Separate step because predicate-quantifier is action-level, not per-filter:
+      # the default ('some') would fire on every PR since '**' matches everything,
+      # and setting 'every' on the step above would require a file to match ALL of a
+      # package's globs at once, so changed-only would select nothing.
+      - id: outside
+        if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@v4
+        with:
+          predicate-quantifier: every
+          list-files: none
+          filters: |
+            other:
+              - '**'
+              - '!${{ inputs.package-dir }}/**'
+              - '!docs/**'
+
       - id: assemble
         shell: bash
         env:
           ALL: ${{ steps.all.outputs.all }}
           CHANGED: ${{ steps.filter.outputs.changes }}
           FILTER_RAN: ${{ steps.filter.outcome }}
+          OUTSIDE: ${{ steps.outside.outputs.other }}
           EXCLUDE_PACKAGES: ${{ inputs.exclude-packages }}
         run: |
           set -euo pipefail
           # Use the filtered set only when paths-filter actually ran; otherwise
-          # (push, dispatch, changed-only off) test everything.
-          if [ "$FILTER_RAN" = "success" ]; then
+          # (push, dispatch, changed-only off) test everything. A change outside
+          # package-dir/docs wins over the filtered subset — see the `outside` step.
+          if [ "$OUTSIDE" = "true" ]; then
+            echo "change outside ${{ inputs.package-dir }}/ and docs/ — testing all packages"
+            packages="$ALL"
+          elif [ "$FILTER_RAN" = "success" ]; then
             packages="$CHANGED"
           else
             packages="$ALL"
@@ -157,6 +192,7 @@ jobs:
     needs: discover
     if: needs.discover.outputs.packages != '[]'
     runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
       id-token: write      # Azure OIDC login in setup
@@ -179,12 +215,24 @@ jobs:
           PACKAGE: ${{ matrix.package }}
           PACKAGE_DIR: ${{ inputs.package-dir }}
           EXTRA: ${{ inputs.lfs-include }}
+          IGNORE_CONFIG_EXCLUDE: ${{ inputs.lfs-ignore-config-exclude }}
         run: |
           set -euo pipefail
           include="${PACKAGE_DIR:+$PACKAGE_DIR/}$PACKAGE/**"
           if [ -n "$EXTRA" ]; then include="$include,$EXTRA"; fi
-          echo "git lfs pull --include=$include"
-          git lfs pull --include="$include"
+          # git-lfs overrides lfs.fetchinclude and lfs.fetchexclude INDEPENDENTLY:
+          # passing only --include leaves a configured fetchexclude in force, so a
+          # repo with `fetchexclude = *` fetches nothing at all. --exclude="" fixes
+          # that, but it also discards a TARGETED fetchexclude, which for a repo with
+          # large committed artefacts is a deliberate cost control worth GBs per leg.
+          # Hence opt-in: never add --exclude="" unconditionally here.
+          if [ "$IGNORE_CONFIG_EXCLUDE" = "true" ]; then
+            echo "git lfs pull --include=$include --exclude="
+            git lfs pull --include="$include" --exclude=""
+          else
+            echo "git lfs pull --include=$include"
+            git lfs pull --include="$include"
+          fi
 
       - name: Host setup
         if: inputs.host-setup != ''
