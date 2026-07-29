@@ -220,7 +220,8 @@ fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
 }
 
 use anyhow::Context;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::Path;
 
@@ -1110,6 +1111,41 @@ struct SearchRecord {
     name: String,
     version: String,
     build_number: u64,
+    subdir: String,
+}
+
+/// The channel subdir an entry's artifact lands in: `noarch` when the build is
+/// arch-independent, otherwise the job's arch.
+///
+/// The publish check has to be told this rather than infer it. A build number
+/// sitting under a *different* subdir says nothing about whether the artifact
+/// we're about to produce exists — a package that moved from arch to noarch
+/// mid-version has records in both, and matching the wrong one either skips a
+/// build that never happened or repeats one that did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildSubdir {
+    Noarch,
+    Arch(Arch),
+}
+
+impl BuildSubdir {
+    /// Where `upstream` publishes to when built for `target_platform`.
+    fn of(upstream: &UpstreamPixiToml, target_platform: TargetPlatform) -> Self {
+        if upstream.is_noarch() {
+            Self::Noarch
+        } else {
+            Self::Arch(target_platform.arch())
+        }
+    }
+}
+
+impl fmt::Display for BuildSubdir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Noarch => f.write_str("noarch"),
+            Self::Arch(a) => write!(f, "{a}"),
+        }
+    }
 }
 
 /// Every record in one channel for one platform, from a single
@@ -1131,10 +1167,14 @@ struct SearchRecord {
 /// the channel's full name index and then fetch records per match, which on
 /// e.g. robostack (34k names) takes minutes.
 struct ChannelIndex {
-    /// `(name, version)` -> every build number published for it, across all
-    /// subdirs the search returned. Reading every subdir (not just `arch`) is
-    /// what makes noarch packages visible here.
-    builds: HashMap<(String, String), Vec<u64>>,
+    /// `(subdir, name, version)` -> build numbers published *in that subdir*.
+    /// Kept per-subdir because the publish check must ask about the one subdir
+    /// it is about to write to; see [`BuildSubdir`].
+    builds: HashMap<(String, String, String), Vec<u64>>,
+    /// `(name, version)` present in any subdir at all. Dep satisfaction is
+    /// deliberately subdir-agnostic — a noarch dependency satisfies a consumer
+    /// being built for an arch.
+    versions: HashSet<(String, String)>,
 }
 
 impl ChannelIndex {
@@ -1146,41 +1186,47 @@ impl ChannelIndex {
             &search_channel("*", channel_url, target_platform).unwrap_or_default(),
         );
         tracing::info!(
-            "swept {channel_url} for {}: {} name/version pairs",
+            "swept {channel_url} for {}: {} name/version pairs across {} subdir slots",
             target_platform.arch(),
+            index.versions.len(),
             index.builds.len(),
         );
         index
     }
 
-    /// Fold `pixi search --json` output into the lookup table. Every subdir the
+    /// Fold `pixi search --json` output into the lookup tables. Every subdir the
     /// search returned is folded in, not just the requested arch: a `noarch`
     /// package is reported under the `noarch` key even when searching with
-    /// `-p linux-64`, so keying on arch alone makes noarch packages look
+    /// `-p linux-64`, so ignoring that key makes noarch packages look
     /// permanently unpublished.
     fn from_records(parsed: &BTreeMap<String, Vec<SearchRecord>>) -> Self {
-        let mut builds: HashMap<(String, String), Vec<u64>> = HashMap::new();
+        let mut builds: HashMap<(String, String, String), Vec<u64>> = HashMap::new();
+        let mut versions: HashSet<(String, String)> = HashSet::new();
         for r in parsed.values().flatten() {
             builds
-                .entry((r.name.clone(), r.version.clone()))
+                .entry((r.subdir.clone(), r.name.clone(), r.version.clone()))
                 .or_default()
                 .push(r.build_number);
+            versions.insert((r.name.clone(), r.version.clone()));
         }
-        Self { builds }
+        Self { builds, versions }
     }
 
-    /// Whether `name == version` is published with exactly `build_number`.
-    fn has_build(&self, name: &str, version: &str, build_number: u64) -> bool {
+    /// Whether `name == version` is published in `subdir` with exactly
+    /// `build_number` — i.e. whether the artifact this job would produce is
+    /// already there. Records under any other subdir are ignored on purpose.
+    fn has_build(&self, name: &str, version: &str, build_number: u64, subdir: BuildSubdir) -> bool {
         self.builds
-            .get(&(name.to_string(), version.to_string()))
+            .get(&(subdir.to_string(), name.to_string(), version.to_string()))
             .is_some_and(|b| b.contains(&build_number))
     }
 
-    /// Whether *any* build of `name == version` is published. For dep
-    /// satisfaction we only care that some build of the pinned version exists.
+    /// Whether *any* build of `name == version` is published, in any subdir.
+    /// For dep satisfaction we only care that some build of the pinned version
+    /// is available to solve against.
     fn has_version(&self, name: &str, version: &str) -> bool {
-        self.builds
-            .contains_key(&(name.to_string(), version.to_string()))
+        self.versions
+            .contains(&(name.to_string(), version.to_string()))
     }
 }
 
@@ -1262,6 +1308,7 @@ fn check_entry(
         &upstream.package.name,
         &upstream.package.version,
         effective_build,
+        BuildSubdir::of(&upstream, target_platform),
     ) {
         return Ok(CheckOutcome::SkipAlreadyPublished {
             name: upstream.package.name,
@@ -1655,19 +1702,23 @@ mod tests {
         ChannelIndex::from_records(&serde_json::from_str(json).unwrap())
     }
 
+    const L64: BuildSubdir = BuildSubdir::Arch(Arch::Linux64);
+    const AARCH: BuildSubdir = BuildSubdir::Arch(Arch::LinuxAarch64);
+    const NOARCH: BuildSubdir = BuildSubdir::Noarch;
+
     #[test]
     fn channel_index_matches_exact_build_and_any_version() {
         let idx = index(
             r#"{"linux-64":[
-                 {"name":"autopilot","version":"3.5.4","build_number":0},
-                 {"name":"autopilot","version":"3.5.4","build_number":2}
+                 {"name":"autopilot","version":"3.5.4","build_number":0,"subdir":"linux-64"},
+                 {"name":"autopilot","version":"3.5.4","build_number":2,"subdir":"linux-64"}
                ]}"#,
         );
-        assert!(idx.has_build("autopilot", "3.5.4", 0));
-        assert!(idx.has_build("autopilot", "3.5.4", 2));
+        assert!(idx.has_build("autopilot", "3.5.4", 0, L64));
+        assert!(idx.has_build("autopilot", "3.5.4", 2, L64));
         // A build we haven't published yet must still read as "needs building".
-        assert!(!idx.has_build("autopilot", "3.5.4", 1));
-        assert!(!idx.has_build("autopilot", "3.5.5", 0));
+        assert!(!idx.has_build("autopilot", "3.5.4", 1, L64));
+        assert!(!idx.has_build("autopilot", "3.5.5", 0, L64));
         // Dep satisfaction ignores the build number.
         assert!(idx.has_version("autopilot", "3.5.4"));
         assert!(!idx.has_version("autopilot", "3.5.5"));
@@ -1677,25 +1728,70 @@ mod tests {
     #[test]
     fn channel_index_sees_noarch_packages() {
         // `pixi search -p linux-64` reports a noarch-only package under the
-        // `noarch` key and omits `linux-64` entirely. Keying on the requested
-        // arch made these look unpublished, so every noarch entry rebuilt and
-        // republished on every run.
-        let idx =
-            index(r#"{"noarch":[{"name":"gama_scenarios","version":"1.2.0","build_number":3}]}"#);
-        assert!(idx.has_build("gama_scenarios", "1.2.0", 3));
+        // `noarch` key and omits `linux-64` entirely. Ignoring that key made
+        // these look unpublished, so every noarch entry rebuilt and republished
+        // on every run.
+        let idx = index(
+            r#"{"noarch":[
+                 {"name":"gama_scenarios","version":"1.2.0","build_number":3,"subdir":"noarch"}
+               ]}"#,
+        );
+        assert!(idx.has_build("gama_scenarios", "1.2.0", 3, NOARCH));
         assert!(idx.has_version("gama_scenarios", "1.2.0"));
     }
 
     #[test]
-    fn channel_index_unions_builds_across_subdirs() {
-        // A package can have an older arch build and a newer noarch one.
+    fn channel_index_does_not_match_a_build_from_another_subdir() {
+        // `vessel_offsets` 1.4.0 really does hold build 1 on linux-64 and build
+        // 2 on noarch — a package that moved to noarch mid-version. Matching on
+        // name+version+build alone would skip the noarch build 1 we still owe
+        // (it only exists on linux-64) and skip the linux-64 build 2 as well.
         let idx = index(
-            r#"{"linux-64":[{"name":"vessel_offsets","version":"1.4.0","build_number":1}],
-                "noarch":[{"name":"vessel_offsets","version":"1.4.0","build_number":2}]}"#,
+            r#"{"linux-64":[
+                 {"name":"vessel_offsets","version":"1.4.0","build_number":1,"subdir":"linux-64"}],
+                "noarch":[
+                 {"name":"vessel_offsets","version":"1.4.0","build_number":2,"subdir":"noarch"}]}"#,
         );
-        assert!(idx.has_build("vessel_offsets", "1.4.0", 1));
-        assert!(idx.has_build("vessel_offsets", "1.4.0", 2));
-        assert!(!idx.has_build("vessel_offsets", "1.4.0", 3));
+        assert!(idx.has_build("vessel_offsets", "1.4.0", 1, L64));
+        assert!(idx.has_build("vessel_offsets", "1.4.0", 2, NOARCH));
+        // The cross-subdir matches that must NOT skip a build.
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 2, L64));
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, NOARCH));
+        // A sibling arch never satisfies another arch either.
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, AARCH));
+        // Dep satisfaction is still subdir-agnostic.
+        assert!(idx.has_version("vessel_offsets", "1.4.0"));
+    }
+
+    #[test]
+    fn build_subdir_follows_the_manifest_not_the_job_arch() {
+        let noarch = UpstreamPixiToml::parse(
+            "[package]\nname=\"p\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
+        )
+        .unwrap();
+        let arch = UpstreamPixiToml::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
+        let l64 = TargetPlatform::from_str("linux-64").unwrap();
+        let a64 = TargetPlatform::from_str("linux-aarch64").unwrap();
+
+        // A noarch package publishes to `noarch` whichever job builds it.
+        assert_eq!(BuildSubdir::of(&noarch, l64), BuildSubdir::Noarch);
+        assert_eq!(BuildSubdir::of(&noarch, a64), BuildSubdir::Noarch);
+        // Everything else publishes to the job's own arch.
+        assert_eq!(
+            BuildSubdir::of(&arch, l64),
+            BuildSubdir::Arch(Arch::Linux64)
+        );
+        assert_eq!(
+            BuildSubdir::of(&arch, a64),
+            BuildSubdir::Arch(Arch::LinuxAarch64)
+        );
+        // Display must match the subdir keys `pixi search --json` returns.
+        assert_eq!(BuildSubdir::Noarch.to_string(), "noarch");
+        assert_eq!(
+            BuildSubdir::Arch(Arch::LinuxAarch64).to_string(),
+            "linux-aarch64"
+        );
     }
 
     #[test]
@@ -1703,7 +1799,8 @@ mod tests {
         // Sweep failure / empty channel must fail open into "needs building",
         // matching what the per-package searches did on error.
         let idx = ChannelIndex::from_records(&BTreeMap::new());
-        assert!(!idx.has_build("autopilot", "3.5.4", 0));
+        assert!(!idx.has_build("autopilot", "3.5.4", 0, L64));
+        assert!(!idx.has_build("autopilot", "3.5.4", 0, NOARCH));
         assert!(!idx.has_version("autopilot", "3.5.4"));
     }
 
