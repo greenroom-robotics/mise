@@ -1,0 +1,12 @@
+# hand-authored recipe — comments must survive
+package:
+  name: demo-pkg
+  version: 2.0.0
+
+source:
+  git: https://github.com/greenroom-robotics/demo_pkg.git
+  rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+build:
+  number: 0
+  script: ${{ '$RECIPE_DIR/build.sh' }}

@@ -1,0 +1,52 @@
+{
+  "branches": [
+    "main",
+    "master",
+    {
+      "name": "alpha",
+      "prerelease": true
+    }
+  ],
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      {
+        "preset": "conventionalcommits"
+      }
+    ],
+    [
+      "@semantic-release/changelog",
+      {}
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "prepareCmd": "mise ci verify-siblings --pixi-toml=<TMP>/pixi.toml --package-dir=<TMP> && mise ci bump-pixi --version=${nextRelease.version} --pixi-toml=<TMP>/pixi.toml",
+        "publishCmd": "mise ci recipes-pr --version=${nextRelease.version} --recipes-repo=greenroom-robotics/ros-recipes --package-dir=<TMP> --ros-distro=kilted --package=solo --sha=${nextRelease.gitHead}"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      {
+        "assets": [],
+        "successComment": false
+      }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": [
+          "CHANGELOG.md",
+          "**/pixi.toml"
+        ],
+        "message": "chore(release): solo ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ]
+  ]
+}

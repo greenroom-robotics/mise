@@ -1,0 +1,10 @@
+# Top of file comment stays.
+ros_extra:
+  url: https://github.com/greenroom-robotics/ros_extra.git
+  tag: v2.0.0
+  version: 2.0.0
+# Notes about other_entry — must survive.
+other_entry:
+  url: https://github.com/greenroom-robotics/other_entry.git
+  tag: v0.1.0
+  version: 0.1.0

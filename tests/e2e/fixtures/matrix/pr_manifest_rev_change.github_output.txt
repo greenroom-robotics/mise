@@ -1,0 +1,4 @@
+matrix-json={"include":[{"artifact-name":"build-pixi-native-linux-64-4cpu","ds-image":"","ds-version":"","pipeline":"pixi-native","runner":"runs-on=TESTRUN/runner=4cpu-linux-x64","runner-size":"4cpu","target-platform":"linux-64"},{"artifact-name":"build-pixi-native-linux-aarch64-4cpu","ds-image":"","ds-version":"","pipeline":"pixi-native","runner":"runs-on=TESTRUN/runner=4cpu-linux-arm64","runner-size":"4cpu","target-platform":"linux-aarch64"}]}
+recipes-csv=deepstream-thing
+has-work=true
+pixi-only=alpha
