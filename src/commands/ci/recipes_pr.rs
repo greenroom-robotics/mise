@@ -45,7 +45,7 @@ impl RecipesPr {
         //    vendored monorepo package — its conda artifact is built from a
         //    hand-authored vendor_recipes/<name>/recipe.yaml, so there's
         //    nothing to discover.
-        let mode = release_target(&self.package_dir, self.package.as_deref());
+        let mode = release_target(&self.package_dir, self.package.as_deref())?;
         let targets: Vec<(String, Option<String>)> = match &mode {
             ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
             ReleaseTarget::Discovered => {
@@ -355,18 +355,34 @@ enum ReleaseTarget {
     VendoredByName(String),
 }
 
+/// True when a manifest exists at `path` AND declares a `[package]`.
+///
+/// The distinction matters: a *workspace-only* manifest is a dev environment
+/// for a package built somewhere else, so for release purposes it is the same
+/// as having no manifest at all. Checking mere file existence would classify
+/// such a package as `Discovered` and then fail on the missing `[package]`.
+fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    crate::commands::ci::packages::declares_package(path)
+}
+
 /// Choose the release target. A `--package` with neither a per-package
-/// `<dir>/<pkg>/pixi.toml` nor a root `<dir>/pixi.toml` is a vendored monorepo
-/// package; everything else discovers as before.
-fn release_target(package_dir: &std::path::Path, package: Option<&str>) -> ReleaseTarget {
+/// `<dir>/<pkg>/pixi.toml` nor a root `<dir>/pixi.toml` *declaring a package*
+/// is a vendored monorepo package; everything else discovers as before.
+fn release_target(
+    package_dir: &std::path::Path,
+    package: Option<&str>,
+) -> anyhow::Result<ReleaseTarget> {
     match package {
         Some(pkg)
-            if !package_dir.join(pkg).join("pixi.toml").exists()
-                && !package_dir.join("pixi.toml").exists() =>
+            if !declares_package_at(&package_dir.join(pkg).join("pixi.toml"))?
+                && !declares_package_at(&package_dir.join("pixi.toml"))? =>
         {
-            ReleaseTarget::VendoredByName(pkg.to_string())
+            Ok(ReleaseTarget::VendoredByName(pkg.to_string()))
         }
-        _ => ReleaseTarget::Discovered,
+        _ => Ok(ReleaseTarget::Discovered),
     }
 }
 
@@ -680,7 +696,7 @@ mod tests {
         std::fs::create_dir_all(&pkgs).unwrap();
         // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
         assert_eq!(
-            release_target(&pkgs, Some("deepstream_extensions")),
+            release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
             ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
         );
     }
@@ -696,8 +712,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            release_target(&pkgs, Some("object_tracker")),
+            release_target(&pkgs, Some("object_tracker")).unwrap(),
             ReleaseTarget::Discovered
+        );
+    }
+
+    #[test]
+    fn release_target_vendored_when_manifest_is_workspace_only() {
+        // deepstream_extensions ships a dev-env pixi.toml (no [package]) so it
+        // can be built with colcon in a DS container, but its conda artifact
+        // still comes from vendor_recipes/. The manifest's mere existence must
+        // not reclassify it as a discoverable package.
+        let td = tempfile::TempDir::new().unwrap();
+        let pkgs = td.path().join("packages");
+        std::fs::create_dir_all(pkgs.join("deepstream_extensions")).unwrap();
+        std::fs::write(
+            pkgs.join("deepstream_extensions/pixi.toml"),
+            "[workspace]\nname = \"deepstream_extensions\"\n[tasks]\nbuild = \"colcon build\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
+            ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
         );
     }
 
@@ -711,7 +747,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            release_target(root, Some("mise")),
+            release_target(root, Some("mise")).unwrap(),
             ReleaseTarget::Discovered
         );
     }
@@ -719,7 +755,10 @@ mod tests {
     #[test]
     fn release_target_discovered_when_no_package_filter() {
         let td = tempfile::TempDir::new().unwrap();
-        assert_eq!(release_target(td.path(), None), ReleaseTarget::Discovered);
+        assert_eq!(
+            release_target(td.path(), None).unwrap(),
+            ReleaseTarget::Discovered
+        );
     }
 
     #[test]
