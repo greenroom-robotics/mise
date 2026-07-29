@@ -220,9 +220,11 @@ fn mode_version(mode: &VincaBuildMode) -> Option<DeepstreamVersion> {
 }
 
 use anyhow::Context;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// Selects which subset of recipes to build and whether to pin a DeepStream version.
 /// Maps to the valid combinations of `--ds-recipe`, `--ds-version`, and `--only` flags.
@@ -581,8 +583,9 @@ fn exact_pin_version(s: &str) -> Option<&str> {
 #[derive(Debug)]
 pub struct ResolvedDep {
     /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
-    /// This is the channel artifact name, which is what `version_published` /
-    /// `built_this_job` / the local-build guard key off of. It is NOT
+    /// This is the channel artifact name, which is what `ChannelIndex` /
+    /// `version_published` / `built_this_job` / the local-build guard key off
+    /// of. It is NOT
     /// necessarily the sibling's `package.name` — in package-xml mode the
     /// sibling manifest may have no `package.name` at all, and even when it
     /// does, the published artifact is prefixed/transformed relative to it.
@@ -831,7 +834,8 @@ fn check_local_build_guard(
 /// one top-level entry). Split out to keep the recursive fn's arg count sane.
 struct LocalBuildCtx<'a> {
     local_deps_dir: &'a Path,
-    channel_url: &'a str,
+    /// Snapshot of the upstream channel, swept once for the whole job.
+    channel: &'a ChannelIndex,
     target_platform: TargetPlatform,
     /// Repo checkout root, for resolving same-repo sibling pins.
     workdir: &'a Path,
@@ -864,7 +868,7 @@ fn build_local_dep(
     nested.extend(sibling_pins);
     let mut built_any_nested = false;
     for n in &nested {
-        if !version_published(&n.name, &n.version, ctx.channel_url, ctx.target_platform) {
+        if !ctx.channel.has_version(&n.name, &n.version) {
             build_local_dep(n, ctx, local_built, visiting)?;
             built_any_nested = true;
         }
@@ -1062,134 +1066,234 @@ fn fetch_at_rev(url: &GithubRepoUrl, rev: &Sha40, dest: &Path) -> anyhow::Result
 
 use std::process::Command;
 
-/// Check whether `name == version` (with `build_number`) is already in `channel_url`
-/// for `target_platform`. Returns `false` on any failure (the caller logs and proceeds
-/// as if not published).
-fn package_published(
-    name: &str,
-    version: &str,
-    build_number: u64,
+/// Run `pixi search --json <spec> -c <channel> -p <arch>` and return the parsed
+/// records grouped by subdir. `None` on any failure — callers treat that as
+/// "nothing published" and proceed as if the package needs building.
+fn search_channel(
+    spec: &str,
     channel_url: &str,
     target_platform: TargetPlatform,
-) -> bool {
+) -> Option<BTreeMap<String, Vec<SearchRecord>>> {
     let arch = target_platform.arch().to_string();
-    let pkg_spec = format!("{name}=={version}");
 
-    let output = Command::new("pixi")
-        .args([
-            "search",
-            "--json",
-            &pkg_spec,
-            "-c",
-            channel_url,
-            "-p",
-            &arch,
-        ])
-        .output();
-
-    let output = match output {
+    let output = match Command::new("pixi")
+        .args(["search", "--json", spec, "-c", channel_url, "-p", &arch])
+        .output()
+    {
         Ok(o) => o,
         Err(e) => {
-            tracing::info!("pixi search for {pkg_spec} failed to spawn: {e}");
-            return false;
+            tracing::info!("pixi search for {spec} failed to spawn: {e}");
+            return None;
         }
     };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::info!(
-            "pixi search for {pkg_spec} exited {}: {}",
+            "pixi search for {spec} exited {}: {}",
             output.status,
             stderr.trim(),
         );
-        return false;
+        return None;
     }
 
-    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
+    match serde_json::from_slice(&output.stdout) {
+        Ok(v) => Some(v),
         Err(e) => {
-            tracing::info!("pixi search for {pkg_spec} returned non-JSON stdout: {e}");
-            return false;
-        }
-    };
-
-    let Some(candidates) = parsed.get(&arch).and_then(|v| v.as_array()) else {
-        return false;
-    };
-    tracing::info!(
-        "pixi search for {pkg_spec} build={build_number} on {arch}: {} candidate(s)",
-        candidates.len(),
-    );
-    for pkg in candidates {
-        let pkg_name = pkg.get("name").and_then(|v| v.as_str());
-        let pkg_ver = pkg.get("version").and_then(|v| v.as_str());
-        let pkg_build = pkg.get("build_number").and_then(|v| v.as_u64());
-        if pkg_name == Some(name) && pkg_ver == Some(version) && pkg_build == Some(build_number) {
-            return true;
+            tracing::info!("pixi search for {spec} returned non-JSON stdout: {e}");
+            None
         }
     }
-    false
 }
 
-/// Check whether *any* build of `name == version` exists in `channel_url` for
-/// `target_platform`. Same `pixi search --json` call as `package_published`,
-/// but without the build-number equality check — for dep satisfaction we only
-/// care that some build of the pinned version is available. Returns `false`
-/// on any failure (the caller treats that as not-yet-published).
+/// One record from `pixi search --json`. Only the fields the publish checks need.
+#[derive(Debug, serde::Deserialize)]
+struct SearchRecord {
+    name: String,
+    version: String,
+    build_number: u64,
+    subdir: String,
+}
+
+/// The channel subdir an entry's artifact lands in: `noarch` when the build is
+/// arch-independent, otherwise the job's arch.
+///
+/// The publish check has to be told this rather than infer it. A build number
+/// sitting under a *different* subdir says nothing about whether the artifact
+/// we're about to produce exists — a package that moved from arch to noarch
+/// mid-version has records in both, and matching the wrong one either skips a
+/// build that never happened or repeats one that did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuildSubdir {
+    Noarch,
+    Arch(Arch),
+}
+
+impl BuildSubdir {
+    /// Where `upstream` publishes to when built for `target_platform`.
+    fn of(upstream: &UpstreamPixiToml, target_platform: TargetPlatform) -> Self {
+        if upstream.is_noarch() {
+            Self::Noarch
+        } else {
+            Self::Arch(target_platform.arch())
+        }
+    }
+}
+
+impl fmt::Display for BuildSubdir {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Noarch => f.write_str("noarch"),
+            Self::Arch(a) => write!(f, "{a}"),
+        }
+    }
+}
+
+/// Every record in one channel for one platform, from a single
+/// `pixi search --json '*'` sweep.
+///
+/// `pixi search` takes an exclusive advisory lock on the repodata cache entry
+/// for a channel (rattler's `utils/flock.rs`), so N searches against the *same*
+/// channel cost N × one-search however many threads issue them. Sweeping once
+/// and matching in memory collapses the whole check phase into a single lock
+/// hold: measured against the GR channel, 40 concurrent exact searches take
+/// 14.3s while one sweep of all 283 packages takes 0.45s warm / ~6s cold.
+///
+/// Only sound for a channel that cannot change while the snapshot is held. That
+/// holds for the upstream and product channels during a build job — builds
+/// publish into a local `file://` output channel and are drained to the real
+/// ones later. The mutable local channels keep using [`version_published`].
+///
+/// One of these per channel, built on demand by [`ChannelIndexCache`], since
+/// routing sends different packages to different channels.
+///
+/// Do not point this at a public channel: a `'*'` glob makes the gateway pull
+/// the channel's full name index and then fetch records per match, which on
+/// e.g. robostack (34k names) takes minutes. The GR channels are all small —
+/// `general` is 283 packages, the product channels 1-2 each.
+struct ChannelIndex {
+    /// `(subdir, name, version)` -> build numbers published *in that subdir*.
+    /// Kept per-subdir because the publish check must ask about the one subdir
+    /// it is about to write to; see [`BuildSubdir`].
+    builds: HashMap<(String, String, String), Vec<u64>>,
+    /// `(name, version)` present in any subdir at all. Dep satisfaction is
+    /// deliberately subdir-agnostic — a noarch dependency satisfies a consumer
+    /// being built for an arch.
+    versions: HashSet<(String, String)>,
+}
+
+impl ChannelIndex {
+    /// Sweep `channel_url` for `target_platform`. An unreachable or empty
+    /// channel yields an empty index, i.e. "nothing is published yet" — the
+    /// same fail-open behaviour the per-package searches had.
+    fn sweep(channel_url: &str, target_platform: TargetPlatform) -> Self {
+        let index = Self::from_records(
+            &search_channel("*", channel_url, target_platform).unwrap_or_default(),
+        );
+        tracing::info!(
+            "swept {channel_url} for {}: {} name/version pairs across {} subdir slots",
+            target_platform.arch(),
+            index.versions.len(),
+            index.builds.len(),
+        );
+        index
+    }
+
+    /// Fold `pixi search --json` output into the lookup tables. Every subdir the
+    /// search returned is folded in, not just the requested arch: a `noarch`
+    /// package is reported under the `noarch` key even when searching with
+    /// `-p linux-64`, so ignoring that key makes noarch packages look
+    /// permanently unpublished.
+    fn from_records(parsed: &BTreeMap<String, Vec<SearchRecord>>) -> Self {
+        let mut builds: HashMap<(String, String, String), Vec<u64>> = HashMap::new();
+        let mut versions: HashSet<(String, String)> = HashSet::new();
+        for r in parsed.values().flatten() {
+            builds
+                .entry((r.subdir.clone(), r.name.clone(), r.version.clone()))
+                .or_default()
+                .push(r.build_number);
+            versions.insert((r.name.clone(), r.version.clone()));
+        }
+        Self { builds, versions }
+    }
+
+    /// Whether `name == version` is published in `subdir` with exactly
+    /// `build_number` — i.e. whether the artifact this job would produce is
+    /// already there. Records under any other subdir are ignored on purpose.
+    fn has_build(&self, name: &str, version: &str, build_number: u64, subdir: BuildSubdir) -> bool {
+        self.builds
+            .get(&(subdir.to_string(), name.to_string(), version.to_string()))
+            .is_some_and(|b| b.contains(&build_number))
+    }
+
+    /// Whether *any* build of `name == version` is published, in any subdir.
+    /// For dep satisfaction we only care that some build of the pinned version
+    /// is available to solve against.
+    fn has_version(&self, name: &str, version: &str) -> bool {
+        self.versions
+            .contains(&(name.to_string(), version.to_string()))
+    }
+}
+
+/// Sweeps each channel at most once per job and hands the snapshot to every
+/// caller that asks for it.
+///
+/// The set of channels isn't known before the check fan-out: routing rules map
+/// a package to its product channels, and the package's version only arrives
+/// with the upstream manifest each thread fetches. So sweep on first ask and
+/// memoize rather than trying to enumerate up front.
+struct ChannelIndexCache {
+    target_platform: TargetPlatform,
+    // ponytail: one lock over the whole map, held across the sweep, so sweeps
+    // of *different* channels don't overlap. Deliberate — it also means a
+    // channel is never swept twice concurrently, and the totals are small
+    // (~23 channels for ros-recipes, product channels hold 1-2 packages and
+    // sweep in ~0.5s). Go per-channel locks if the channel count grows enough
+    // that serialised cold sweeps start to show.
+    swept: Mutex<HashMap<String, Arc<ChannelIndex>>>,
+}
+
+impl ChannelIndexCache {
+    fn new(target_platform: TargetPlatform) -> Self {
+        Self {
+            target_platform,
+            swept: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The snapshot for `channel_url`, sweeping it if this is the first ask.
+    fn get(&self, channel_url: &str) -> Arc<ChannelIndex> {
+        let mut swept = self.swept.lock().expect("channel index cache poisoned");
+        if let Some(index) = swept.get(channel_url) {
+            return Arc::clone(index);
+        }
+        let index = Arc::new(ChannelIndex::sweep(channel_url, self.target_platform));
+        swept.insert(channel_url.to_string(), Arc::clone(&index));
+        index
+    }
+}
+
+/// Whether *any* build of `name == version` exists in `channel_url` for
+/// `target_platform`, asked live.
+///
+/// For the local `file://` channels only: those gain packages as the job
+/// publishes into them, so a snapshot would go stale mid-loop. Their repodata
+/// is small and uncontended, so the per-package search is cheap here. Use
+/// [`ChannelIndex`] for the upstream channel instead.
 fn version_published(
     name: &str,
     version: &str,
     channel_url: &str,
     target_platform: TargetPlatform,
 ) -> bool {
-    let arch = target_platform.arch().to_string();
-    let pkg_spec = format!("{name}=={version}");
-
-    let output = Command::new("pixi")
-        .args([
-            "search",
-            "--json",
-            &pkg_spec,
-            "-c",
-            channel_url,
-            "-p",
-            &arch,
-        ])
-        .output();
-
-    let output = match output {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::info!("pixi search for {pkg_spec} failed to spawn: {e}");
-            return false;
-        }
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!(
-            "pixi search for {pkg_spec} exited {}: {}",
-            output.status,
-            stderr.trim(),
-        );
-        return false;
-    }
-
-    let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::info!("pixi search for {pkg_spec} returned non-JSON stdout: {e}");
-            return false;
-        }
-    };
-
-    let Some(candidates) = parsed.get(&arch).and_then(|v| v.as_array()) else {
+    let spec = format!("{name}=={version}");
+    let Some(parsed) = search_channel(&spec, channel_url, target_platform) else {
         return false;
     };
-    candidates.iter().any(|pkg| {
-        pkg.get("name").and_then(|v| v.as_str()) == Some(name)
-            && pkg.get("version").and_then(|v| v.as_str()) == Some(version)
-    })
+    parsed
+        .values()
+        .flatten()
+        .any(|r| r.name == name && r.version == version)
 }
 
 enum CheckOutcome {
@@ -1217,6 +1321,7 @@ enum CheckOutcome {
 
 fn check_entry(
     entry: &PixiNativeEntry,
+    channels: &ChannelIndexCache,
     channel_url: &str,
     routing_rules: &[crate::routing::RoutingRule],
     target_platform: TargetPlatform,
@@ -1255,13 +1360,13 @@ fn check_entry(
         &upstream.package.name,
         &upstream.package.version,
     );
+    let subdir = BuildSubdir::of(&upstream, target_platform);
     if published_urls.iter().all(|url| {
-        package_published(
+        channels.get(url).has_build(
             &upstream.package.name,
             &upstream.package.version,
             effective_build,
-            url,
-            target_platform,
+            subdir,
         )
     }) {
         return Ok(CheckOutcome::SkipAlreadyPublished {
@@ -1377,6 +1482,10 @@ fn pixi(
     let channel_url_ref: &str = &channel_url;
     let routing_rules = crate::routing::load_rules(repo.root())?;
     let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
+    // Shared across the fan-out so each channel is swept once for the whole
+    // job instead of once per entry.
+    let channels = ChannelIndexCache::new(target_platform);
+    let channels_ref = &channels;
     let rebuild_epoch = manifest.rebuild_epoch;
     let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
@@ -1387,6 +1496,7 @@ fn pixi(
                     scope.spawn(move || {
                         check_entry(
                             entry,
+                            channels_ref,
                             channel_url_ref,
                             routing_rules_ref,
                             target_platform,
@@ -1468,6 +1578,11 @@ fn pixi(
 
     let to_build = topo_sort_builds(to_build)?;
 
+    // Dep satisfaction deliberately only consults the default channel, same as
+    // before routing was introduced: routing decides where an artifact is
+    // *published*, not which channels a consumer solves against.
+    let default_channel = channels.get(&channel_url);
+
     let mut built_this_job: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for item in to_build {
         let entry = item.entry;
@@ -1516,18 +1631,20 @@ fn pixi(
         let mut visiting: Vec<String> = Vec::new();
         let local_ctx = LocalBuildCtx {
             local_deps_dir: &local_deps_dir,
-            channel_url: &channel_url,
+            channel: &default_channel,
             target_platform,
             workdir: &workdir,
             sibling_subdirs: &sib_subdirs,
         };
         for dep in &resolved {
             let output_channel = format!("file://{}", abs_output.display());
+            // The output channel gains packages as this loop publishes into it,
+            // so it has to be asked live rather than swept.
             if built_this_job.contains(&dep.name)
                 || version_published(&dep.name, &dep.version, &output_channel, target_platform)
             {
                 push_unique(&mut extra_channels, output_channel);
-            } else if version_published(&dep.name, &dep.version, &channel_url, target_platform) {
+            } else if default_channel.has_version(&dep.name, &dep.version) {
                 // Satisfied by the real channel; nothing to do.
             } else {
                 // Fallback: build the sibling from this same checkout (correct
@@ -1659,6 +1776,112 @@ mod tests {
             subdir: Some(PathBuf::from(subdir)),
             runner_size: RunnerSize::default(),
         }
+    }
+
+    fn index(json: &str) -> ChannelIndex {
+        ChannelIndex::from_records(&serde_json::from_str(json).unwrap())
+    }
+
+    const L64: BuildSubdir = BuildSubdir::Arch(Arch::Linux64);
+    const AARCH: BuildSubdir = BuildSubdir::Arch(Arch::LinuxAarch64);
+    const NOARCH: BuildSubdir = BuildSubdir::Noarch;
+
+    #[test]
+    fn channel_index_matches_exact_build_and_any_version() {
+        let idx = index(
+            r#"{"linux-64":[
+                 {"name":"autopilot","version":"3.5.4","build_number":0,"subdir":"linux-64"},
+                 {"name":"autopilot","version":"3.5.4","build_number":2,"subdir":"linux-64"}
+               ]}"#,
+        );
+        assert!(idx.has_build("autopilot", "3.5.4", 0, L64));
+        assert!(idx.has_build("autopilot", "3.5.4", 2, L64));
+        // A build we haven't published yet must still read as "needs building".
+        assert!(!idx.has_build("autopilot", "3.5.4", 1, L64));
+        assert!(!idx.has_build("autopilot", "3.5.5", 0, L64));
+        // Dep satisfaction ignores the build number.
+        assert!(idx.has_version("autopilot", "3.5.4"));
+        assert!(!idx.has_version("autopilot", "3.5.5"));
+        assert!(!idx.has_version("geofence", "3.5.4"));
+    }
+
+    #[test]
+    fn channel_index_sees_noarch_packages() {
+        // `pixi search -p linux-64` reports a noarch-only package under the
+        // `noarch` key and omits `linux-64` entirely. Ignoring that key made
+        // these look unpublished, so every noarch entry rebuilt and republished
+        // on every run.
+        let idx = index(
+            r#"{"noarch":[
+                 {"name":"gama_scenarios","version":"1.2.0","build_number":3,"subdir":"noarch"}
+               ]}"#,
+        );
+        assert!(idx.has_build("gama_scenarios", "1.2.0", 3, NOARCH));
+        assert!(idx.has_version("gama_scenarios", "1.2.0"));
+    }
+
+    #[test]
+    fn channel_index_does_not_match_a_build_from_another_subdir() {
+        // `vessel_offsets` 1.4.0 really does hold build 1 on linux-64 and build
+        // 2 on noarch — a package that moved to noarch mid-version. Matching on
+        // name+version+build alone would skip the noarch build 1 we still owe
+        // (it only exists on linux-64) and skip the linux-64 build 2 as well.
+        let idx = index(
+            r#"{"linux-64":[
+                 {"name":"vessel_offsets","version":"1.4.0","build_number":1,"subdir":"linux-64"}],
+                "noarch":[
+                 {"name":"vessel_offsets","version":"1.4.0","build_number":2,"subdir":"noarch"}]}"#,
+        );
+        assert!(idx.has_build("vessel_offsets", "1.4.0", 1, L64));
+        assert!(idx.has_build("vessel_offsets", "1.4.0", 2, NOARCH));
+        // The cross-subdir matches that must NOT skip a build.
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 2, L64));
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, NOARCH));
+        // A sibling arch never satisfies another arch either.
+        assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, AARCH));
+        // Dep satisfaction is still subdir-agnostic.
+        assert!(idx.has_version("vessel_offsets", "1.4.0"));
+    }
+
+    #[test]
+    fn build_subdir_follows_the_manifest_not_the_job_arch() {
+        let noarch = UpstreamPixiToml::parse(
+            "[package]\nname=\"p\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
+        )
+        .unwrap();
+        let arch = UpstreamPixiToml::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
+        let l64 = TargetPlatform::from_str("linux-64").unwrap();
+        let a64 = TargetPlatform::from_str("linux-aarch64").unwrap();
+
+        // A noarch package publishes to `noarch` whichever job builds it.
+        assert_eq!(BuildSubdir::of(&noarch, l64), BuildSubdir::Noarch);
+        assert_eq!(BuildSubdir::of(&noarch, a64), BuildSubdir::Noarch);
+        // Everything else publishes to the job's own arch.
+        assert_eq!(
+            BuildSubdir::of(&arch, l64),
+            BuildSubdir::Arch(Arch::Linux64)
+        );
+        assert_eq!(
+            BuildSubdir::of(&arch, a64),
+            BuildSubdir::Arch(Arch::LinuxAarch64)
+        );
+        // Display must match the subdir keys `pixi search --json` returns.
+        assert_eq!(BuildSubdir::Noarch.to_string(), "noarch");
+        assert_eq!(
+            BuildSubdir::Arch(Arch::LinuxAarch64).to_string(),
+            "linux-aarch64"
+        );
+    }
+
+    #[test]
+    fn channel_index_empty_channel_publishes_nothing() {
+        // Sweep failure / empty channel must fail open into "needs building",
+        // matching what the per-package searches did on error.
+        let idx = ChannelIndex::from_records(&BTreeMap::new());
+        assert!(!idx.has_build("autopilot", "3.5.4", 0, L64));
+        assert!(!idx.has_build("autopilot", "3.5.4", 0, NOARCH));
+        assert!(!idx.has_version("autopilot", "3.5.4"));
     }
 
     #[test]
