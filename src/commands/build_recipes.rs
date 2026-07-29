@@ -224,6 +224,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// Selects which subset of recipes to build and whether to pin a DeepStream version.
 /// Maps to the valid combinations of `--ds-recipe`, `--ds-version`, and `--only` flags.
@@ -1158,14 +1159,18 @@ impl fmt::Display for BuildSubdir {
 /// hold: measured against the GR channel, 40 concurrent exact searches take
 /// 14.3s while one sweep of all 283 packages takes 0.45s warm / ~6s cold.
 ///
-/// Only sound for a channel that cannot change while the snapshot is held.
-/// That holds for the upstream channel during a build job — builds publish into
-/// a local `file://` output channel, never back into it. The mutable local
-/// channels keep using [`version_published`].
+/// Only sound for a channel that cannot change while the snapshot is held. That
+/// holds for the upstream and product channels during a build job — builds
+/// publish into a local `file://` output channel and are drained to the real
+/// ones later. The mutable local channels keep using [`version_published`].
+///
+/// One of these per channel, built on demand by [`ChannelIndexCache`], since
+/// routing sends different packages to different channels.
 ///
 /// Do not point this at a public channel: a `'*'` glob makes the gateway pull
 /// the channel's full name index and then fetch records per match, which on
-/// e.g. robostack (34k names) takes minutes.
+/// e.g. robostack (34k names) takes minutes. The GR channels are all small —
+/// `general` is 283 packages, the product channels 1-2 each.
 struct ChannelIndex {
     /// `(subdir, name, version)` -> build numbers published *in that subdir*.
     /// Kept per-subdir because the publish check must ask about the one subdir
@@ -1230,6 +1235,44 @@ impl ChannelIndex {
     }
 }
 
+/// Sweeps each channel at most once per job and hands the snapshot to every
+/// caller that asks for it.
+///
+/// The set of channels isn't known before the check fan-out: routing rules map
+/// a package to its product channels, and the package's version only arrives
+/// with the upstream manifest each thread fetches. So sweep on first ask and
+/// memoize rather than trying to enumerate up front.
+struct ChannelIndexCache {
+    target_platform: TargetPlatform,
+    // ponytail: one lock over the whole map, held across the sweep, so sweeps
+    // of *different* channels don't overlap. Deliberate — it also means a
+    // channel is never swept twice concurrently, and the totals are small
+    // (~23 channels for ros-recipes, product channels hold 1-2 packages and
+    // sweep in ~0.5s). Go per-channel locks if the channel count grows enough
+    // that serialised cold sweeps start to show.
+    swept: Mutex<HashMap<String, Arc<ChannelIndex>>>,
+}
+
+impl ChannelIndexCache {
+    fn new(target_platform: TargetPlatform) -> Self {
+        Self {
+            target_platform,
+            swept: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The snapshot for `channel_url`, sweeping it if this is the first ask.
+    fn get(&self, channel_url: &str) -> Arc<ChannelIndex> {
+        let mut swept = self.swept.lock().expect("channel index cache poisoned");
+        if let Some(index) = swept.get(channel_url) {
+            return Arc::clone(index);
+        }
+        let index = Arc::new(ChannelIndex::sweep(channel_url, self.target_platform));
+        swept.insert(channel_url.to_string(), Arc::clone(&index));
+        index
+    }
+}
+
 /// Whether *any* build of `name == version` exists in `channel_url` for
 /// `target_platform`, asked live.
 ///
@@ -1272,12 +1315,15 @@ enum CheckOutcome {
     SkipAlreadyPublished {
         name: String,
         version: String,
+        channels: Vec<String>,
     },
 }
 
 fn check_entry(
     entry: &PixiNativeEntry,
-    channel: &ChannelIndex,
+    channels: &ChannelIndexCache,
+    channel_url: &str,
+    routing_rules: &[crate::routing::RoutingRule],
     target_platform: TargetPlatform,
     rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
@@ -1304,15 +1350,29 @@ fn check_entry(
     let upstream_build = upstream.build_number();
     let effective_build = upstream_build + rebuild_epoch;
 
-    if channel.has_build(
+    // Routed packages (see routing.yaml) publish to product channels, never
+    // to the default channel — search where they actually land. Skip only
+    // when every routed channel has the build (a partially-drained
+    // multi-channel publish, e.g. dual-publish rules, should re-run).
+    let published_urls = crate::routing::published_channel_urls(
+        routing_rules,
+        channel_url,
         &upstream.package.name,
         &upstream.package.version,
-        effective_build,
-        BuildSubdir::of(&upstream, target_platform),
-    ) {
+    );
+    let subdir = BuildSubdir::of(&upstream, target_platform);
+    if published_urls.iter().all(|url| {
+        channels.get(url).has_build(
+            &upstream.package.name,
+            &upstream.package.version,
+            effective_build,
+            subdir,
+        )
+    }) {
         return Ok(CheckOutcome::SkipAlreadyPublished {
             name: upstream.package.name,
             version: upstream.package.version,
+            channels: published_urls,
         });
     }
 
@@ -1419,12 +1479,13 @@ fn pixi(
         return Ok(());
     }
 
-    // One sweep for the whole job, before the per-entry fan-out. The upstream
-    // channel doesn't change while we build (artifacts land in `abs_output` and
-    // are drained later), so every entry can share this snapshot instead of
-    // queueing behind the channel's repodata cache lock for its own search.
-    let channel = ChannelIndex::sweep(&channel_url, target_platform);
-    let channel_ref = &channel;
+    let channel_url_ref: &str = &channel_url;
+    let routing_rules = crate::routing::load_rules(repo.root())?;
+    let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
+    // Shared across the fan-out so each channel is swept once for the whole
+    // job instead of once per entry.
+    let channels = ChannelIndexCache::new(target_platform);
+    let channels_ref = &channels;
     let rebuild_epoch = manifest.rebuild_epoch;
     let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
@@ -1433,7 +1494,14 @@ fn pixi(
                 .copied()
                 .map(|entry| {
                     scope.spawn(move || {
-                        check_entry(entry, channel_ref, target_platform, rebuild_epoch)
+                        check_entry(
+                            entry,
+                            channels_ref,
+                            channel_url_ref,
+                            routing_rules_ref,
+                            target_platform,
+                            rebuild_epoch,
+                        )
                     })
                 })
                 .collect();
@@ -1484,8 +1552,15 @@ fn pixi(
                     target_platform.arch(),
                 );
             }
-            CheckOutcome::SkipAlreadyPublished { name, version } => {
-                tracing::info!("skipping {name} {version}: already in channel {channel_url}");
+            CheckOutcome::SkipAlreadyPublished {
+                name,
+                version,
+                channels,
+            } => {
+                tracing::info!(
+                    "skipping {name} {version}: already in channel(s) {}",
+                    channels.join(", "),
+                );
             }
         }
     }
@@ -1502,6 +1577,11 @@ fn pixi(
     );
 
     let to_build = topo_sort_builds(to_build)?;
+
+    // Dep satisfaction deliberately only consults the default channel, same as
+    // before routing was introduced: routing decides where an artifact is
+    // *published*, not which channels a consumer solves against.
+    let default_channel = channels.get(&channel_url);
 
     let mut built_this_job: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for item in to_build {
@@ -1551,7 +1631,7 @@ fn pixi(
         let mut visiting: Vec<String> = Vec::new();
         let local_ctx = LocalBuildCtx {
             local_deps_dir: &local_deps_dir,
-            channel: &channel,
+            channel: &default_channel,
             target_platform,
             workdir: &workdir,
             sibling_subdirs: &sib_subdirs,
@@ -1564,7 +1644,7 @@ fn pixi(
                 || version_published(&dep.name, &dep.version, &output_channel, target_platform)
             {
                 push_unique(&mut extra_channels, output_channel);
-            } else if channel.has_version(&dep.name, &dep.version) {
+            } else if default_channel.has_version(&dep.name, &dep.version) {
                 // Satisfied by the real channel; nothing to do.
             } else {
                 // Fallback: build the sibling from this same checkout (correct

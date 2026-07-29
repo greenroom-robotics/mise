@@ -3,4 +3,5 @@ pub mod commands;
 pub mod gh;
 pub mod process;
 pub mod repo;
+pub mod routing;
 pub mod types;
