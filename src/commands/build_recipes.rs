@@ -1211,12 +1211,14 @@ enum CheckOutcome {
     SkipAlreadyPublished {
         name: String,
         version: String,
+        channels: Vec<String>,
     },
 }
 
 fn check_entry(
     entry: &PixiNativeEntry,
     channel_url: &str,
+    routing_rules: &[crate::routing::RoutingRule],
     target_platform: TargetPlatform,
     rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
@@ -1243,16 +1245,29 @@ fn check_entry(
     let upstream_build = upstream.build_number();
     let effective_build = upstream_build + rebuild_epoch;
 
-    if package_published(
+    // Routed packages (see routing.yaml) publish to product channels, never
+    // to the default channel — search where they actually land. Skip only
+    // when every routed channel has the build (a partially-drained
+    // multi-channel publish, e.g. dual-publish rules, should re-run).
+    let published_urls = crate::routing::published_channel_urls(
+        routing_rules,
+        channel_url,
         &upstream.package.name,
         &upstream.package.version,
-        effective_build,
-        channel_url,
-        target_platform,
-    ) {
+    );
+    if published_urls.iter().all(|url| {
+        package_published(
+            &upstream.package.name,
+            &upstream.package.version,
+            effective_build,
+            url,
+            target_platform,
+        )
+    }) {
         return Ok(CheckOutcome::SkipAlreadyPublished {
             name: upstream.package.name,
             version: upstream.package.version,
+            channels: published_urls,
         });
     }
 
@@ -1360,6 +1375,8 @@ fn pixi(
     }
 
     let channel_url_ref: &str = &channel_url;
+    let routing_rules = crate::routing::load_rules(repo.root())?;
+    let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
     let rebuild_epoch = manifest.rebuild_epoch;
     let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
@@ -1368,7 +1385,13 @@ fn pixi(
                 .copied()
                 .map(|entry| {
                     scope.spawn(move || {
-                        check_entry(entry, channel_url_ref, target_platform, rebuild_epoch)
+                        check_entry(
+                            entry,
+                            channel_url_ref,
+                            routing_rules_ref,
+                            target_platform,
+                            rebuild_epoch,
+                        )
                     })
                 })
                 .collect();
@@ -1419,8 +1442,15 @@ fn pixi(
                     target_platform.arch(),
                 );
             }
-            CheckOutcome::SkipAlreadyPublished { name, version } => {
-                tracing::info!("skipping {name} {version}: already in channel {channel_url}");
+            CheckOutcome::SkipAlreadyPublished {
+                name,
+                version,
+                channels,
+            } => {
+                tracing::info!(
+                    "skipping {name} {version}: already in channel(s) {}",
+                    channels.join(", "),
+                );
             }
         }
     }
