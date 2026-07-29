@@ -1,3 +1,10 @@
+## [8.4.0](https://github.com/greenroom-robotics/mise/compare/mise@8.3.0...mise@8.4.0) (2026-07-29)
+
+
+### Features
+
+* **ci-test:** lfs exclude opt-out, job timeout, outside-change matrix ([#71](https://github.com/greenroom-robotics/mise/issues/71)) ([d08876a](https://github.com/greenroom-robotics/mise/commit/d08876ab0df75a9f2a3f3eb2e574adc13a20d0ba))
+
 ## [8.3.0](https://github.com/greenroom-robotics/mise/compare/mise@8.2.0...mise@8.3.0) (2026-07-28)
 
 
