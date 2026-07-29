@@ -1,3 +1,10 @@
+## [8.4.3](https://github.com/greenroom-robotics/mise/compare/mise@8.4.2...mise@8.4.3) (2026-07-29)
+
+
+### Performance Improvements
+
+* sweep the channel once instead of one pixi search per package ([#74](https://github.com/greenroom-robotics/mise/issues/74)) ([b1553ab](https://github.com/greenroom-robotics/mise/commit/b1553abfcd47f962775b53f2138024b00725315d))
+
 ## [8.4.2](https://github.com/greenroom-robotics/mise/compare/mise@8.4.1...mise@8.4.2) (2026-07-29)
 
 
