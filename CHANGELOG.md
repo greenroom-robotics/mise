@@ -1,3 +1,10 @@
+## [8.4.1](https://github.com/greenroom-robotics/mise/compare/mise@8.4.0...mise@8.4.1) (2026-07-29)
+
+
+### Bug Fixes
+
+* treat workspace-only manifests as vendored in release-target resolution ([#72](https://github.com/greenroom-robotics/mise/issues/72)) ([eb0c1f5](https://github.com/greenroom-robotics/mise/commit/eb0c1f51314a266932e36a12f7d408442da5fcd0))
+
 ## [8.4.0](https://github.com/greenroom-robotics/mise/compare/mise@8.3.0...mise@8.4.0) (2026-07-29)
 
 
