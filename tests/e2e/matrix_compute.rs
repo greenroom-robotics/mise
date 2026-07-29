@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 const FAKE_SHA: &str = "1111111111111111111111111111111111111111";
 
 /// Lay down the fixture ros-recipes-like tree `matrix compute` reads:
-/// root pixi.toml, the pixi-native manifest (alpha@4cpu, bravo@16cpu), one
-/// deepstream recipe and two deepstream versions. A single DS recipe is used
-/// deliberately: `recipes-csv` is joined straight from the `HashSet` in
-/// `DeepstreamCfg` (src/repo.rs), so with more than one recipe its order is
-/// nondeterministic. Extend the fixture to two recipes once src fixes the
-/// ordering.
+/// root pixi.toml, the pixi-native manifest (alpha@4cpu, bravo@16cpu), two
+/// deepstream recipes and two deepstream versions. The recipes are listed
+/// out of sorted order deliberately: `recipes-csv` joins the `BTreeSet` in
+/// `DeepstreamCfg` (src/repo.rs), so the output must come back sorted
+/// (`deepstream-thing,zeta-thing`) regardless of listing order in
+/// `.github/deepstream-recipes.yaml`.
 fn matrix_repo(e2e: &E2e) -> PathBuf {
     let root = e2e.path().join("repo");
     fs::create_dir_all(&root).unwrap();
@@ -35,7 +35,7 @@ fn matrix_repo(e2e: &E2e) -> PathBuf {
     write_file(
         &root,
         ".github/deepstream-recipes.yaml",
-        "recipes:\n  - deepstream-thing\n",
+        "recipes:\n  - zeta-thing\n  - deepstream-thing\n",
     );
     write_file(
         &root,

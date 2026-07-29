@@ -1,4 +1,4 @@
 matrix-json={"include":[{"artifact-name":"should-not-run","ds-image":"","ds-version":"","pipeline":"should-not-run","runner":"runs-on=TESTRUN/runner=1cpu-linux-x64","runner-size":"","target-platform":"linux-64"}]}
-recipes-csv=deepstream-thing
+recipes-csv=deepstream-thing,zeta-thing
 has-work=false
 pixi-only=

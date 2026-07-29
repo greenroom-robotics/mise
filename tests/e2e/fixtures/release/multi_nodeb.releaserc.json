@@ -28,7 +28,7 @@
       "@semantic-release/exec",
       {
         "prepareCmd": "mise ci verify-siblings --pixi-toml=<TMP>/packages/nodeb/pixi.toml --package-dir=<TMP>/packages && mise ci bump-pixi --version=${nextRelease.version} --pixi-toml=<TMP>/packages/nodeb/pixi.toml",
-        "publishCmd": "mise ci recipes-pr --version=${nextRelease.version} --recipes-repo=greenroom-robotics/ros-recipes --package-dir=<TMP>/packages --ros-distro=kilted --package=nodeb --sha=${nextRelease.gitHead}"
+        "publishCmd": "mise ci recipes-pr --version=${nextRelease.version} --recipes-repo=greenroom-robotics/ros-recipes --package-dir=<TMP>/packages --package=nodeb --sha=${nextRelease.gitHead}"
       }
     ],
     [

@@ -17,9 +17,12 @@ pub struct RecipesPr {
     /// Single package, used when semantic-release ran in multi-package mode.
     #[arg(long)]
     pub package: Option<String>,
-    /// ROS distro identifier.
-    #[arg(long, default_value = "kilted")]
-    pub ros_distro: String,
+    /// Accepted and ignored for compatibility: older callers (the recipes-pr
+    /// composite action) still pass `--ros-distro`, but nothing reads it.
+    /// `Option` rather than a defaulted `String` so passing it is
+    /// distinguishable from omitting it, and thus warnable.
+    #[arg(long, hide = true)]
+    pub ros_distro: Option<String>,
     /// Tagged commit SHA (matches ${nextRelease.gitHead}). Used as source.rev for vendored recipes.
     #[arg(long)]
     pub sha: String,
@@ -34,6 +37,10 @@ pub struct RecipesPr {
 impl RecipesPr {
     pub fn run(self) -> anyhow::Result<()> {
         use crate::commands::ci::{packages, pixi_meta, recipes_upsert};
+
+        if self.ros_distro.is_some() {
+            tracing::warn!("--ros-distro is accepted but ignored; remove it from the caller");
+        }
 
         // 1. Resolve which package(s) we're upserting. semantic-release always
         //    invokes us with a known version; in single-package mode --package
@@ -114,12 +121,13 @@ impl RecipesPr {
         let pr_open = existing_body.is_some();
         if pr_open {
             fetch_recipes_branch(&recipes_root, &branch)?;
-            run_in(
+            crate::process::run_in(
                 &recipes_root,
-                &["git", "checkout", "-b", &branch, "FETCH_HEAD"],
+                "git",
+                &["checkout", "-b", &branch, "FETCH_HEAD"],
             )?;
         } else {
-            run_in(&recipes_root, &["git", "checkout", "-b", &branch])?;
+            crate::process::run_in(&recipes_root, "git", &["checkout", "-b", &branch])?;
         }
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
@@ -174,10 +182,11 @@ impl RecipesPr {
         }
 
         // 6. Commit + push + open PR.
-        let mut add_args: Vec<String> = vec!["git".into(), "add".into()];
+        let mut add_args: Vec<String> = vec!["add".into()];
         add_args.extend(changed.iter().map(|p| p.to_string_lossy().into_owned()));
-        run_in(
+        crate::process::run_in(
             &recipes_root,
+            "git",
             &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
         let title = release_title(&src_short, &released, &tag);
@@ -212,10 +221,10 @@ impl RecipesPr {
                 if let Some(id) = &run_id {
                     commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
                 }
-                run_in(
+                crate::process::run_in(
                     &recipes_root,
+                    "git",
                     &[
-                        "git",
                         "-c",
                         &name_cfg,
                         "-c",
@@ -230,9 +239,10 @@ impl RecipesPr {
         // Plain --force, not --force-with-lease: the recipes repo is cloned
         // shallow on `main` only, so there's no remote-tracking ref for the
         // rolling branch and --force-with-lease would reject the push.
-        run_in(
+        crate::process::run_in(
             &recipes_root,
-            &["git", "push", "--force", "origin", &branch],
+            "git",
+            &["push", "--force", "origin", &branch],
         )?;
 
         // Link to the source-repo diff between what the recipe was pinned to
@@ -246,29 +256,29 @@ impl RecipesPr {
         if pr_open {
             // The rolling PR already exists from a previous release; refresh its
             // title and body so the version and diff link aren't stale.
-            let edit_args = pr_edit_args(&self.recipes_repo, &branch, &title, &body);
-            run_in(
+            let (prog, args) = pr_edit_args(&self.recipes_repo, &branch, &title, &body);
+            crate::process::run_in(
                 &recipes_root,
-                &edit_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                prog,
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
             )?;
             println!("PR already exists for {branch}; branch, title and body updated.");
         } else {
-            let create_args = pr_create_args(&self.recipes_repo, &branch, &title, &body);
-            run_in(
+            let (prog, args) = pr_create_args(&self.recipes_repo, &branch, &title, &body);
+            crate::process::run_in(
                 &recipes_root,
-                &create_args.iter().map(String::as_str).collect::<Vec<_>>(),
+                prog,
+                &args.iter().map(String::as_str).collect::<Vec<_>>(),
             )?;
         }
 
         // Enable GitHub native auto-merge so the PR lands once CI passes
         // (mirrors `mise bump`'s behavior).
-        let automerge_args = pr_automerge_args(&self.recipes_repo, &branch);
-        run_in(
+        let (prog, args) = pr_automerge_args(&self.recipes_repo, &branch);
+        crate::process::run_in(
             &recipes_root,
-            &automerge_args
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
+            prog,
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
 
         // Drop a link to the recipes PR into the Actions run summary so the
@@ -409,13 +419,21 @@ fn recipe_action(mode: &ReleaseTarget, has_recipe: bool, allow_missing: bool) ->
     }
 }
 
-fn pr_edit_args(repo: &str, branch: &str, title: &str, body: &str) -> Vec<String> {
-    [
-        "gh", "pr", "edit", "--repo", repo, branch, "--title", title, "--body", body,
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+/// The PR commands all shell out to the GitHub CLI; the `(program, args)`
+/// shape keeps the program out of the argv vector so no caller has to know
+/// element 0 is special.
+const GH: &str = "gh";
+
+fn pr_edit_args(repo: &str, branch: &str, title: &str, body: &str) -> (&'static str, Vec<String>) {
+    (
+        GH,
+        [
+            "pr", "edit", "--repo", repo, branch, "--title", title, "--body", body,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+    )
 }
 
 /// GitHub compare URL between two refs of the source repo.
@@ -499,23 +517,32 @@ fn pr_body(diff: Option<&str>, packages: &std::collections::BTreeMap<String, Str
     body
 }
 
-fn pr_create_args(repo: &str, branch: &str, title: &str, body: &str) -> Vec<String> {
-    [
-        "gh", "pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title,
-        "--body", body,
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+fn pr_create_args(
+    repo: &str,
+    branch: &str,
+    title: &str,
+    body: &str,
+) -> (&'static str, Vec<String>) {
+    (
+        GH,
+        [
+            "pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title,
+            "--body", body,
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+    )
 }
 
-fn pr_automerge_args(repo: &str, branch: &str) -> Vec<String> {
-    [
-        "gh", "pr", "merge", "--repo", repo, branch, "--auto", "--squash",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+fn pr_automerge_args(repo: &str, branch: &str) -> (&'static str, Vec<String>) {
+    (
+        GH,
+        ["pr", "merge", "--repo", repo, branch, "--auto", "--squash"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    )
 }
 
 /// Absolute path of the source repo's working-tree root, from wherever the
@@ -625,20 +652,6 @@ fn classify_noop(nothing_staged: bool, pr_open: bool) -> NoopOutcome {
     }
 }
 
-fn run_in(cwd: &std::path::Path, argv: &[&str]) -> anyhow::Result<()> {
-    let (cmd, rest) = argv
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("empty argv"))?;
-    let status = std::process::Command::new(cmd)
-        .args(rest)
-        .current_dir(cwd)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("{} {:?} failed in {}", cmd, rest, cwd.display());
-    }
-    Ok(())
-}
-
 /// URL of the PR for `branch`. `None` if gh fails or prints nothing — the
 /// caller treats the summary link as best-effort.
 fn pr_url(repo: &str, branch: &str) -> Option<String> {
@@ -686,352 +699,5 @@ fn pr_body_of(repo: &str, branch: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn release_target_vendored_when_no_manifest() {
-        let td = tempfile::TempDir::new().unwrap();
-        let pkgs = td.path().join("packages");
-        std::fs::create_dir_all(&pkgs).unwrap();
-        // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
-        assert_eq!(
-            release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
-            ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
-        );
-    }
-
-    #[test]
-    fn release_target_discovered_when_per_package_manifest_exists() {
-        let td = tempfile::TempDir::new().unwrap();
-        let pkgs = td.path().join("packages");
-        std::fs::create_dir_all(pkgs.join("object_tracker")).unwrap();
-        std::fs::write(
-            pkgs.join("object_tracker/pixi.toml"),
-            "[package]\nname = \"object_tracker\"\nversion = \"1.0.0\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            release_target(&pkgs, Some("object_tracker")).unwrap(),
-            ReleaseTarget::Discovered
-        );
-    }
-
-    #[test]
-    fn release_target_vendored_when_manifest_is_workspace_only() {
-        // deepstream_extensions ships a dev-env pixi.toml (no [package]) so it
-        // can be built with colcon in a DS container, but its conda artifact
-        // still comes from vendor_recipes/. The manifest's mere existence must
-        // not reclassify it as a discoverable package.
-        let td = tempfile::TempDir::new().unwrap();
-        let pkgs = td.path().join("packages");
-        std::fs::create_dir_all(pkgs.join("deepstream_extensions")).unwrap();
-        std::fs::write(
-            pkgs.join("deepstream_extensions/pixi.toml"),
-            "[workspace]\nname = \"deepstream_extensions\"\n[tasks]\nbuild = \"colcon build\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
-            ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
-        );
-    }
-
-    #[test]
-    fn release_target_discovered_for_root_package_repo() {
-        let td = tempfile::TempDir::new().unwrap();
-        let root = td.path();
-        std::fs::write(
-            root.join("pixi.toml"),
-            "[package]\nname = \"mise\"\nversion = \"1.0.0\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            release_target(root, Some("mise")).unwrap(),
-            ReleaseTarget::Discovered
-        );
-    }
-
-    #[test]
-    fn release_target_discovered_when_no_package_filter() {
-        let td = tempfile::TempDir::new().unwrap();
-        assert_eq!(
-            release_target(td.path(), None).unwrap(),
-            ReleaseTarget::Discovered
-        );
-    }
-
-    #[test]
-    fn recipe_action_applies_for_discovered() {
-        // Discovered packages always apply, regardless of has_recipe/allow.
-        assert_eq!(
-            recipe_action(&ReleaseTarget::Discovered, false, false),
-            RecipeAction::Apply
-        );
-    }
-
-    #[test]
-    fn recipe_action_applies_for_vendored_with_recipe() {
-        assert_eq!(
-            recipe_action(&ReleaseTarget::VendoredByName("x".into()), true, false),
-            RecipeAction::Apply
-        );
-    }
-
-    #[test]
-    fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
-        // No recipe + not allowed to miss (explicit target) -> loud error.
-        assert_eq!(
-            recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, false),
-            RecipeAction::Error
-        );
-    }
-
-    #[test]
-    fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
-        // No recipe + allowed to miss (sweep) -> skip quietly.
-        assert_eq!(
-            recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, true),
-            RecipeAction::Skip
-        );
-    }
-
-    // The recipes repo merges bump PRs via GitHub's native auto-merge, not a
-    // label — `--label automerge` only attaches a literal label and the PR
-    // never merges.
-    #[test]
-    fn create_args_do_not_use_automerge_label() {
-        let args = pr_create_args("greenroom-robotics/ros-recipes", "release/mise", "t", "b");
-        assert!(!args.iter().any(|a| a == "--label"));
-    }
-
-    #[test]
-    fn automerge_args_enable_native_auto_squash_merge() {
-        let args = pr_automerge_args("greenroom-robotics/ros-recipes", "release/mise");
-        assert!(args.contains(&"--auto".to_string()));
-        assert!(args.contains(&"--squash".to_string()));
-    }
-
-    fn pkgs(entries: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
-        entries
-            .iter()
-            .map(|(n, t)| (n.to_string(), t.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn release_title_shapes() {
-        assert_eq!(
-            release_title("mise", &pkgs(&[]), "v1.0.0"),
-            "release: mise v1.0.0"
-        );
-        // A root package sharing the repo name isn't a subpath.
-        assert_eq!(
-            release_title("mise", &pkgs(&[("mise", "v1.0.0")]), "v1.0.0"),
-            "release: mise v1.0.0"
-        );
-        assert_eq!(
-            release_title("toolbox", &pkgs(&[("gama", "v1.0.0")]), "v1.0.0"),
-            "release: toolbox/gama v1.0.0"
-        );
-        // Each package carries its own version — a rolling PR accumulates
-        // packages released independently.
-        assert_eq!(
-            release_title(
-                "toolbox",
-                &pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
-                "v1.0.0"
-            ),
-            "release: toolbox/{alpha v0.4.1, gama v1.0.0}"
-        );
-    }
-
-    // The body is the rolling PR's state: every append rewrites it from what
-    // the previous one wrote, so it must round-trip or siblings released
-    // earlier vanish — along with the versions they were released at.
-    #[test]
-    fn body_packages_round_trips() {
-        for names in [
-            pkgs(&[]),
-            pkgs(&[("gama", "v1.0.0")]),
-            pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
-        ] {
-            let body = pr_body(Some("https://example.com/compare/a...b"), &names);
-            assert_eq!(body_packages(&body), names, "{body}");
-        }
-    }
-
-    // Past the title limit the list collapses to a count — but the body still
-    // carries every package, so the next append doesn't lose them.
-    #[test]
-    fn long_package_list_collapses_in_title_only() {
-        let many = pkgs(&[
-            ("gama_bringup", "v1.2.3"),
-            ("gama_msgs", "v0.4.1"),
-            ("gama_navigation", "v2.0.0"),
-            ("topic_utils", "v1.26.0"),
-        ]);
-        let title = release_title("platform_toolbox", &many, "v1.2.3");
-        assert_eq!(title, "release: platform_toolbox (4 packages)");
-        assert!(title.chars().count() <= MAX_TITLE_CHARS);
-        assert_eq!(body_packages(&pr_body(None, &many)), many);
-    }
-
-    // The squash-merged commit subject stays readable no matter how many
-    // packages ride along.
-    #[test]
-    fn title_never_exceeds_subject_limit() {
-        let many: std::collections::BTreeMap<String, String> = (0..40)
-            .map(|i| (format!("some_ros_package_{i}"), "v1.2.3".to_string()))
-            .collect();
-        assert!(release_title("toolbox", &many, "v1.2.3").chars().count() <= MAX_TITLE_CHARS);
-    }
-
-    // The rolling-PR contract: the branch name must NOT embed the version, so
-    // every release of a source repo force-pushes onto the same branch and
-    // updates one PR. A per-version branch leaves superseded PRs open and lets
-    // an older release merge over a newer one.
-    #[test]
-    fn release_branch_is_version_independent() {
-        let a = release_branch("mise");
-        assert_eq!(a, "release/mise");
-        assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
-    }
-
-    // Shared per-repo branch: every package of a multi-package repo lands on ONE
-    // rolling PR so coupled releases build together in one pr-validate run.
-    #[test]
-    fn release_branch_is_per_repo_not_per_package() {
-        assert_eq!(
-            release_branch("platform_toolbox"),
-            "release/platform_toolbox"
-        );
-        assert_eq!(release_branch("mise"), "release/mise");
-    }
-
-    #[test]
-    fn edit_args_refresh_pr_title() {
-        let args = pr_edit_args(
-            "greenroom-robotics/ros-recipes",
-            "release/mise",
-            "release: mise v4.5.2",
-            "body",
-        );
-        assert!(args.contains(&"--title".to_string()));
-        assert!(args.contains(&"release: mise v4.5.2".to_string()));
-        // Body is refreshed on edit so the diff link doesn't go stale.
-        assert!(args.contains(&"--body".to_string()));
-    }
-
-    #[test]
-    fn diff_ref_prefers_immutable_rev_over_tag() {
-        use crate::commands::ci::recipes_upsert::OldRef;
-        let refs = vec![OldRef::Tag("1.2.3".into()), OldRef::Rev("deadbeef".into())];
-        // Rev wins even though the tag came first.
-        assert_eq!(diff_ref(&refs, "newsha"), Some("deadbeef"));
-        // Tag is used when that's all there is.
-        assert_eq!(
-            diff_ref(&[OldRef::Tag("1.2.3".into())], "newsha"),
-            Some("1.2.3")
-        );
-        // Same-rev re-pin and no prior pin both yield no link.
-        assert_eq!(diff_ref(&[OldRef::Rev("s".into())], "s"), None);
-        assert_eq!(diff_ref(&[], "s"), None);
-    }
-
-    #[test]
-    fn compare_url_strips_git_suffix() {
-        assert_eq!(
-            compare_url("https://github.com/gr/mise.git", "v1.0.0", "abc123"),
-            "https://github.com/gr/mise/compare/v1.0.0...abc123"
-        );
-    }
-
-    // Guards against re-running `git commit` when an earlier sibling run
-    // already staged the identical recipe content: `git commit` errors with
-    // "nothing to commit, working tree clean" in that case, so the caller
-    // must detect it beforehand via `nothing_staged` and skip the commit.
-    #[test]
-    fn nothing_staged_detects_no_pending_index_changes() {
-        let td = tempfile::TempDir::new().unwrap();
-        let repo = td.path();
-        run_in(repo, &["git", "init"]).unwrap();
-        run_in(
-            repo,
-            &[
-                "git",
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t.com",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "init",
-            ],
-        )
-        .unwrap();
-
-        // Nothing staged after a fresh checkout -> nothing staged.
-        assert!(nothing_staged(repo).unwrap());
-
-        // Writing and staging a file the same as an already-committed one
-        // (i.e. re-applying an identical recipe update) leaves nothing
-        // staged -> still nothing staged.
-        std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
-        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
-        run_in(
-            repo,
-            &[
-                "git",
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t.com",
-                "commit",
-                "-m",
-                "add recipe",
-            ],
-        )
-        .unwrap();
-        std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
-        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
-        assert!(nothing_staged(repo).unwrap());
-
-        // An untracked file left behind in the checkout (e.g. a build
-        // artifact) must not be mistaken for something to commit — unlike
-        // `git status --porcelain`, `git diff --cached` ignores it.
-        std::fs::write(repo.join("untracked.tmp"), "leftover\n").unwrap();
-        assert!(nothing_staged(repo).unwrap());
-        std::fs::remove_file(repo.join("untracked.tmp")).unwrap();
-
-        // A genuine content change leaves something staged -> not clean.
-        std::fs::write(repo.join("recipe.yaml"), "different content\n").unwrap();
-        run_in(repo, &["git", "add", "recipe.yaml"]).unwrap();
-        assert!(!nothing_staged(repo).unwrap());
-    }
-
-    // The three-way outcome that gates commit/push/PR: only "nothing staged
-    // AND no open PR" is safe to bail out on before push — an open rolling PR
-    // means the branch carries prior pending content that must still reach
-    // the remote even when this package's upsert was itself a no-op.
-    #[test]
-    fn classify_noop_outcomes() {
-        assert_eq!(classify_noop(false, false), NoopOutcome::Commit);
-        assert_eq!(classify_noop(false, true), NoopOutcome::Commit);
-        assert_eq!(classify_noop(true, true), NoopOutcome::SkipCommitKeepPush);
-        assert_eq!(classify_noop(true, false), NoopOutcome::EarlyReturn);
-    }
-
-    #[test]
-    fn pr_body_includes_diff_link_when_present() {
-        let body = pr_body(
-            Some("https://github.com/gr/mise/compare/v1.0.0...v1.1.0"),
-            &pkgs(&[]),
-        );
-        assert!(body.contains("Diff since last release"));
-        assert!(body.contains("compare/v1.0.0...v1.1.0"));
-        // No link line when there's no prior tag.
-        assert!(!pr_body(None, &pkgs(&[])).contains("Diff since last release"));
-    }
-}
+#[path = "recipes_pr_tests.rs"]
+mod tests;
