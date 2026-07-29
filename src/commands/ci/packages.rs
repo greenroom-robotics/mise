@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// for colcon and the ROS dev tools. It has no version to release and nothing
 /// for `pixi build` to build, so discovery skips it. Genuine TOML syntax errors
 /// still propagate: only a *valid* manifest with no `[package]` is skippable.
-fn declares_package(pixi_toml: &Path) -> Result<bool> {
+pub(crate) fn declares_package(pixi_toml: &Path) -> Result<bool> {
     let text = std::fs::read_to_string(pixi_toml)
         .with_context(|| format!("reading {}", pixi_toml.display()))?;
     let doc: toml::Value =
