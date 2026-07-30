@@ -117,8 +117,9 @@ pub fn toplevel(cwd: &Path) -> anyhow::Result<PathBuf> {
     ))
 }
 
-/// Configured URL of `remote` in the repo containing `cwd`, verbatim (it may
-/// be an ssh URL — see [`https_remote_url`]).
+/// Configured URL of `remote` in the repo containing `cwd`, verbatim: it may
+/// be either form git records, so callers parse it with
+/// [`crate::types::GithubRepoUrl::parse_remote`].
 pub fn remote_url(cwd: &Path, remote: &str) -> anyhow::Result<String> {
     Ok(process::capture_in(
         cwd,
@@ -127,30 +128,6 @@ pub fn remote_url(cwd: &Path, remote: &str) -> anyhow::Result<String> {
     )?
     .trim()
     .to_string())
-}
-
-/// Normalize a remote URL to the `https://github.com/<owner>/<repo>.git` form
-/// the recipe manifests record. Accepts the scp-style ssh form git writes for
-/// `git@github.com:owner/repo.git` checkouts, and adds the `.git` suffix when
-/// the URL lacks it, so the same repo always renders as one string.
-pub fn https_remote_url(raw: &str) -> String {
-    if let Some(rest) = raw.strip_prefix("git@github.com:") {
-        return format!("https://github.com/{}.git", rest.trim_end_matches(".git"));
-    }
-    if raw.ends_with(".git") {
-        raw.to_string()
-    } else {
-        format!("{raw}.git")
-    }
-}
-
-/// Repo short name (the `<repo>` of `<owner>/<repo>`) from an https remote URL.
-pub fn short_name(https_url: &str) -> anyhow::Result<String> {
-    let last = https_url
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("could not parse repo name from {https_url}"))?;
-    Ok(last.trim_end_matches(".git").to_string())
 }
 
 /// Paths touched in `range` (`<a>..<b>` or `<a>...<b>`), relative to the

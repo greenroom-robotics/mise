@@ -1,6 +1,14 @@
 use super::*;
+use crate::types::{Arch, ChannelUrl, PackageName, Version};
+
+fn pn(s: &str) -> PackageName {
+    PackageName::new(s).unwrap()
+}
+
+fn ver(s: &str) -> Version {
+    Version::parse(s).unwrap()
+}
 use std::fs;
-use std::str::FromStr;
 use tempfile::TempDir;
 
 fn make_pkg(root: &Path, name: &str) {
@@ -47,8 +55,8 @@ fn reads_name_and_version() {
     assert_eq!(
         pkg.identity().unwrap(),
         PackageIdentity {
-            name: "foo".into(),
-            version: "1.2.3".into()
+            name: pn("foo"),
+            version: ver("1.2.3")
         }
     );
     assert_eq!(pkg.dir, tmp.path());
@@ -75,7 +83,7 @@ fn workspace_only_manifest_parses_as_its_own_variant() {
 fn package_xml_mode_manifest_has_a_version_but_no_name() {
     let m = PackageManifest::parse("[package]\nversion = \"1.0.0\"\n").unwrap();
     assert_eq!(m.name(), None);
-    assert_eq!(m.version(), Some("1.0.0"));
+    assert_eq!(m.version(), Some(&ver("1.0.0")));
     let err = m.identity().unwrap_err();
     assert!(err.to_string().contains("package.name"));
 }
@@ -83,8 +91,8 @@ fn package_xml_mode_manifest_has_a_version_but_no_name() {
 #[test]
 fn parses_minimal() {
     let p = PackageManifest::parse("[package]\nname = \"foo\"\nversion = \"1.2.3\"\n").unwrap();
-    assert_eq!(p.name(), Some("foo"));
-    assert_eq!(p.version(), Some("1.2.3"));
+    assert_eq!(p.name(), Some(&pn("foo")));
+    assert_eq!(p.version(), Some(&ver("1.2.3")));
     assert_eq!(p.build_number(), 0);
 }
 
@@ -101,7 +109,7 @@ fn parses_build_number() {
 #[test]
 fn supports_platform_when_workspace_lists_none() {
     let p = PackageManifest::parse("[package]\nname = \"foo\"\nversion = \"1.0\"\n").unwrap();
-    assert!(p.supports_platform(TargetPlatform::default()));
+    assert!(p.supports_platform(Arch::Linux64));
 }
 
 #[test]
@@ -111,15 +119,14 @@ fn respects_workspace_platforms_list() {
          [workspace]\nplatforms = [\"linux-64\"]\n",
     )
     .unwrap();
-    assert!(p.supports_platform(TargetPlatform::default()));
-    let aarch = TargetPlatform::from_str("linux-aarch64").unwrap();
-    assert!(!p.supports_platform(aarch));
+    assert!(p.supports_platform(Arch::Linux64));
+    assert!(!p.supports_platform(Arch::LinuxAarch64));
 }
 
 #[test]
 fn ignores_unknown_keys() {
     PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
+        "[package]\nname = \"foo\"\nversion = \"1.0.0\"\n\
          [tasks]\nci = \"test\"\n[dependencies]\nsomething = \"1\"\n",
     )
     .unwrap();
@@ -164,7 +171,7 @@ fn noarch_false_for_compiled_and_missing_build() {
 fn deps_are_collected_from_every_dep_table() {
     let m = PackageManifest::parse(
         "[dependencies]\nnode = { path = \".\" }\n\
-         [package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+         [package]\nname=\"node\"\nversion=\"1\"\n\
          [package.run-dependencies]\nlib = { path = \"../lib\" }\n\
          [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n\
          [package.build-dependencies]\ngen = \"==1.2.3\"\n",
@@ -174,11 +181,35 @@ fn deps_are_collected_from_every_dep_table() {
     assert_eq!(names, vec!["node", "lib", "msgs", "gen"]);
 }
 
+// conda-forge really ships these, and conda virtual packages surface with a
+// double underscore. A manifest that copies a solved environment's deps in
+// must parse, not vanish from discovery behind a warning.
+#[test]
+fn dep_keys_may_be_underscore_prefixed_conda_packages() {
+    let m = PackageManifest::parse(
+        "[package]\nname=\"node\"\nversion=\"1\"\n\
+         [package.run-dependencies]\n\
+         _libgcc_mutex = \"*\"\n_openmp_mutex = \"*\"\n\
+         _sysroot_linux-64_curr_repodata_hack = \"*\"\n__cuda = \">=12\"\n",
+    )
+    .unwrap();
+    let names: Vec<&str> = m.deps().iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "__cuda",
+            "_libgcc_mutex",
+            "_openmp_mutex",
+            "_sysroot_linux-64_curr_repodata_hack",
+        ]
+    );
+}
+
 #[test]
 fn path_dep_rel_paths_excludes_self_idiom() {
     let t = PackageManifest::parse(
         "[dependencies]\nnode = { path = \".\" }\n\
-         [package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+         [package]\nname=\"node\"\nversion=\"1\"\n\
          [package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n\
          [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n",
     )
@@ -190,8 +221,11 @@ fn path_dep_rel_paths_excludes_self_idiom() {
 
 #[test]
 fn exact_pin_version_parses_only_concrete_triples() {
-    assert_eq!(exact_pin_version("==2.5.0"), Some("2.5.0"));
-    assert_eq!(exact_pin_version("==2.5.0-alpha.1"), Some("2.5.0-alpha.1"));
+    assert_eq!(exact_pin_version("==2.5.0"), Some(ver("2.5.0")));
+    assert_eq!(
+        exact_pin_version("==2.5.0-alpha.1"),
+        Some(ver("2.5.0-alpha.1"))
+    );
     assert_eq!(exact_pin_version(">=2.5.0"), None);
     assert_eq!(exact_pin_version("==2.5.*"), None);
     assert_eq!(exact_pin_version("*"), None);
@@ -201,14 +235,14 @@ fn exact_pin_version_parses_only_concrete_triples() {
 #[test]
 fn exact_pins_lists_pin_keys_across_tables() {
     let t = PackageManifest::parse(
-        "[package]\nname=\"node\"\nversion=\"1.0.0\"\n\
+        "[package]\nname=\"node\"\nversion=\"1\"\n\
          [package.run-dependencies]\nlib = \"==2.5.0\"\nros-kilted-rclpy = \"*\"\n\
          [package.host-dependencies]\nmsgs = \"==1.2.3\"\n",
     )
     .unwrap();
-    let mut got: Vec<String> = t.exact_pins().into_iter().map(|(k, _)| k).collect();
+    let mut got: Vec<PackageName> = t.exact_pins().into_iter().map(|(k, _)| k).collect();
     got.sort();
-    assert_eq!(got, vec!["lib".to_string(), "msgs".to_string()]);
+    assert_eq!(got, vec![pn("lib"), pn("msgs")]);
 }
 
 // ---------------------------------------------------------------------------
@@ -232,8 +266,8 @@ fn discovery_parses_each_manifest_once_into_a_package() {
     make_pkg(tmp.path(), "alpha");
     let pkgs = discover(tmp.path(), None).unwrap();
     let alpha = &pkgs[0];
-    assert_eq!(alpha.identity().unwrap().name, "alpha");
-    assert_eq!(alpha.identity().unwrap().version, "1.0.0");
+    assert_eq!(alpha.identity().unwrap().name, pn("alpha"));
+    assert_eq!(alpha.identity().unwrap().version, ver("1.0.0"));
     assert_eq!(alpha.dir, tmp.path().join("alpha"));
     assert_eq!(alpha.manifest_path, tmp.path().join("alpha/pixi.toml"));
 }
@@ -243,7 +277,7 @@ fn discover_with_filter_returns_single_package() {
     let tmp = TempDir::new().unwrap();
     make_pkg(tmp.path(), "alpha");
     make_pkg(tmp.path(), "beta");
-    let result = manifest_paths(&discover(tmp.path(), Some("alpha")).unwrap());
+    let result = manifest_paths(&discover(tmp.path(), Some(&pn("alpha"))).unwrap());
     assert_eq!(result.len(), 1);
     assert!(result[0].ends_with("alpha/pixi.toml"));
 }
@@ -252,7 +286,7 @@ fn discover_with_filter_returns_single_package() {
 fn discover_filter_unknown_package_errors() {
     let tmp = TempDir::new().unwrap();
     make_pkg(tmp.path(), "alpha");
-    let err = discover(tmp.path(), Some("ghost")).unwrap_err();
+    let err = discover(tmp.path(), Some(&pn("ghost"))).unwrap_err();
     assert!(err.to_string().contains("ghost"));
 }
 
@@ -268,7 +302,7 @@ fn discover_returns_root_package_when_pixi_declares_package() {
     assert_eq!(result.len(), 1);
     assert!(result[0].manifest_path.ends_with("pixi.toml"));
     // Filter matching the root package name also returns it.
-    let filtered = discover(tmp.path(), Some("mise")).unwrap();
+    let filtered = discover(tmp.path(), Some(&pn("mise"))).unwrap();
     assert_eq!(filtered.len(), 1);
 }
 
@@ -299,7 +333,7 @@ fn discover_skips_workspace_only_manifest() {
 fn discover_filter_on_workspace_only_manifest_errors() {
     let tmp = TempDir::new().unwrap();
     make_workspace_only(tmp.path(), "devenv");
-    let err = discover(tmp.path(), Some("devenv")).unwrap_err();
+    let err = discover(tmp.path(), Some(&pn("devenv"))).unwrap_err();
     assert!(err.to_string().contains("no [package] section"));
 }
 
@@ -339,6 +373,43 @@ fn a_sibling_with_a_type_mismatched_field_does_not_hide_its_neighbours() {
     assert!(result[0].ends_with("alpha/pixi.toml"));
 }
 
+// A short conda version is legal in pixi.toml. It must not take the package
+// out of a release run, and writing the manifest back must not rewrite it.
+#[test]
+fn a_two_component_version_is_a_package_and_keeps_its_spelling() {
+    let tmp = TempDir::new().unwrap();
+    let pkg = tmp.path().join("shortver");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(
+        pkg.join("pixi.toml"),
+        "[package]\nname = \"shortver\"\nversion = \"1.0\"\n",
+    )
+    .unwrap();
+    let found = discover(tmp.path(), None).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].identity().unwrap().version.to_string(), "1.0");
+}
+
+// The opposite of the tolerant sweep: a version we genuinely cannot read
+// belongs to a package that exists, so skipping it would drop it from the run
+// without failing the run.
+#[test]
+fn a_sibling_whose_version_is_unreadable_fails_the_sweep_loudly() {
+    let tmp = TempDir::new().unwrap();
+    make_pkg(tmp.path(), "alpha");
+    let pkg = tmp.path().join("epoch");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(
+        pkg.join("pixi.toml"),
+        "[package]\nname = \"epoch\"\nversion = \"1!1.0.0\"\n",
+    )
+    .unwrap();
+    let err = discover(tmp.path(), None).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("cannot identify"), "got: {msg}");
+    assert!(msg.contains("epoch"), "got: {msg}");
+}
+
 #[test]
 fn discover_with_a_filter_still_reports_a_malformed_manifest() {
     // An explicit request is answered or refused — never silently empty.
@@ -346,7 +417,7 @@ fn discover_with_a_filter_still_reports_a_malformed_manifest() {
     let pkg = tmp.path().join("broken");
     fs::create_dir_all(&pkg).unwrap();
     fs::write(pkg.join("pixi.toml"), "[workspace\nname = ").unwrap();
-    let err = discover(tmp.path(), Some("broken")).unwrap_err();
+    let err = discover(tmp.path(), Some(&pn("broken"))).unwrap_err();
     assert!(format!("{err:#}").contains("parsing"));
 }
 
@@ -372,7 +443,7 @@ name = "foo"
 version = "1.0.0"
 description = "Test"
 "#;
-    let after = set_package_version(before, "1.2.3").unwrap();
+    let after = set_package_version(before, &ver("1.2.3")).unwrap();
     assert!(after.contains(r#"version = "1.2.3""#));
     assert!(!after.contains(r#"version = "1.0.0""#));
     assert!(after.contains(r#"description = "Test""#));
@@ -383,7 +454,7 @@ description = "Test"
 fn set_package_version_does_not_touch_workspace_version() {
     let before = "[workspace]\nname = \"foo\"\nversion = \"0.0.0\"\n\
                   [package]\nname = \"foo\"\nversion = \"1.0.0\"\n";
-    let after = set_package_version(before, "1.2.3").unwrap();
+    let after = set_package_version(before, &ver("1.2.3")).unwrap();
     let parsed: toml_edit::DocumentMut = after.parse().unwrap();
     assert_eq!(parsed["workspace"]["version"].as_str(), Some("0.0.0"));
     assert_eq!(parsed["package"]["version"].as_str(), Some("1.2.3"));
@@ -391,13 +462,13 @@ fn set_package_version_does_not_touch_workspace_version() {
 
 #[test]
 fn set_package_version_errors_when_no_package_table() {
-    let err = set_package_version("[workspace]\nname = \"foo\"\n", "1.2.3").unwrap_err();
+    let err = set_package_version("[workspace]\nname = \"foo\"\n", &ver("1.2.3")).unwrap_err();
     assert!(err.to_string().contains("[package]"));
 }
 
 #[test]
 fn set_package_version_errors_when_no_version_key() {
-    let err = set_package_version("[package]\nname = \"foo\"\n", "1.2.3").unwrap_err();
+    let err = set_package_version("[package]\nname = \"foo\"\n", &ver("1.2.3")).unwrap_err();
     assert!(err.to_string().contains("version"));
 }
 
@@ -409,7 +480,7 @@ name = "foo"
 version = "1.0.0"
 description = "Test"
 "#;
-    let after = set_package_version(before, "1.2.3").unwrap();
+    let after = set_package_version(before, &ver("1.2.3")).unwrap();
     assert!(after.contains("# Bump deliberately"));
     assert!(after.contains(r#"version = "1.2.3""#));
 }
@@ -427,7 +498,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.0"
 "#;
-    let after = set_package_version(before, "2.3.4").unwrap();
+    let after = set_package_version(before, &ver("2.3.4")).unwrap();
     let doc: toml_edit::DocumentMut = after.parse().unwrap();
     assert_eq!(doc["package"]["version"].as_str(), Some("2.3.4"));
     assert_eq!(doc["dependencies"]["anyhow"].as_str(), Some("1.0.0"));
@@ -443,7 +514,7 @@ fn write_tmp_pixi_toml(text: &str) -> (TempDir, PathBuf) {
 #[test]
 fn set_build_number_updates_existing_field() {
     let (_tmp, path) = write_tmp_pixi_toml(
-        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
+        "[package]\nname = \"foo\"\nversion = \"1.0.0\"\n\
          \n[package.build.config]\nbuild-number = 0\n",
     );
     set_build_number(&path, 5).unwrap();
@@ -453,7 +524,7 @@ fn set_build_number_updates_existing_field() {
 
 #[test]
 fn set_build_number_inserts_when_absent() {
-    let (_tmp, path) = write_tmp_pixi_toml("[package]\nname = \"foo\"\nversion = \"1.0\"\n");
+    let (_tmp, path) = write_tmp_pixi_toml("[package]\nname = \"foo\"\nversion = \"1.0.0\"\n");
     set_build_number(&path, 2).unwrap();
     let updated = fs::read_to_string(&path).unwrap();
     assert_eq!(PackageManifest::parse(&updated).unwrap().build_number(), 2);
@@ -462,7 +533,7 @@ fn set_build_number_inserts_when_absent() {
 #[test]
 fn set_build_number_is_idempotent() {
     let (_tmp, path) = write_tmp_pixi_toml(
-        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
+        "[package]\nname = \"foo\"\nversion = \"1.0.0\"\n\
          \n[package.build.config]\nbuild-number = 0\n",
     );
     set_build_number(&path, 4).unwrap();
@@ -504,7 +575,14 @@ fn prepend_channels_front_inserts() {
         "[workspace]\nname = \"x\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
          [package]\nname = \"x\"\nversion = \"1.0.0\"\n",
     );
-    prepend_channels(&path, &["file:///out".into(), "file:///local-deps".into()]).unwrap();
+    prepend_channels(
+        &path,
+        &[
+            ChannelUrl::parse("file:///out").unwrap(),
+            ChannelUrl::parse("file:///local-deps").unwrap(),
+        ],
+    )
+    .unwrap();
     let doc: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let ch: Vec<&str> = doc["workspace"]["channels"]
         .as_array()
@@ -550,8 +628,8 @@ fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
     );
     let resolved = resolve_path_deps(&consumer).unwrap();
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].name, "lib");
-    assert_eq!(resolved[0].version, "2.5.0");
+    assert_eq!(resolved[0].name, pn("lib"));
+    assert_eq!(resolved[0].version, ver("2.5.0"));
 
     let text = fs::read_to_string(&consumer).unwrap();
     assert!(text.contains("lib = \">=2.5.0,<3\""), "rewritten: {text}");
@@ -581,8 +659,8 @@ fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
     );
     let resolved = resolve_path_deps(&consumer).unwrap();
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].name, "ros-kilted-lib");
-    assert_eq!(resolved[0].version, "2.5.0");
+    assert_eq!(resolved[0].name, pn("ros-kilted-lib"));
+    assert_eq!(resolved[0].version, ver("2.5.0"));
 
     let text = fs::read_to_string(&consumer).unwrap();
     assert!(
@@ -629,18 +707,12 @@ fn resolved_dep_version_stays_the_bare_floor() {
         "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
     );
     let resolved = resolve_path_deps(&consumer).unwrap();
-    assert_eq!(resolved[0].version, "2.5.0");
+    assert_eq!(resolved[0].version, ver("2.5.0"));
 }
 
 #[test]
 fn range_pin_derives_major_cap() {
-    assert_eq!(range_pin("2.5.0").unwrap(), ">=2.5.0,<3");
-    assert_eq!(range_pin("1.24.0-alpha.2").unwrap(), ">=1.24.0-alpha.2,<2");
-    assert_eq!(range_pin("0.3.1").unwrap(), ">=0.3.1,<1");
-}
-
-#[test]
-fn range_pin_rejects_non_numeric_major() {
-    let err = range_pin("rolling").unwrap_err();
-    assert!(format!("{err:#}").contains("numeric major"), "got: {err:#}");
+    assert_eq!(ver("2.5.0").range_pin(), ">=2.5.0,<3");
+    assert_eq!(ver("1.24.0-alpha.2").range_pin(), ">=1.24.0-alpha.2,<2");
+    assert_eq!(ver("0.3.1").range_pin(), ">=0.3.1,<1");
 }

@@ -1,39 +1,67 @@
 use super::*;
+use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
-fn entry<'a>() -> Entry<'a> {
+fn pkg(s: &str) -> PackageName {
+    PackageName::new(s).unwrap()
+}
+
+fn ver(s: &str) -> Version {
+    Version::parse(s).unwrap()
+}
+
+fn sha(s: &str) -> Sha40 {
+    Sha40::new(s).unwrap()
+}
+
+fn url(s: &str) -> GithubRepoUrl {
+    GithubRepoUrl::parse_remote(s).unwrap()
+}
+
+fn entry<'a>(package: &'a PackageName, repo: &'a GithubRepoUrl, version: &'a Version) -> Entry<'a> {
     Entry {
-        package: "foo",
-        url: "https://example.invalid/foo.git",
+        package,
+        url: repo,
         tag: "1.2.3",
-        version: "1.2.3",
+        version,
     }
+}
+
+fn foo_entry() -> (PackageName, GithubRepoUrl, Version) {
+    (
+        pkg("foo"),
+        url("https://github.com/example/foo.git"),
+        ver("1.2.3"),
+    )
 }
 
 #[test]
 fn upsert_into_empty_yields_fresh_block() {
-    let out = upsert_text("", &entry()).unwrap();
+    let (p, u, v) = foo_entry();
+    let out = upsert_text("", &entry(&p, &u, &v)).unwrap();
     assert_eq!(
         out,
-        "foo:\n  url: https://example.invalid/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     );
 }
 
 #[test]
 fn upsert_appends_new_entry_with_blank_line_separator() {
+    let (p, u, v) = foo_entry();
     let existing = "bar:\n  url: https://example.invalid/bar.git\n  tag: 0.1.0\n  version: 0.1.0\n";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     assert!(out.starts_with(existing));
     assert!(out.contains("\n\nfoo:\n"));
     assert!(out.ends_with(
-        "foo:\n  url: https://example.invalid/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     ));
 }
 
 #[test]
 fn upsert_replaces_existing_block_in_place() {
+    let (p, u, v) = foo_entry();
     let existing = "\
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.0.0
   version: 1.0.0
 bar:
@@ -41,10 +69,10 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     // foo's block is replaced with the new tag/version
     assert!(out.contains(
-        "foo:\n  url: https://example.invalid/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     ));
     // bar's block is untouched
     assert!(out.contains(
@@ -59,10 +87,11 @@ bar:
 
 #[test]
 fn upsert_preserves_comments_outside_the_block() {
+    let (p, u, v) = foo_entry();
     let existing = "\
 # Top of file comment
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.0.0
   version: 1.0.0
 
@@ -72,19 +101,20 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     assert!(out.contains("# Top of file comment"));
     assert!(out.contains("# Notes about bar — important context"));
 }
 
 #[test]
 fn upsert_replaces_block_with_extra_optional_fields() {
+    let (p, u, v) = foo_entry();
     // Real-world entries sometimes carry additional_folder / branch /
     // manifest_file. On upsert we replace with the canonical four-field
     // shape — this is acceptable because callers know the canonical shape.
     let existing = "\
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.0.0
   version: 1.0.0
   additional_folder: packages/foo
@@ -94,11 +124,11 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     // foo replaced, with the optional fields gone:
     assert!(!out.contains("additional_folder"));
     assert!(out.contains(
-        "foo:\n  url: https://example.invalid/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     ));
     // bar still intact:
     assert!(out.contains("bar:\n  url: https://example.invalid/bar.git"));
@@ -106,13 +136,14 @@ bar:
 
 #[test]
 fn upsert_replaces_a_block_whose_body_continues_past_a_column_zero_comment() {
+    let (p, u, v) = foo_entry();
     // The reader (`field_of`) and the writer (`section_bounds`) must agree
     // that `# a note` is interior here: if the writer stopped at the comment
     // it would splice in a fresh block and strand the old `version:` beside
     // it, and the reader would keep reporting the stale value.
     let existing = "\
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.0.0
 # a note
   version: 1.0.0
@@ -125,12 +156,12 @@ bar:
         Some("1.0.0")
     );
 
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     assert_eq!(
         out,
         "\
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.2.3
   version: 1.2.3
 bar:
@@ -144,26 +175,28 @@ bar:
 
 #[test]
 fn upsert_keeps_a_comment_that_captions_the_next_block() {
+    let (p, u, v) = foo_entry();
     let existing = "\
 foo:
-  url: https://example.invalid/foo.git
+  url: https://github.com/example/foo.git
   tag: 1.0.0
 # vendored fork — do not bump
 bar:
   url: https://example.invalid/bar.git
 ";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     assert!(out.contains("# vendored fork — do not bump\nbar:\n"));
     assert!(out.contains("  tag: 1.2.3\n"));
 }
 
 #[test]
 fn upsert_reemits_crlf_line_endings() {
+    let (p, u, v) = foo_entry();
     let existing = "foo:\r\n  url: old\r\n  tag: 0.1.0\r\nbar:\r\n  url: keep\r\n";
-    let out = upsert_text(existing, &entry()).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
     assert_eq!(
         out,
-        "foo:\r\n  url: https://example.invalid/foo.git\r\n  tag: 1.2.3\r\n  \
+        "foo:\r\n  url: https://github.com/example/foo.git\r\n  tag: 1.2.3\r\n  \
          version: 1.2.3\r\nbar:\r\n  url: keep\r\n"
     );
 }
@@ -193,8 +226,8 @@ requirements:
 fn vendored_updates_version_rev_and_resets_build_number() {
     let out = mutate_vendored_recipe(
         VENDORED_FIXTURE,
-        "1.3.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
     )
     .unwrap();
     assert!(out.contains("  version: 1.3.0"));
@@ -211,8 +244,8 @@ fn vendored_updates_version_rev_and_resets_build_number() {
 fn vendored_noop_when_version_and_rev_match() {
     let out = mutate_vendored_recipe(
         VENDORED_FIXTURE,
-        "1.2.3",
-        "4bcfd421c52387b3f7872b23e60059e521176f35",
+        &ver("1.2.3"),
+        &sha("4bcfd421c52387b3f7872b23e60059e521176f35"),
     )
     .unwrap();
     assert_eq!(out, VENDORED_FIXTURE);
@@ -223,8 +256,8 @@ fn vendored_keeps_build_number_when_version_unchanged() {
     // Same version, new rev (re-tag): rev updates, number stays manual.
     let out = mutate_vendored_recipe(
         VENDORED_FIXTURE,
-        "1.2.3",
-        "2222222222222222222222222222222222222222",
+        &ver("1.2.3"),
+        &sha("2222222222222222222222222222222222222222"),
     )
     .unwrap();
     assert!(out.contains("  rev: 2222222222222222222222222222222222222222"));
@@ -234,8 +267,12 @@ fn vendored_keeps_build_number_when_version_unchanged() {
 #[test]
 fn vendored_errors_when_rev_missing() {
     let no_rev = VENDORED_FIXTURE.replace("  rev: 4bcfd421c52387b3f7872b23e60059e521176f35\n", "");
-    let err = mutate_vendored_recipe(&no_rev, "1.3.0", "1111111111111111111111111111111111111111")
-        .unwrap_err();
+    let err = mutate_vendored_recipe(
+        &no_rev,
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("source.rev"));
 }
 
@@ -244,8 +281,8 @@ fn vendored_errors_when_version_missing() {
     let no_version = VENDORED_FIXTURE.replace("  version: 1.2.3\n", "");
     let err = mutate_vendored_recipe(
         &no_version,
-        "1.3.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
     )
     .unwrap_err();
     assert!(err.to_string().contains("package.version"));
@@ -256,8 +293,8 @@ fn vendored_errors_when_build_number_missing() {
     let no_number = VENDORED_FIXTURE.replace("  number: 2\n", "");
     let err = mutate_vendored_recipe(
         &no_number,
-        "1.3.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
     )
     .unwrap_err();
     assert!(err.to_string().contains("build.number"));
@@ -268,8 +305,8 @@ fn vendored_errors_on_templated_version() {
     let templated = VENDORED_FIXTURE.replace("  version: 1.2.3\n", "  version: ${{ some_var }}\n");
     let err = mutate_vendored_recipe(
         &templated,
-        "1.3.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
     )
     .unwrap_err();
     assert!(err.to_string().contains("templated"));
@@ -279,8 +316,8 @@ fn vendored_errors_on_templated_version() {
 fn vendored_preserves_trailing_newline() {
     let out = mutate_vendored_recipe(
         VENDORED_FIXTURE,
-        "1.3.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
     )
     .unwrap();
     assert!(out.ends_with('\n'));
@@ -289,22 +326,34 @@ fn vendored_preserves_trailing_newline() {
 #[test]
 fn vendored_reemits_crlf_line_endings() {
     let crlf = VENDORED_FIXTURE.replace('\n', "\r\n");
-    let out =
-        mutate_vendored_recipe(&crlf, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    let out = mutate_vendored_recipe(
+        &crlf,
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
+    )
+    .unwrap();
     // Every LF is still part of a CRLF pair — no line was silently converted.
     assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
     assert!(out.contains("  version: 1.3.0\r\n"));
     // A no-op edit is byte-exact.
-    let noop =
-        mutate_vendored_recipe(&out, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    let noop = mutate_vendored_recipe(
+        &out,
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
+    )
+    .unwrap();
     assert_eq!(noop, out);
 }
 
 #[test]
 fn vendored_preserves_a_missing_trailing_newline() {
     let no_nl = VENDORED_FIXTURE.trim_end_matches('\n');
-    let out =
-        mutate_vendored_recipe(no_nl, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    let out = mutate_vendored_recipe(
+        no_nl,
+        &ver("1.3.0"),
+        &sha("1111111111111111111111111111111111111111"),
+    )
+    .unwrap();
     assert!(!out.ends_with('\n'));
 }
 
@@ -329,9 +378,9 @@ packages:
 fn pixi_replaces_ref_with_rev_on_existing_entry() {
     let out = mutate_pixi_entry(
         PIXI_FIXTURE,
-        "alpha",
-        "https://github.com/example/alpha.git",
-        "3333333333333333333333333333333333333333",
+        &pkg("alpha"),
+        &url("https://github.com/example/alpha.git"),
+        &sha("3333333333333333333333333333333333333333"),
         None,
     )
     .unwrap();
@@ -347,9 +396,9 @@ fn pixi_replaces_ref_with_rev_on_existing_entry() {
 fn pixi_updates_subdir_when_passed() {
     let out = mutate_pixi_entry(
         PIXI_FIXTURE,
-        "beta",
-        "https://github.com/example/beta.git",
-        "4444444444444444444444444444444444444444",
+        &pkg("beta"),
+        &url("https://github.com/example/beta.git"),
+        &sha("4444444444444444444444444444444444444444"),
         Some("packages/beta-new"),
     )
     .unwrap();
@@ -362,9 +411,9 @@ fn pixi_updates_subdir_when_passed() {
 fn pixi_appends_new_entry_when_absent() {
     let out = mutate_pixi_entry(
         PIXI_FIXTURE,
-        "delta",
-        "https://github.com/example/delta.git",
-        "5555555555555555555555555555555555555555",
+        &pkg("delta"),
+        &url("https://github.com/example/delta.git"),
+        &sha("5555555555555555555555555555555555555555"),
         Some("packages/delta"),
     )
     .unwrap();
@@ -379,9 +428,9 @@ fn pixi_appends_new_entry_when_absent() {
 fn pixi_appends_without_subdir() {
     let out = mutate_pixi_entry(
         PIXI_FIXTURE,
-        "epsilon",
-        "https://github.com/example/epsilon",
-        "6666666666666666666666666666666666666666",
+        &pkg("epsilon"),
+        &url("https://github.com/example/epsilon"),
+        &sha("6666666666666666666666666666666666666666"),
         None,
     )
     .unwrap();
@@ -394,9 +443,9 @@ fn pixi_reemits_crlf_line_endings() {
     let crlf = PIXI_FIXTURE.replace('\n', "\r\n");
     let out = mutate_pixi_entry(
         &crlf,
-        "alpha",
-        "https://github.com/example/alpha.git",
-        "3333333333333333333333333333333333333333",
+        &pkg("alpha"),
+        &url("https://github.com/example/alpha.git"),
+        &sha("3333333333333333333333333333333333333333"),
         None,
     )
     .unwrap();
@@ -411,9 +460,9 @@ fn pixi_preserves_a_missing_trailing_newline() {
     let no_nl = PIXI_FIXTURE.trim_end_matches('\n');
     let out = mutate_pixi_entry(
         no_nl,
-        "alpha",
-        "https://github.com/example/alpha.git",
-        "3333333333333333333333333333333333333333",
+        &pkg("alpha"),
+        &url("https://github.com/example/alpha.git"),
+        &sha("3333333333333333333333333333333333333333"),
         None,
     )
     .unwrap();
@@ -423,10 +472,17 @@ fn pixi_preserves_a_missing_trailing_newline() {
 #[test]
 fn pixi_preserves_tab_indented_sub_keys_it_does_not_own() {
     let text = "packages:\n  - name: alpha\n    url: old\n\tcomment_key: kept\n    rev: aaaa\n";
-    let out = mutate_pixi_entry(text, "alpha", "new-url", "bbbb", None).unwrap();
+    let out = mutate_pixi_entry(
+        text,
+        &pkg("alpha"),
+        &url("https://github.com/example/alpha.git"),
+        &sha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        None,
+    )
+    .unwrap();
     assert!(out.contains("\tcomment_key: kept\n"));
-    assert!(out.contains("    url: new-url\n"));
-    assert!(out.contains("    rev: bbbb\n"));
+    assert!(out.contains("    url: https://github.com/example/alpha.git\n"));
+    assert!(out.contains("    rev: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"));
 }
 
 #[test]
@@ -436,9 +492,9 @@ fn pixi_preserves_blank_line_between_items() {
     // alpha's block.
     let out = mutate_pixi_entry(
         PIXI_FIXTURE,
-        "alpha",
-        "https://github.com/example/alpha.git",
-        "7777777777777777777777777777777777777777",
+        &pkg("alpha"),
+        &url("https://github.com/example/alpha.git"),
+        &sha("7777777777777777777777777777777777777777"),
         None,
     )
     .unwrap();
@@ -489,11 +545,11 @@ fn apply_release_patches_vendored_recipe_when_present() {
     );
     let applied = apply_release(
         root,
-        "is-core",
-        "https://github.com/example/is-core.git",
+        &pkg("is-core"),
+        &url("https://github.com/example/is-core.git"),
         "v1.1.0",
-        "1.1.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.1.0"),
+        &sha("1111111111111111111111111111111111111111"),
         None,
     )
     .unwrap();
@@ -527,11 +583,11 @@ fn apply_release_updates_existing_pixi_native_entry() {
     );
     let applied = apply_release(
         root,
-        "mise",
-        "https://github.com/greenroom-robotics/mise",
+        &pkg("mise"),
+        &url("https://github.com/greenroom-robotics/mise"),
         "v4.4.0",
-        "4.4.0",
-        "2222222222222222222222222222222222222222",
+        &ver("4.4.0"),
+        &sha("2222222222222222222222222222222222222222"),
         None,
     )
     .unwrap();
@@ -566,11 +622,11 @@ fn apply_release_updates_existing_rosdistro_entry() {
     );
     let applied = apply_release(
         root,
-        "foo_pkg",
-        "https://github.com/example/foo_pkg.git",
+        &pkg("foo_pkg"),
+        &url("https://github.com/example/foo_pkg.git"),
         "v0.2.0",
-        "0.2.0",
-        "3333333333333333333333333333333333333333",
+        &ver("0.2.0"),
+        &sha("3333333333333333333333333333333333333333"),
         Some("packages/foo_pkg"),
     )
     .unwrap();
@@ -595,11 +651,11 @@ fn apply_release_defaults_brand_new_package_to_pixi_native() {
     );
     let applied = apply_release(
         root,
-        "newpkg",
-        "https://github.com/example/newpkg.git",
+        &pkg("newpkg"),
+        &url("https://github.com/example/newpkg.git"),
         "v1.0.0",
-        "1.0.0",
-        "4444444444444444444444444444444444444444",
+        &ver("1.0.0"),
+        &sha("4444444444444444444444444444444444444444"),
         Some("packages/newpkg"),
     )
     .unwrap();
@@ -623,11 +679,11 @@ fn apply_release_errors_when_pixi_native_absent() {
     let root = td.path();
     let err = apply_release(
         root,
-        "newpkg",
-        "https://github.com/example/newpkg.git",
+        &pkg("newpkg"),
+        &url("https://github.com/example/newpkg.git"),
         "v1.0.0",
-        "1.0.0",
-        "5555555555555555555555555555555555555555",
+        &ver("1.0.0"),
+        &sha("5555555555555555555555555555555555555555"),
         None,
     )
     .unwrap_err();
@@ -646,11 +702,11 @@ fn apply_release_resolves_hyphenated_vendored_dir() {
     // Called with the underscore ROS/tag name; must resolve the hyphen dir.
     let applied = apply_release(
         root,
-        "deepstream_extensions",
-        "https://github.com/example/pp.git",
+        &pkg("deepstream_extensions"),
+        &url("https://github.com/example/pp.git"),
         "v1.1.0",
-        "1.1.0",
-        "1111111111111111111111111111111111111111",
+        &ver("1.1.0"),
+        &sha("1111111111111111111111111111111111111111"),
         None,
     )
     .unwrap();

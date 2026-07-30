@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
+use crate::types::{PackageName, Version};
+
 /// semantic-release prepare-step guard: every sibling referenced via a
 /// `path =` dep must be byte-identical to its latest `<pkg>@<ver>` tag.
 /// Runs before bump-pixi; releases in the same run are already tagged by
@@ -56,28 +58,35 @@ impl VerifySiblings {
     }
 }
 
-/// Highest version among tags shaped `<pkg>@<version>`. Release versions beat
-/// prereleases at the same numeric triple (SemVer §11); prerelease identifiers
-/// compare lexically — adequate for our `alpha.N` scheme.
-pub fn latest_tagged_version(tags: &[String], pkg: &str) -> Option<String> {
+/// Highest version among tags shaped `<pkg>@<version>`, as written in the tag.
+///
+/// Ordering is [`Version`]'s, i.e. semver's: release versions beat prereleases
+/// at the same triple, and numeric prerelease identifiers compare numerically,
+/// so `alpha.10` beats `alpha.2`.
+///
+/// A tag whose suffix will not parse still counts as a release — it just
+/// cannot be ordered, so it ranks below every tag that will, and only wins if
+/// nothing else is there. The caller reads `None` as "never released" and
+/// refuses to proceed, so dropping such tags outright would turn an
+/// unrecognised tag into a blocked release rather than a mis-ordered one.
+pub fn latest_tagged_version<'a>(tags: &'a [String], pkg: &PackageName) -> Option<&'a str> {
     let prefix = format!("{pkg}@");
-    tags.iter()
-        .filter_map(|t| t.strip_prefix(&prefix))
-        .max_by(|a, b| version_key(a).cmp(&version_key(b)))
-        .map(str::to_string)
-}
-
-/// Sort key: (numeric triple, is-release, prerelease-suffix).
-fn version_key(v: &str) -> (Vec<u64>, bool, String) {
-    let (core, pre) = match v.split_once('-') {
-        Some((c, p)) => (c, Some(p)),
-        None => (v, None),
-    };
-    let nums = core
-        .split('.')
-        .map(|s| s.parse::<u64>().unwrap_or(0))
-        .collect();
-    (nums, pre.is_none(), pre.unwrap_or("").to_string())
+    let mut best: Option<(Version, &str)> = None;
+    let mut unordered: Option<&str> = None;
+    for text in tags.iter().filter_map(|t| t.strip_prefix(&prefix)) {
+        match Version::parse(text) {
+            Ok(v) => {
+                if best.as_ref().is_none_or(|(top, _)| v >= *top) {
+                    best = Some((v, text));
+                }
+            }
+            Err(e) => {
+                tracing::warn!("tag {pkg}@{text} is not orderable, ranking it last: {e:#}");
+                unordered.get_or_insert(text);
+            }
+        }
+    }
+    best.map(|(_, text)| text).or(unordered)
 }
 
 #[cfg(test)]

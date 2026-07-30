@@ -6,6 +6,7 @@ use crate::consts::{ORIGIN, PIXI_TOML, RECIPES_REPO};
 use crate::gh::{self, PrRef};
 use crate::git;
 use crate::process;
+use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
 /// Called by semantic-release's @semantic-release/exec plugin once a new version
 /// has been determined. Opens/updates a PR on the recipes repo with the new pin.
@@ -13,7 +14,7 @@ use crate::process;
 pub struct RecipesPr {
     /// Release version, no leading 'v' (matches `${nextRelease.version}`).
     #[arg(long)]
-    pub version: String,
+    pub version: Version,
     /// owner/repo of the recipes repository.
     #[arg(long, default_value = RECIPES_REPO)]
     pub recipes_repo: String,
@@ -22,7 +23,7 @@ pub struct RecipesPr {
     pub package_dir: PathBuf,
     /// Single package, used when semantic-release ran in multi-package mode.
     #[arg(long)]
-    pub package: Option<String>,
+    pub package: Option<PackageName>,
     /// Accepted and ignored for compatibility: older callers (the recipes-pr
     /// composite action) still pass `--ros-distro`, but nothing reads it.
     /// `Option` rather than a defaulted `String` so passing it is
@@ -31,7 +32,7 @@ pub struct RecipesPr {
     pub ros_distro: Option<String>,
     /// Tagged commit SHA (matches ${nextRelease.gitHead}). Used as source.rev for vendored recipes.
     #[arg(long)]
-    pub sha: String,
+    pub sha: Sha40,
     /// In a sweep (set by the action when no explicit package is requested), a
     /// name with no monorepo pixi.toml and no vendored recipe is a non-conda
     /// package (e.g. a launch/meta package) — skip it instead of erroring.
@@ -62,11 +63,11 @@ impl RecipesPr {
         // it is also where the source repo's remote is read from.
         let cwd = std::env::current_dir()?;
 
-        let mode = release_target(&self.package_dir, self.package.as_deref())?;
-        let targets: Vec<(String, Option<String>)> = match &mode {
+        let mode = release_target(&self.package_dir, self.package.as_ref())?;
+        let targets: Vec<(PackageName, Option<String>)> = match &mode {
             ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
             ReleaseTarget::Discovered => {
-                let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
+                let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
                 if pkgs.is_empty() {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
                 }
@@ -101,8 +102,8 @@ impl RecipesPr {
         };
 
         // 2. Identify the source repo from the current git remote.
-        let src_url = git::https_remote_url(&git::remote_url(&cwd, ORIGIN)?);
-        let src_short = git::short_name(&src_url)?;
+        let src_url = GithubRepoUrl::parse_remote(&git::remote_url(&cwd, ORIGIN)?)?;
+        let src_short = src_url.repo();
         let tag = format!("v{}", self.version);
         let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
@@ -123,7 +124,7 @@ impl RecipesPr {
         //    from main is correct. This also covers same-run coupled
         //    releases: the first package's push creates the PR, so the
         //    second package sees it open and appends.
-        let branch = release_branch(&src_short);
+        let branch = release_branch(src_short);
         let pr = PrRef::new(&self.recipes_repo, &branch)?;
         let existing_body = gh::pr::list_body(pr);
         let pr_open = existing_body.is_some();
@@ -145,7 +146,7 @@ impl RecipesPr {
         // PR's body so a rolling PR that already holds siblings keeps listing
         // them (at their own versions) instead of being rewritten around
         // whichever package released last.
-        let mut released: std::collections::BTreeMap<String, String> = existing_body
+        let mut released: std::collections::BTreeMap<PackageName, String> = existing_body
             .as_deref()
             .map(body_packages)
             .unwrap_or_default();
@@ -194,7 +195,7 @@ impl RecipesPr {
             .chain(changed.iter().map(|p| p.as_os_str()))
             .collect();
         process::run_in(&recipes_root, "git", &add_args)?;
-        let title = release_title(&src_short, &released, &tag);
+        let title = release_title(src_short, &released, &tag);
         // A package can be a no-op against the recipes checkout: an earlier CI
         // run (e.g. a sibling release workflow sweeping the same tag) may have
         // already staged the identical recipe content, in which case `git
@@ -250,7 +251,8 @@ impl RecipesPr {
         // before and this release, so a reviewer sees what changed.
         let old = diff_ref(&old_refs, &self.sha);
         let body = pr_body(
-            old.map(|o| compare_url(&src_url, o, &self.sha)).as_deref(),
+            old.map(|o| src_url.compare_url(o, self.sha.as_str()))
+                .as_deref(),
             &released,
         );
 
@@ -299,7 +301,7 @@ fn run_marker(run_id: &str) -> String {
 /// in the PR body, which is what the next append reads back.
 fn release_title(
     src_short: &str,
-    packages: &std::collections::BTreeMap<String, String>,
+    packages: &std::collections::BTreeMap<PackageName, String>,
     tag: &str,
 ) -> String {
     let pkgs: Vec<(&str, &str)> = packages
@@ -334,7 +336,7 @@ enum ReleaseTarget {
     /// A single package named by `--package` that has no monorepo pixi.toml;
     /// its conda artifact is built from a hand-authored vendored recipe
     /// (e.g. deepstream_extensions).
-    VendoredByName(String),
+    VendoredByName(PackageName),
 }
 
 /// True when a manifest exists at `path` AND declares a `[package]`.
@@ -358,14 +360,14 @@ fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
 /// is a vendored monorepo package; everything else discovers as before.
 fn release_target(
     package_dir: &std::path::Path,
-    package: Option<&str>,
+    package: Option<&PackageName>,
 ) -> anyhow::Result<ReleaseTarget> {
     match package {
         Some(pkg)
-            if !declares_package_at(&package_dir.join(pkg).join(PIXI_TOML))?
+            if !declares_package_at(&package_dir.join(pkg.as_str()).join(PIXI_TOML))?
                 && !declares_package_at(&package_dir.join(PIXI_TOML))? =>
         {
-            Ok(ReleaseTarget::VendoredByName(pkg.to_string()))
+            Ok(ReleaseTarget::VendoredByName(pkg.clone()))
         }
         _ => Ok(ReleaseTarget::Discovered),
     }
@@ -394,24 +396,19 @@ fn recipe_action(mode: &ReleaseTarget, has_recipe: bool, allow_missing: bool) ->
     }
 }
 
-/// GitHub compare URL between two refs of the source repo.
-fn compare_url(src_url: &str, old: &str, new: &str) -> String {
-    format!("{}/compare/{old}...{new}", src_url.trim_end_matches(".git"))
-}
-
 /// The old ref to diff against `sha`. There's one pin per package (normally a
 /// single package); prefer an immutable rev over a mutable tag. `None` for a
 /// brand-new package (no prior pin) or a same-rev re-pin (nothing to show).
 fn diff_ref<'a>(
     old_refs: &'a [crate::commands::ci::recipes_upsert::OldRef],
-    sha: &str,
+    sha: &Sha40,
 ) -> Option<&'a str> {
     old_refs
         .iter()
         .find(|r| r.is_rev())
         .or_else(|| old_refs.first())
         .map(|r| r.value())
-        .filter(|v| *v != sha)
+        .filter(|v| *v != sha.as_str())
 }
 
 /// Git author/committer identity for the recipes commit. Prefers the App bot
@@ -445,18 +442,22 @@ const GREMLINS: &[&str] = &[
 /// carries: the title is display-only and gets shortened once it has too many
 /// packages to fit, so it can't be read back. Inverse of the `- <pkg> <tag>`
 /// lines `pr_body` writes.
-fn body_packages(body: &str) -> std::collections::BTreeMap<String, String> {
-    // ponytail: any `- <word> <word>` bullet in the body reads as a package, so
-    // a hand-added bullet can put a bogus name in the title (nothing else). Use
-    // a fenced/HTML-comment block if bodies ever grow other bullet lists.
+fn body_packages(body: &str) -> std::collections::BTreeMap<PackageName, String> {
+    // ponytail: any `- <word> <word>` bullet whose first word parses as a
+    // package name reads as a package, so a hand-added bullet can still put a
+    // bogus name in the title (nothing else). Use a fenced/HTML-comment block
+    // if bodies ever grow other bullet lists.
     body.lines()
         .filter_map(|l| l.trim().strip_prefix("- "))
         .filter_map(|entry| entry.rsplit_once(' '))
-        .map(|(name, tag)| (name.to_string(), tag.to_string()))
+        .filter_map(|(name, tag)| Some((PackageName::new(name).ok()?, tag.to_string())))
         .collect()
 }
 
-fn pr_body(diff: Option<&str>, packages: &std::collections::BTreeMap<String, String>) -> String {
+fn pr_body(
+    diff: Option<&str>,
+    packages: &std::collections::BTreeMap<PackageName, String>,
+) -> String {
     // ponytail: nanos-modulo pick, no rng dep needed for flavor text
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -6,9 +6,17 @@ fn recipe(name: &str) -> RecipeName {
     RecipeName::from_str(name).unwrap()
 }
 
+fn pkg(name: &str) -> PackageName {
+    PackageName::new(name).unwrap()
+}
+
+fn ver(v: &str) -> Version {
+    Version::parse(v).unwrap()
+}
+
 fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
     PixiNativeEntry {
-        name: name.into(),
+        name: pkg(name),
         url: GithubRepoUrl::parse("https://github.com/gr/repo").unwrap(),
         rev: Sha40::new("a".repeat(40)).unwrap(),
         subdir: Some(PathBuf::from(subdir)),
@@ -32,15 +40,15 @@ fn channel_index_matches_exact_build_and_any_version() {
                  {"name":"autopilot","version":"3.5.4","build_number":2,"subdir":"linux-64"}
                ]}"#,
     );
-    assert!(idx.has_build("autopilot", "3.5.4", 0, L64));
-    assert!(idx.has_build("autopilot", "3.5.4", 2, L64));
+    assert!(idx.has_build(&pkg("autopilot"), &ver("3.5.4"), 0, L64));
+    assert!(idx.has_build(&pkg("autopilot"), &ver("3.5.4"), 2, L64));
     // A build we haven't published yet must still read as "needs building".
-    assert!(!idx.has_build("autopilot", "3.5.4", 1, L64));
-    assert!(!idx.has_build("autopilot", "3.5.5", 0, L64));
+    assert!(!idx.has_build(&pkg("autopilot"), &ver("3.5.4"), 1, L64));
+    assert!(!idx.has_build(&pkg("autopilot"), &ver("3.5.5"), 0, L64));
     // Dep satisfaction ignores the build number.
-    assert!(idx.has_version("autopilot", "3.5.4"));
-    assert!(!idx.has_version("autopilot", "3.5.5"));
-    assert!(!idx.has_version("geofence", "3.5.4"));
+    assert!(idx.has_version(&pkg("autopilot"), &ver("3.5.4")));
+    assert!(!idx.has_version(&pkg("autopilot"), &ver("3.5.5")));
+    assert!(!idx.has_version(&pkg("geofence"), &ver("3.5.4")));
 }
 
 #[test]
@@ -54,8 +62,8 @@ fn channel_index_sees_noarch_packages() {
                  {"name":"gama_scenarios","version":"1.2.0","build_number":3,"subdir":"noarch"}
                ]}"#,
     );
-    assert!(idx.has_build("gama_scenarios", "1.2.0", 3, NOARCH));
-    assert!(idx.has_version("gama_scenarios", "1.2.0"));
+    assert!(idx.has_build(&pkg("gama_scenarios"), &ver("1.2.0"), 3, NOARCH));
+    assert!(idx.has_version(&pkg("gama_scenarios"), &ver("1.2.0")));
 }
 
 #[test]
@@ -70,15 +78,15 @@ fn channel_index_does_not_match_a_build_from_another_subdir() {
                 "noarch":[
                  {"name":"vessel_offsets","version":"1.4.0","build_number":2,"subdir":"noarch"}]}"#,
     );
-    assert!(idx.has_build("vessel_offsets", "1.4.0", 1, L64));
-    assert!(idx.has_build("vessel_offsets", "1.4.0", 2, NOARCH));
+    assert!(idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, L64));
+    assert!(idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 2, NOARCH));
     // The cross-subdir matches that must NOT skip a build.
-    assert!(!idx.has_build("vessel_offsets", "1.4.0", 2, L64));
-    assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, NOARCH));
+    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 2, L64));
+    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, NOARCH));
     // A sibling arch never satisfies another arch either.
-    assert!(!idx.has_build("vessel_offsets", "1.4.0", 1, AARCH));
+    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, AARCH));
     // Dep satisfaction is still subdir-agnostic.
-    assert!(idx.has_version("vessel_offsets", "1.4.0"));
+    assert!(idx.has_version(&pkg("vessel_offsets"), &ver("1.4.0")));
 }
 
 #[test]
@@ -89,8 +97,8 @@ fn build_subdir_follows_the_manifest_not_the_job_arch() {
     )
     .unwrap();
     let arch = PackageManifest::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
-    let l64 = TargetPlatform::from_str("linux-64").unwrap();
-    let a64 = TargetPlatform::from_str("linux-aarch64").unwrap();
+    let l64 = Arch::Linux64;
+    let a64 = Arch::LinuxAarch64;
 
     // A noarch package publishes to `noarch` whichever job builds it.
     assert_eq!(BuildSubdir::of(&noarch, l64), BuildSubdir::Noarch);
@@ -117,9 +125,9 @@ fn channel_index_empty_channel_publishes_nothing() {
     // Sweep failure / empty channel must fail open into "needs building",
     // matching what the per-package searches did on error.
     let idx = ChannelIndex::from_records(&BTreeMap::new());
-    assert!(!idx.has_build("autopilot", "3.5.4", 0, L64));
-    assert!(!idx.has_build("autopilot", "3.5.4", 0, NOARCH));
-    assert!(!idx.has_version("autopilot", "3.5.4"));
+    assert!(!idx.has_build(&pkg("autopilot"), &ver("3.5.4"), 0, L64));
+    assert!(!idx.has_build(&pkg("autopilot"), &ver("3.5.4"), 0, NOARCH));
+    assert!(!idx.has_version(&pkg("autopilot"), &ver("3.5.4")));
 }
 
 #[test]
@@ -130,21 +138,21 @@ fn topo_sort_builds_orders_same_repo_path_deps() {
         BuildItem {
             entry: &node,
             effective_build: 0,
-            name: "node".into(),
+            name: pkg("node"),
             rel_path_deps: vec!["../lib".into()],
             pin_dep_names: vec![],
         },
         BuildItem {
             entry: &lib,
             effective_build: 0,
-            name: "lib".into(),
+            name: pkg("lib"),
             rel_path_deps: vec![],
             pin_dep_names: vec![],
         },
     ];
     let sorted = topo_sort_builds(items).unwrap();
-    assert_eq!(sorted[0].name, "lib");
-    assert_eq!(sorted[1].name, "node");
+    assert_eq!(sorted[0].name.as_str(), "lib");
+    assert_eq!(sorted[1].name.as_str(), "node");
 }
 
 #[test]
@@ -156,21 +164,21 @@ fn topo_sort_builds_orders_same_repo_pin_deps() {
         BuildItem {
             entry: &node,
             effective_build: 0,
-            name: "node".into(),
+            name: pkg("node"),
             rel_path_deps: vec![],
-            pin_dep_names: vec!["lib".into()],
+            pin_dep_names: vec![pkg("lib")],
         },
         BuildItem {
             entry: &lib,
             effective_build: 0,
-            name: "lib".into(),
+            name: pkg("lib"),
             rel_path_deps: vec![],
             pin_dep_names: vec![],
         },
     ];
     let sorted = topo_sort_builds(items).unwrap();
-    assert_eq!(sorted[0].name, "lib");
-    assert_eq!(sorted[1].name, "node");
+    assert_eq!(sorted[0].name.as_str(), "lib");
+    assert_eq!(sorted[1].name.as_str(), "node");
 }
 
 #[test]
@@ -181,14 +189,14 @@ fn topo_sort_builds_rejects_cycles() {
         BuildItem {
             entry: &a,
             effective_build: 0,
-            name: "a".into(),
+            name: pkg("a"),
             rel_path_deps: vec!["../b".into()],
             pin_dep_names: vec![],
         },
         BuildItem {
             entry: &b,
             effective_build: 0,
-            name: "b".into(),
+            name: pkg("b"),
             rel_path_deps: vec!["../a".into()],
             pin_dep_names: vec![],
         },
@@ -469,10 +477,10 @@ fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
 
 /// dep-name -> subdir map for `resolve_sibling_pins`, matching how the main
 /// loop derives it from same-repo `manifest.packages` entries.
-fn subdirs(pairs: &[(&str, &str)]) -> BTreeMap<String, PathBuf> {
+fn subdirs(pairs: &[(&str, &str)]) -> BTreeMap<PackageName, PathBuf> {
     pairs
         .iter()
-        .map(|(n, d)| (n.to_string(), PathBuf::from(d)))
+        .map(|(n, d)| (pkg(n), PathBuf::from(d)))
         .collect()
 }
 
@@ -489,8 +497,8 @@ fn resolve_sibling_pins_resolves_matching_pin() {
     let map = subdirs(&[("lib", "packages/lib")]);
     let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
     assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].name, "lib");
-    assert_eq!(resolved[0].version, "2.5.0");
+    assert_eq!(resolved[0].name.as_str(), "lib");
+    assert_eq!(resolved[0].version, ver("2.5.0"));
     assert_eq!(resolved[0].manifest, root.join("packages/lib/pixi.toml"));
 }
 
@@ -525,9 +533,9 @@ fn resolve_sibling_pins_ignores_non_sibling_pins() {
 
 #[test]
 fn check_local_build_guard_detects_cycle() {
-    let visiting = vec!["a".to_string(), "b".to_string()];
+    let visiting = vec![pkg("a"), pkg("b")];
     let local_built = BTreeSet::new();
-    let err = check_local_build_guard("a", &visiting, &local_built).unwrap_err();
+    let err = check_local_build_guard(&pkg("a"), &visiting, &local_built).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("cycle"), "message: {msg}");
     assert!(msg.contains("a -> b -> a"), "message: {msg}");
@@ -535,12 +543,12 @@ fn check_local_build_guard_detects_cycle() {
 
 #[test]
 fn check_local_build_guard_skips_already_built() {
-    let visiting: Vec<String> = Vec::new();
+    let visiting: Vec<PackageName> = Vec::new();
     let mut local_built = BTreeSet::new();
-    local_built.insert("lib".to_string());
-    assert!(!check_local_build_guard("lib", &visiting, &local_built).unwrap());
+    local_built.insert(pkg("lib"));
+    assert!(!check_local_build_guard(&pkg("lib"), &visiting, &local_built).unwrap());
     // Not yet built and not visiting: proceed.
-    assert!(check_local_build_guard("other", &visiting, &local_built).unwrap());
+    assert!(check_local_build_guard(&pkg("other"), &visiting, &local_built).unwrap());
 }
 
 #[test]
@@ -563,7 +571,7 @@ packages:
     let m = crate::types::PixiNativeManifest::from_yaml_str(yaml).unwrap();
 
     // --only alpha,beta with no size filter → alpha, beta
-    let sel = select_entries(&m.packages, None, &["alpha".into(), "beta".into()]);
+    let sel = select_entries(&m.packages, None, &[pkg("alpha"), pkg("beta")]);
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "beta"]);
 
@@ -571,7 +579,7 @@ packages:
     let sel = select_entries(
         &m.packages,
         Some(crate::types::RunnerSize::Cpu4),
-        &["alpha".into(), "beta".into()],
+        &[pkg("alpha"), pkg("beta")],
     );
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha"]);

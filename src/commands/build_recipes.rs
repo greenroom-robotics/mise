@@ -5,7 +5,10 @@ use clap::Subcommand;
 use crate::manifest::{
     PackageManifest, ResolvedDep, prepend_channels, resolve_path_deps, set_build_number,
 };
-use crate::types::{Arch, DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
+use crate::types::{
+    Arch, ChannelUrl, DeepstreamVersion, LocalChannel, PackageName, RecipeName, RemoteChannel,
+    RunnerSize, Version,
+};
 
 #[derive(Subcommand, Debug)]
 pub enum BuildRecipes {
@@ -14,18 +17,18 @@ pub enum BuildRecipes {
         #[arg(long)]
         repo_root: Option<PathBuf>,
         #[arg(long)]
-        channel_url: String,
+        channel_url: ChannelUrl,
         /// Extra channel whose already-published packages should be skipped
         /// (rattler `--skip-existing`) but which must NOT win dependency
         /// resolution — the `overrides` channel. Its packages carry
         /// `down_prioritize_variant`, so the solver avoids them for build deps
         /// while `--skip-existing` still finds them to skip a rebuild.
         #[arg(long)]
-        overrides_channel_url: Option<String>,
+        overrides_channel_url: Option<ChannelUrl>,
         #[arg(long, default_value = "./conda-bld")]
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
-        target_platform: TargetPlatform,
+        target_platform: Arch,
         #[arg(long = "ds-recipe")]
         ds_recipes: Vec<RecipeName>,
         #[arg(long)]
@@ -40,18 +43,21 @@ pub enum BuildRecipes {
     Pixi {
         #[arg(long)]
         repo_root: Option<PathBuf>,
+        /// The channel the publish check is answered from. Remote by
+        /// construction: it is swept once and cached for the whole job, which
+        /// is only sound for a channel this job cannot itself mutate.
         #[arg(long)]
-        channel_url: String,
+        channel_url: RemoteChannel,
         #[arg(long, default_value = "./conda-bld")]
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
-        target_platform: TargetPlatform,
+        target_platform: Arch,
         /// Optional filter: only build entries with this runner-size.
         #[arg(long)]
         runner_size: Option<RunnerSize>,
         /// Build only the listed package(s) by name. Empty = build all.
         #[arg(long = "only")]
-        only: Vec<String>,
+        only: Vec<PackageName>,
     },
     /// Run a vinca build inside a DeepStream container. Does container-side prep
     /// (git auth, cache cleanup, `pixi install`) and delegates to `build vinca`
@@ -60,11 +66,11 @@ pub enum BuildRecipes {
         #[arg(long)]
         repo_root: Option<PathBuf>,
         #[arg(long)]
-        channel_url: String,
+        channel_url: ChannelUrl,
         #[arg(long, default_value = "./conda-bld")]
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
-        target_platform: TargetPlatform,
+        target_platform: Arch,
         #[arg(long = "ds-recipe", required = true)]
         ds_recipes: Vec<RecipeName>,
         #[arg(long)]
@@ -137,10 +143,10 @@ use crate::repo::Repo;
 #[allow(clippy::too_many_arguments)]
 fn vinca(
     repo_root: Option<PathBuf>,
-    channel_url: String,
-    overrides_channel_url: Option<String>,
+    channel_url: ChannelUrl,
+    overrides_channel_url: Option<ChannelUrl>,
     output_dir: PathBuf,
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     ds_recipes: Vec<RecipeName>,
     ds_version: Option<DeepstreamVersion>,
     only: Vec<RecipeName>,
@@ -159,7 +165,7 @@ fn vinca(
     };
     fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
 
-    let arch_str = target_platform.arch().to_string();
+    let arch_str = target_platform.to_string();
 
     // 1. Generate `./recipes/` from vinca.yaml.
     process::run_in(
@@ -198,6 +204,8 @@ fn vinca(
     for a in &variant_args {
         args.push(a);
     }
+    let channel_url = channel_url.to_string();
+    let overrides_channel_url = overrides_channel_url.map(|c| c.to_string());
     args.extend_from_slice(&["-c", &channel_url]);
     // The overrides channel lets --skip-existing find already-published
     // override packages (so they aren't rebuilt every run). It sits below the
@@ -424,7 +432,7 @@ fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFil
 fn resolve_sibling_pins(
     manifest_path: &Path,
     workdir: &Path,
-    sibling_subdirs: &BTreeMap<String, PathBuf>,
+    sibling_subdirs: &BTreeMap<PackageName, PathBuf>,
 ) -> anyhow::Result<Vec<ResolvedDep>> {
     let text = fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
@@ -452,7 +460,7 @@ fn resolve_sibling_pins(
                     sib_manifest.display()
                 )
             })?
-            .to_string();
+            .clone();
         if sib_version == pin {
             out.push(ResolvedDep {
                 name,
@@ -472,11 +480,12 @@ fn resolve_sibling_pins(
 /// dep-name -> repo-relative subdir for `entry`'s same-repo siblings (excluding
 /// `entry` itself). The entry `name` is the channel artifact name, i.e. the dep
 /// key a consumer's pin uses.
-fn sibling_subdirs(entry: &PixiNativeEntry, all: &[PixiNativeEntry]) -> BTreeMap<String, PathBuf> {
+fn sibling_subdirs(
+    entry: &PixiNativeEntry,
+    all: &[PixiNativeEntry],
+) -> BTreeMap<PackageName, PathBuf> {
     all.iter()
-        .filter(|e| {
-            e.url.owner == entry.url.owner && e.url.repo == entry.url.repo && e.name != entry.name
-        })
+        .filter(|e| e.url == entry.url && e.name != entry.name)
         .map(|e| {
             (
                 e.name.clone(),
@@ -486,10 +495,10 @@ fn sibling_subdirs(entry: &PixiNativeEntry, all: &[PixiNativeEntry]) -> BTreeMap
         .collect()
 }
 
-/// Push `s` onto `v` unless it's already present.
-fn push_unique(v: &mut Vec<String>, s: String) {
-    if !v.iter().any(|x| x == &s) {
-        v.push(s);
+/// Push `c` onto `v` unless it's already present.
+fn push_unique(v: &mut Vec<ChannelUrl>, c: ChannelUrl) {
+    if !v.contains(&c) {
+        v.push(c);
     }
 }
 
@@ -498,14 +507,18 @@ fn push_unique(v: &mut Vec<String>, s: String) {
 /// `Ok(true)` means proceed, `Err` means a cycle was detected among the
 /// sibling path deps being built as local fallbacks.
 fn check_local_build_guard(
-    name: &str,
-    visiting: &[String],
-    local_built: &BTreeSet<String>,
+    name: &PackageName,
+    visiting: &[PackageName],
+    local_built: &BTreeSet<PackageName>,
 ) -> anyhow::Result<bool> {
-    if visiting.iter().any(|v| v == name) {
+    if visiting.contains(name) {
         anyhow::bail!(
             "path-dep cycle among local fallback builds: {} -> {}",
-            visiting.join(" -> "),
+            visiting
+                .iter()
+                .map(PackageName::as_str)
+                .collect::<Vec<_>>()
+                .join(" -> "),
             name
         );
     }
@@ -521,11 +534,11 @@ struct LocalBuildCtx<'a> {
     local_deps_dir: &'a Path,
     /// Snapshot of the upstream channel, swept once for the whole job.
     channel: &'a ChannelIndex,
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     /// Repo checkout root, for resolving same-repo sibling pins.
     workdir: &'a Path,
     /// dep-name -> repo-relative subdir for same-repo siblings.
-    sibling_subdirs: &'a BTreeMap<String, PathBuf>,
+    sibling_subdirs: &'a BTreeMap<PackageName, PathBuf>,
 }
 
 /// Build a path-dep sibling from the consumer's checkout into a local-only
@@ -539,8 +552,8 @@ struct LocalBuildCtx<'a> {
 fn build_local_dep(
     dep: &ResolvedDep,
     ctx: &LocalBuildCtx<'_>,
-    local_built: &mut BTreeSet<String>,
-    visiting: &mut Vec<String>,
+    local_built: &mut BTreeSet<PackageName>,
+    visiting: &mut Vec<PackageName>,
 ) -> anyhow::Result<()> {
     if !check_local_build_guard(&dep.name, visiting, local_built)? {
         return Ok(());
@@ -559,14 +572,12 @@ fn build_local_dep(
         }
     }
     visiting.pop();
+    let target_channel = LocalChannel::new(ctx.local_deps_dir);
     if built_any_nested {
-        prepend_channels(
-            &dep.manifest,
-            &[format!("file://{}", ctx.local_deps_dir.display())],
-        )?;
+        prepend_channels(&dep.manifest, &[target_channel.clone().into()])?;
     }
-    let target_channel = format!("file://{}", ctx.local_deps_dir.display());
-    let arch = ctx.target_platform.arch().to_string();
+    let target_channel = target_channel.to_string();
+    let arch = ctx.target_platform.to_string();
     process::run("pixi", &publish_argv(&dep.manifest, &target_channel, &arch))?;
     local_built.insert(dep.name.clone());
     Ok(())
@@ -578,12 +589,12 @@ fn build_local_dep(
 pub(crate) struct BuildItem<'a> {
     pub entry: &'a PixiNativeEntry,
     pub effective_build: u64,
-    pub name: String,
+    pub name: PackageName,
     pub rel_path_deps: Vec<String>,
     /// Dep keys of committed `==` pins (channel artifact names). A same-repo
     /// sibling matching one must build first (opt-out coupling still needs
     /// same-bucket ordering).
-    pub pin_dep_names: Vec<String>,
+    pub pin_dep_names: Vec<PackageName>,
 }
 
 /// Order build items so same-repo dependency targets build before consumers.
@@ -592,20 +603,15 @@ pub(crate) struct BuildItem<'a> {
 fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
     use crate::commands::ci::siblings::normalize;
 
-    let key = |e: &PixiNativeEntry| {
-        (
-            format!("{}/{}", e.url.owner, e.url.repo),
-            normalize(e.subdir.as_deref().unwrap_or(Path::new("."))),
-        )
-    };
-    let repo_of = |e: &PixiNativeEntry| format!("{}/{}", e.url.owner, e.url.repo);
+    let key = |e: &PixiNativeEntry| (e.url.slug(), normalize(e.subdir_or_root()));
+    let repo_of = |e: &PixiNativeEntry| e.url.slug();
     let index: BTreeMap<_, usize> = items
         .iter()
         .enumerate()
         .map(|(i, it)| (key(it.entry), i))
         .collect();
     // (repo, entry.name) -> index, for pin edges keyed on the artifact name.
-    let name_index: BTreeMap<(String, String), usize> = items
+    let name_index: BTreeMap<(String, PackageName), usize> = items
         .iter()
         .enumerate()
         .map(|(i, it)| ((repo_of(it.entry), it.entry.name.clone()), i))
@@ -676,8 +682,8 @@ fn entry_manifest_rel_path(entry: &PixiNativeEntry) -> String {
 /// Fetch an entry's `pixi.toml` at its pinned rev without cloning.
 fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
     gh::fetch_raw_file(
-        &entry.url.owner,
-        &entry.url.repo,
+        entry.url.owner(),
+        entry.url.repo(),
         entry.rev.as_str(),
         &entry_manifest_rel_path(entry),
     )
@@ -686,11 +692,7 @@ fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
 
 /// Materialize one commit of an entry's repo in `dest`.
 fn fetch_at_rev(url: &GithubRepoUrl, rev: &Sha40, dest: &Path) -> anyhow::Result<()> {
-    git::fetch_rev(
-        dest,
-        &format!("https://github.com/{}/{}", url.owner, url.repo),
-        rev,
-    )
+    git::fetch_rev(dest, &url.https_url(), rev)
 }
 
 /// `pixi publish` argv. Built from `OsStr` so a non-UTF-8 manifest path is
@@ -761,9 +763,9 @@ fn channel_unreachable(stderr: &str) -> bool {
 fn search_channel(
     spec: &str,
     channel_url: &str,
-    target_platform: TargetPlatform,
+    target_platform: Arch,
 ) -> anyhow::Result<Option<BTreeMap<String, Vec<SearchRecord>>>> {
-    let arch = target_platform.arch().to_string();
+    let arch = target_platform.to_string();
 
     let stdout = match process::capture_probe(
         "pixi",
@@ -813,11 +815,11 @@ enum BuildSubdir {
 
 impl BuildSubdir {
     /// Where `upstream` publishes to when built for `target_platform`.
-    fn of(upstream: &PackageManifest, target_platform: TargetPlatform) -> Self {
+    fn of(upstream: &PackageManifest, target_platform: Arch) -> Self {
         if upstream.is_noarch() {
             Self::Noarch
         } else {
-            Self::Arch(target_platform.arch())
+            Self::Arch(target_platform)
         }
     }
 }
@@ -849,6 +851,14 @@ impl fmt::Display for BuildSubdir {
 /// One of these per channel, built on demand by [`ChannelIndexCache`], since
 /// routing sends different packages to different channels.
 ///
+/// Records are keyed on the raw strings the channel reported. Neither the
+/// package name nor the version is parsed into [`PackageName`] / [`Version`]:
+/// a channel holds artifacts this repo does not publish, whose conda versions
+/// (epochs, `1.2`, `post`/`dev` segments) are a wider grammar than semver, and
+/// one unparseable record must not fail the sweep. The *queries* are typed
+/// instead — a lookup can only be made with a parsed name and version, which
+/// is where the invariant is actually needed.
+///
 /// Do not point this at a public channel: a `'*'` glob makes the gateway pull
 /// the channel's full name index and then fetch records per match, which on
 /// e.g. robostack (34k names) takes minutes. The GR channels are all small —
@@ -865,17 +875,17 @@ struct ChannelIndex {
 }
 
 impl ChannelIndex {
-    /// Sweep `channel_url` for `target_platform`. An *empty* channel yields an
+    /// Sweep `channel` for `target_platform`. An *empty* channel yields an
     /// empty index — "nothing is published yet". An *unreachable* one is an
     /// error: an index that wrongly looks empty makes every package look
     /// unpublished.
-    fn sweep(channel_url: &str, target_platform: TargetPlatform) -> anyhow::Result<Self> {
+    fn sweep(channel: &RemoteChannel, target_platform: Arch) -> anyhow::Result<Self> {
+        let channel_url = channel.to_string();
         let index = Self::from_records(
-            &search_channel("*", channel_url, target_platform)?.unwrap_or_default(),
+            &search_channel("*", &channel_url, target_platform)?.unwrap_or_default(),
         );
         tracing::info!(
-            "swept {channel_url} for {}: {} name/version pairs across {} subdir slots",
-            target_platform.arch(),
+            "swept {channel_url} for {target_platform}: {} name/version pairs across {} subdir slots",
             index.versions.len(),
             index.builds.len(),
         );
@@ -903,7 +913,13 @@ impl ChannelIndex {
     /// Whether `name == version` is published in `subdir` with exactly
     /// `build_number` — i.e. whether the artifact this job would produce is
     /// already there. Records under any other subdir are ignored on purpose.
-    fn has_build(&self, name: &str, version: &str, build_number: u64, subdir: BuildSubdir) -> bool {
+    fn has_build(
+        &self,
+        name: &PackageName,
+        version: &Version,
+        build_number: u64,
+        subdir: BuildSubdir,
+    ) -> bool {
         self.builds
             .get(&(subdir.to_string(), name.to_string(), version.to_string()))
             .is_some_and(|b| b.contains(&build_number))
@@ -912,7 +928,7 @@ impl ChannelIndex {
     /// Whether *any* build of `name == version` is published, in any subdir.
     /// For dep satisfaction we only care that some build of the pinned version
     /// is available to solve against.
-    fn has_version(&self, name: &str, version: &str) -> bool {
+    fn has_version(&self, name: &PackageName, version: &Version) -> bool {
         self.versions
             .contains(&(name.to_string(), version.to_string()))
     }
@@ -926,88 +942,95 @@ impl ChannelIndex {
 /// with the upstream manifest each thread fetches. So sweep on first ask and
 /// memoize rather than trying to enumerate up front.
 struct ChannelIndexCache {
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     // ponytail: one lock over the whole map, held across the sweep, so sweeps
     // of *different* channels don't overlap. Deliberate — it also means a
     // channel is never swept twice concurrently, and the totals are small
     // (~23 channels for ros-recipes, product channels hold 1-2 packages and
     // sweep in ~0.5s). Go per-channel locks if the channel count grows enough
     // that serialised cold sweeps start to show.
-    swept: Mutex<HashMap<String, Arc<ChannelIndex>>>,
+    swept: Mutex<HashMap<RemoteChannel, Arc<ChannelIndex>>>,
 }
 
 impl ChannelIndexCache {
-    fn new(target_platform: TargetPlatform) -> Self {
+    fn new(target_platform: Arch) -> Self {
         Self {
             target_platform,
             swept: Mutex::new(HashMap::new()),
         }
     }
 
-    /// The snapshot for `channel_url`, sweeping it if this is the first ask.
-    fn get(&self, channel_url: &str) -> anyhow::Result<Arc<ChannelIndex>> {
+    /// The snapshot for `channel`, sweeping it if this is the first ask.
+    ///
+    /// Only a [`RemoteChannel`] can be asked: a snapshot is only sound for a
+    /// channel the job cannot mutate while holding it. Local channels gain
+    /// packages as this job publishes into them and go through
+    /// [`version_published`] instead.
+    fn get(&self, channel: &RemoteChannel) -> anyhow::Result<Arc<ChannelIndex>> {
         let mut swept = self.swept.lock().expect("channel index cache poisoned");
-        if let Some(index) = swept.get(channel_url) {
+        if let Some(index) = swept.get(channel) {
             return Ok(Arc::clone(index));
         }
-        let index = Arc::new(ChannelIndex::sweep(channel_url, self.target_platform)?);
-        swept.insert(channel_url.to_string(), Arc::clone(&index));
+        let index = Arc::new(ChannelIndex::sweep(channel, self.target_platform)?);
+        swept.insert(channel.clone(), Arc::clone(&index));
         Ok(index)
     }
 }
 
-/// Whether *any* build of `name == version` exists in `channel_url` for
+/// Whether *any* build of `name == version` exists in `channel` for
 /// `target_platform`, asked live.
 ///
-/// For the local `file://` channels only: those gain packages as the job
-/// publishes into them, so a snapshot would go stale mid-loop. Their repodata
-/// is small and uncontended, so the per-package search is cheap here. Use
-/// [`ChannelIndex`] for the upstream channel instead.
+/// Takes a [`LocalChannel`] because that is the only kind that has to be asked
+/// live: those gain packages as the job publishes into them, so a snapshot
+/// would go stale mid-loop. Their repodata is small and uncontended, so the
+/// per-package search is cheap here. Remote channels go through
+/// [`ChannelIndexCache`] instead.
 fn version_published(
-    name: &str,
-    version: &str,
-    channel_url: &str,
-    target_platform: TargetPlatform,
+    name: &PackageName,
+    version: &Version,
+    channel: &LocalChannel,
+    target_platform: Arch,
 ) -> anyhow::Result<bool> {
     let spec = format!("{name}=={version}");
-    let Some(parsed) = search_channel(&spec, channel_url, target_platform)? else {
+    let Some(parsed) = search_channel(&spec, &channel.to_string(), target_platform)? else {
         return Ok(false);
     };
+    let version = version.to_string();
     Ok(parsed
         .values()
         .flatten()
-        .any(|r| r.name == name && r.version == version))
+        .any(|r| r.name == name.as_str() && r.version == version))
 }
 
 enum CheckOutcome {
     Build {
-        name: String,
-        version: String,
+        name: PackageName,
+        version: Version,
         upstream_build: u64,
         effective_build: u64,
         upstream: Box<PackageManifest>,
     },
     SkipPlatformUnsupported {
-        name: String,
-        version: String,
+        name: PackageName,
+        version: Version,
     },
     SkipNoarchNonCanonical {
-        name: String,
-        version: String,
+        name: PackageName,
+        version: Version,
     },
     SkipAlreadyPublished {
-        name: String,
-        version: String,
-        channels: Vec<String>,
+        name: PackageName,
+        version: Version,
+        channels: Vec<RemoteChannel>,
     },
 }
 
 fn check_entry(
     entry: &PixiNativeEntry,
     channels: &ChannelIndexCache,
-    channel_url: &str,
+    channel: &RemoteChannel,
     routing_rules: &[crate::routing::RoutingRule],
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
     let pixi_toml_text = fetch_pixi_toml(entry)?;
@@ -1026,7 +1049,7 @@ fn check_entry(
 
     // noarch artifacts are arch-independent; build them once on linux-64 and
     // skip every other platform rather than repeating the (identical) build.
-    if upstream.is_noarch() && target_platform.arch() != Arch::Linux64 {
+    if upstream.is_noarch() && target_platform != Arch::Linux64 {
         return Ok(CheckOutcome::SkipNoarchNonCanonical {
             name: id.name,
             version: id.version,
@@ -1040,21 +1063,21 @@ fn check_entry(
     // to the default channel — search where they actually land. Skip only
     // when every routed channel has the build (a partially-drained
     // multi-channel publish, e.g. dual-publish rules, should re-run).
-    let published_urls =
-        crate::routing::published_channel_urls(routing_rules, channel_url, &id.name, &id.version);
+    let published =
+        crate::routing::published_channels(routing_rules, channel, &id.name, &id.version);
     let subdir = BuildSubdir::of(&upstream, target_platform);
     let mut published_everywhere = true;
-    for url in &published_urls {
+    for c in &published {
         published_everywhere &=
             channels
-                .get(url)?
+                .get(c)?
                 .has_build(&id.name, &id.version, effective_build, subdir);
     }
     if published_everywhere {
         return Ok(CheckOutcome::SkipAlreadyPublished {
             name: id.name,
             version: id.version,
-            channels: published_urls,
+            channels: published,
         });
     }
 
@@ -1072,7 +1095,7 @@ fn check_entry(
 fn select_entries<'a>(
     packages: &'a [PixiNativeEntry],
     runner_size: Option<RunnerSize>,
-    only: &[String],
+    only: &[PackageName],
 ) -> Vec<&'a PixiNativeEntry> {
     packages
         .iter()
@@ -1083,11 +1106,11 @@ fn select_entries<'a>(
 
 fn pixi(
     repo_root: Option<PathBuf>,
-    channel_url: String,
+    channel: RemoteChannel,
     output_dir: PathBuf,
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     runner_size: Option<RunnerSize>,
-    only: &[String],
+    only: &[PackageName],
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let manifest = repo.pixi_native_manifest()?;
@@ -1117,7 +1140,7 @@ fn pixi(
         return Ok(());
     }
 
-    let channel_url_ref: &str = &channel_url;
+    let channel_ref = &channel;
     let routing_rules = crate::routing::load_rules(repo.root())?;
     let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
     // Shared across the fan-out so each channel is swept once for the whole
@@ -1135,7 +1158,7 @@ fn pixi(
                         check_entry(
                             entry,
                             channels_ref,
-                            channel_url_ref,
+                            channel_ref,
                             routing_rules_ref,
                             target_platform,
                             rebuild_epoch,
@@ -1182,14 +1205,13 @@ fn pixi(
             }
             CheckOutcome::SkipPlatformUnsupported { name, version } => {
                 tracing::info!(
-                    "skipping {name} {version}: pixi.toml does not list {}",
-                    target_platform.arch(),
+                    "skipping {name} {version}: pixi.toml does not list {target_platform}",
                 );
             }
             CheckOutcome::SkipNoarchNonCanonical { name, version } => {
                 tracing::info!(
-                    "skipping {name} {version}: noarch, built only on linux-64 (not {})",
-                    target_platform.arch(),
+                    "skipping {name} {version}: noarch, built only on linux-64 \
+                     (not {target_platform})",
                 );
             }
             CheckOutcome::SkipAlreadyPublished {
@@ -1199,7 +1221,11 @@ fn pixi(
             } => {
                 tracing::info!(
                     "skipping {name} {version}: already in channel(s) {}",
-                    channels.join(", "),
+                    channels
+                        .iter()
+                        .map(RemoteChannel::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 );
             }
         }
@@ -1221,9 +1247,10 @@ fn pixi(
     // Dep satisfaction deliberately only consults the default channel, same as
     // before routing was introduced: routing decides where an artifact is
     // *published*, not which channels a consumer solves against.
-    let default_channel = channels.get(&channel_url)?;
+    let default_channel = channels.get(&channel)?;
 
-    let mut built_this_job: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let output_channel = LocalChannel::new(&abs_output);
+    let mut built_this_job: BTreeSet<PackageName> = BTreeSet::new();
     for item in to_build {
         let entry = item.entry;
         let effective_build = item.effective_build;
@@ -1236,7 +1263,7 @@ fn pixi(
         fs::create_dir(&workdir)?;
         fetch_at_rev(&entry.url, &entry.rev, &workdir)?;
 
-        let subdir = entry.subdir.as_deref().unwrap_or(Path::new("."));
+        let subdir = entry.subdir_or_root();
         let manifest_dir = workdir.join(subdir);
         let manifest_path = manifest_dir.join(PIXI_TOML);
         if !manifest_path.is_file() {
@@ -1266,9 +1293,9 @@ fn pixi(
         let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
         let mut resolved = resolve_path_deps(&manifest_path)?;
         resolved.extend(sibling_pins);
-        let mut extra_channels: Vec<String> = Vec::new();
-        let mut local_built: BTreeSet<String> = BTreeSet::new();
-        let mut visiting: Vec<String> = Vec::new();
+        let mut extra_channels: Vec<ChannelUrl> = Vec::new();
+        let mut local_built: BTreeSet<PackageName> = BTreeSet::new();
+        let mut visiting: Vec<PackageName> = Vec::new();
         let local_ctx = LocalBuildCtx {
             local_deps_dir: &local_deps_dir,
             channel: &default_channel,
@@ -1277,13 +1304,12 @@ fn pixi(
             sibling_subdirs: &sib_subdirs,
         };
         for dep in &resolved {
-            let output_channel = format!("file://{}", abs_output.display());
             // The output channel gains packages as this loop publishes into it,
             // so it has to be asked live rather than swept.
             let in_output_channel = built_this_job.contains(&dep.name)
                 || version_published(&dep.name, &dep.version, &output_channel, target_platform)?;
             if in_output_channel {
-                push_unique(&mut extra_channels, output_channel);
+                push_unique(&mut extra_channels, output_channel.clone().into());
             } else if default_channel.has_version(&dep.name, &dep.version) {
                 // Satisfied by the real channel; nothing to do.
             } else {
@@ -1299,7 +1325,7 @@ fn pixi(
                 build_local_dep(dep, &local_ctx, &mut local_built, &mut visiting)?;
                 push_unique(
                     &mut extra_channels,
-                    format!("file://{}", local_deps_dir.display()),
+                    LocalChannel::new(&local_deps_dir).into(),
                 );
             }
         }
@@ -1317,8 +1343,8 @@ fn pixi(
 
         // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
         // the upload-artifact glob.
-        let target_channel = format!("file://{}", abs_output.display());
-        let arch = target_platform.arch().to_string();
+        let target_channel = output_channel.to_string();
+        let arch = target_platform.to_string();
         process::run(
             "pixi",
             &publish_argv(&manifest_path, &target_channel, &arch),
@@ -1331,9 +1357,9 @@ fn pixi(
 
 fn deepstream_container(
     repo_root: Option<PathBuf>,
-    channel_url: String,
+    channel_url: ChannelUrl,
     output_dir: PathBuf,
-    target_platform: TargetPlatform,
+    target_platform: Arch,
     ds_recipes: Vec<RecipeName>,
     ds_version: DeepstreamVersion,
 ) -> anyhow::Result<()> {

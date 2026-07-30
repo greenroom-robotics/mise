@@ -516,6 +516,7 @@ dependencies = [
  "predicates",
  "regex",
  "secrecy",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -525,6 +526,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "url",
 ]
 
 [[package]]

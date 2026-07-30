@@ -8,7 +8,9 @@ use serde::Serialize;
 use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML, ROSDISTRO_RECIPES_YAML};
 use crate::gh::{self, ChangedFiles};
 use crate::repo::{DeepstreamCfg, Repo};
-use crate::types::{Arch, DeepstreamVersion, PixiNativeEntry, PixiNativeManifest, RunnerSize};
+use crate::types::{
+    Arch, DeepstreamVersion, PackageName, PixiNativeEntry, PixiNativeManifest, RunnerSize,
+};
 
 const GLOBAL_VINCA: &[&str] = &[
     "vinca.yaml",
@@ -99,7 +101,11 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
         .join(",");
 
     let pixi_only = match &state.pixi_native {
-        PixiScope::Only(names) => names.iter().cloned().collect::<Vec<_>>().join(","),
+        PixiScope::Only(names) => names
+            .iter()
+            .map(PackageName::as_str)
+            .collect::<Vec<_>>()
+            .join(","),
         _ => String::new(),
     };
 
@@ -165,7 +171,7 @@ enum PixiScope {
     /// `pixi_native_packages.yaml` changed; specific names resolved by `compute()`.
     ManifestScoped,
     /// Build only the named packages.
-    Only(BTreeSet<String>),
+    Only(BTreeSet<PackageName>),
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -181,18 +187,18 @@ struct MatrixState {
 fn diff_changed_packages(
     base_yaml: Option<&str>,
     head_yaml: &str,
-) -> anyhow::Result<BTreeSet<String>> {
+) -> anyhow::Result<BTreeSet<PackageName>> {
     let head = PixiNativeManifest::from_yaml_str(head_yaml)?;
     let Some(base_yaml) = base_yaml else {
         return Ok(head.packages.iter().map(|e| e.name.clone()).collect());
     };
     let base = PixiNativeManifest::from_yaml_str(base_yaml)?;
-    let base_by_name: BTreeMap<&str, &PixiNativeEntry> =
-        base.packages.iter().map(|e| (e.name.as_str(), e)).collect();
+    let base_by_name: BTreeMap<&PackageName, &PixiNativeEntry> =
+        base.packages.iter().map(|e| (&e.name, e)).collect();
 
     let mut changed = BTreeSet::new();
     for e in &head.packages {
-        match base_by_name.get(e.name.as_str()) {
+        match base_by_name.get(&e.name) {
             None => {
                 changed.insert(e.name.clone());
             }

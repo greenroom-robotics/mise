@@ -2,14 +2,15 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::yaml_block::{self, item_bounds};
+use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
 /// An entry in `rosdistro_additional_recipes.yaml`. Fields are emitted in this
 /// fixed order: url, tag, version. Matches the existing format in ros-recipes.
 pub struct Entry<'a> {
-    pub package: &'a str,
-    pub url: &'a str,
+    pub package: &'a PackageName,
+    pub url: &'a GithubRepoUrl,
     pub tag: &'a str,
-    pub version: &'a str,
+    pub version: &'a Version,
 }
 
 /// Idempotently upsert `entry` into the recipes YAML file. Comments and other
@@ -33,7 +34,7 @@ fn render(entry: &Entry, nl: &str) -> String {
     format!(
         "{name}:{nl}  url: {url}{nl}  tag: {tag}{nl}  version: {version}{nl}",
         name = entry.package,
-        url = entry.url,
+        url = entry.url.git_url(),
         tag = entry.tag,
         version = entry.version,
     )
@@ -45,7 +46,7 @@ fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
     // The package's block is its top-level `<name>:` key line plus everything
     // indented under it — see `yaml_block::section_bounds`, which is also what
     // decides whether the entry exists at all.
-    if let Some(block) = yaml_block::section_bounds(body, entry.package) {
+    if let Some(block) = yaml_block::section_bounds(body, entry.package.as_str()) {
         let mut out = String::with_capacity(body.len());
         out.push_str(block.before(body));
         out.push_str(&render(entry, nl));
@@ -83,8 +84,8 @@ fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
 ///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
 pub(crate) fn mutate_vendored_recipe(
     text: &str,
-    version: &str,
-    rev: &str,
+    version: &Version,
+    rev: &Sha40,
 ) -> anyhow::Result<String> {
     let mut out: Vec<String> = Vec::new();
     let mut old_version: Option<String> = None;
@@ -121,6 +122,8 @@ pub(crate) fn mutate_vendored_recipe(
     let number_idx =
         number_idx.ok_or_else(|| anyhow::anyhow!("build.number not found in recipe"))?;
 
+    let version = version.to_string();
+    let rev = rev.as_str();
     if old_version == version && old_rev == rev {
         return Ok(text.to_string());
     }
@@ -151,14 +154,16 @@ pub(crate) fn mutate_vendored_recipe(
 ///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
 pub(crate) fn mutate_pixi_entry(
     text: &str,
-    name: &str,
-    url: &str,
-    rev: &str,
+    name: &PackageName,
+    url: &GithubRepoUrl,
+    rev: &Sha40,
     subdir: Option<&str>,
 ) -> anyhow::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
+    let url = url.git_url();
+    let rev = rev.as_str();
 
-    let result = if let Some(item) = item_bounds(&lines, name) {
+    let result = if let Some(item) = item_bounds(&lines, name.as_str()) {
         let sub_indent = item.sub_indent();
         let mut out: Vec<String> = item
             .through_header(&lines)
@@ -234,8 +239,8 @@ pub(crate) fn mutate_pixi_entry(
 
 /// True if `rosdistro_additional_recipes.yaml` text has a top-level
 /// `<package>:` key — i.e. exactly the block `upsert_text` would replace.
-fn rosdistro_has_entry(text: &str, package: &str) -> bool {
-    yaml_block::section_bounds(text, package).is_some()
+fn rosdistro_has_entry(text: &str, package: &PackageName) -> bool {
+    yaml_block::section_bounds(text, package.as_str()).is_some()
 }
 
 /// The ref a recipe pinned a package to before this release. `Rev` is an
@@ -274,7 +279,8 @@ pub(crate) struct Applied {
 /// underscore→hyphen convention gap (ROS/tag names use `_`; conda recipe dirs
 /// use `-`). Returns the repo-relative path to the first existing recipe,
 /// trying `package` verbatim then its hyphenated form. `None` if neither exists.
-pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &str) -> Option<PathBuf> {
+pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &PackageName) -> Option<PathBuf> {
+    let package = package.as_str();
     let mut candidates = vec![package.to_string()];
     let hyphenated = package.replace('_', "-");
     if hyphenated != package {
@@ -299,11 +305,11 @@ pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &str) -> Option
 /// `subdir` are unused. For the pixi-native path, `tag` is unused (`sha` -> rev).
 pub(crate) fn apply_release(
     recipes_root: &Path,
-    package: &str,
-    url: &str,
+    package: &PackageName,
+    url: &GithubRepoUrl,
     tag: &str,
-    version: &str,
-    sha: &str,
+    version: &Version,
+    sha: &Sha40,
     subdir: Option<&str>,
 ) -> anyhow::Result<Applied> {
     // 1. Vendored (name-convention tolerant: `_` ROS name -> `-` recipe dir).
@@ -357,7 +363,7 @@ pub(crate) fn apply_release(
     if in_rosdistro && !in_pixi_native {
         let old_ref = rosdistro_text
             .as_deref()
-            .and_then(|t| yaml_block::field_of(t, package, "tag"))
+            .and_then(|t| yaml_block::field_of(t, package.as_str(), "tag"))
             .map(str::to_string)
             .map(OldRef::Tag);
         upsert(
@@ -395,9 +401,9 @@ pub(crate) fn apply_release(
 /// The pin a `pixi_native_packages.yaml` entry currently carries: `rev:` as an
 /// immutable [`OldRef::Rev`], `ref:` as a mutable [`OldRef::Tag`]. `None` if the
 /// entry or field is absent.
-fn pixi_entry_rev(text: &str, name: &str) -> Option<OldRef> {
+fn pixi_entry_rev(text: &str, name: &PackageName) -> Option<OldRef> {
     let lines: Vec<&str> = text.lines().collect();
-    let item = item_bounds(&lines, name)?;
+    let item = item_bounds(&lines, name.as_str())?;
     item.body(&lines).iter().find_map(|l| {
         let t = l.trim_start();
         if let Some(v) = t.strip_prefix("rev:") {

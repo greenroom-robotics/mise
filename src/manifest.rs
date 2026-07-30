@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
-use crate::types::TargetPlatform;
+use crate::types::{Arch, ChannelUrl, PackageName, Version};
 
 /// The dependency tables a pixi package can declare, in scan order.
 ///
@@ -74,8 +74,8 @@ pub struct PackageManifest {
 /// fails once, at the manifest, instead of at each use.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PackageIdentity {
-    pub name: String,
-    pub version: String,
+    pub name: PackageName,
+    pub version: Version,
 }
 
 /// One entry from a dependency table: the dep *key* — which is the channel
@@ -83,7 +83,7 @@ pub struct PackageIdentity {
 /// requirement value.
 #[derive(Debug)]
 pub struct Dep {
-    pub name: String,
+    pub name: PackageName,
     value: toml::Value,
 }
 
@@ -100,9 +100,9 @@ struct PackageSection {
     /// Absent in package-xml mode, where identity lives in a `package.xml`
     /// beside the manifest.
     #[serde(default)]
-    name: Option<String>,
+    name: Option<PackageName>,
     #[serde(default)]
-    version: Option<String>,
+    version: Option<Version>,
     #[serde(default)]
     build: Option<BuildSection>,
 }
@@ -139,7 +139,7 @@ struct Workspace {
 impl Manifest {
     pub fn parse(text: &str) -> Result<Self> {
         let value: toml::Value = toml::from_str(text)?;
-        let deps = collect_deps(&value);
+        let deps = collect_deps(&value)?;
         let raw: ManifestRaw = value.try_into()?;
         Ok(match raw.package {
             None => Manifest::WorkspaceOnly,
@@ -160,7 +160,7 @@ impl Manifest {
 
 /// Every dependency entry in [`DEP_TABLES`] order. Values are cloned out of the
 /// document so the read view owns them; dep tables are a handful of entries.
-fn collect_deps(value: &toml::Value) -> Vec<Dep> {
+fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
     let mut out = Vec::new();
     for table_path in DEP_TABLES {
         let mut node = value;
@@ -180,12 +180,15 @@ fn collect_deps(value: &toml::Value) -> Vec<Dep> {
         let Some(table) = node.as_table() else {
             continue;
         };
-        out.extend(table.iter().map(|(name, value)| Dep {
-            name: name.clone(),
-            value: value.clone(),
-        }));
+        for (name, value) in table {
+            out.push(Dep {
+                name: PackageName::new(name.clone())
+                    .with_context(|| format!("dependency key in [{}]", table_path.join(".")))?,
+                value: value.clone(),
+            });
+        }
     }
-    out
+    Ok(out)
 }
 
 impl Dep {
@@ -200,22 +203,16 @@ impl Dep {
     }
 }
 
-/// The version of an exact `==X.Y.Z` pin, else `None`. Exact means `==` and a
-/// single concrete version with three numeric core components. Ranges (`>=`,
-/// `<`), wildcards (`==1.2.*`) and build specs are not pins.
-fn exact_pin_version(s: &str) -> Option<&str> {
-    let v = s.trim().strip_prefix("==")?;
-    let core = v.split('-').next().unwrap_or(v);
-    let parts: Vec<&str> = core.split('.').collect();
-    if parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-    {
-        Some(v)
-    } else {
-        None
-    }
+/// The version of an exact `==X.Y.Z` pin, else `None`. Exact means `==`
+/// followed by a single concrete semantic version. Ranges (`>=`, `<`),
+/// wildcards (`==1.2.*`) and `+build` metadata are not pins and [`Version`]
+/// already rejects all of them. The three-component check is the one exclusion
+/// that has to be explicit, because `Version` is wider than a pin here: a
+/// two-component `==1.2` parses, but it is a range to the solver.
+fn exact_pin_version(s: &str) -> Option<Version> {
+    Version::parse(s.trim().strip_prefix("==")?)
+        .ok()
+        .filter(Version::is_explicit_triple)
 }
 
 impl PackageManifest {
@@ -230,14 +227,14 @@ impl PackageManifest {
     }
 
     /// `package.name`, absent in package-xml mode.
-    pub fn name(&self) -> Option<&str> {
-        self.package.name.as_deref()
+    pub fn name(&self) -> Option<&PackageName> {
+        self.package.name.as_ref()
     }
 
     /// `package.version`, absent in manifests that only exist to be built from
     /// a `package.xml`-derived version.
-    pub fn version(&self) -> Option<&str> {
-        self.package.version.as_deref()
+    pub fn version(&self) -> Option<&Version> {
+        self.package.version.as_ref()
     }
 
     /// Name and version together. Errors naming the missing key.
@@ -249,8 +246,8 @@ impl PackageManifest {
             .version()
             .ok_or_else(|| anyhow::anyhow!("missing package.version"))?;
         Ok(PackageIdentity {
-            name: name.to_string(),
-            version: version.to_string(),
+            name: name.clone(),
+            version: version.clone(),
         })
     }
 
@@ -292,14 +289,14 @@ impl PackageManifest {
 
     /// `true` if the workspace's `platforms` list is empty or contains `target`.
     /// Empty list is treated as "no explicit restriction" (build everywhere).
-    pub fn supports_platform(&self, target: TargetPlatform) -> bool {
+    pub fn supports_platform(&self, target: Arch) -> bool {
         let Some(ws) = &self.workspace else {
             return true;
         };
         if ws.platforms.is_empty() {
             return true;
         }
-        let target_str = target.arch().to_string();
+        let target_str = target.to_string();
         ws.platforms.iter().any(|p| p == &target_str)
     }
 
@@ -317,14 +314,14 @@ impl PackageManifest {
     /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string.
     /// These are committed opt-out pins (a released consumer that was decoupled
     /// from its sibling), hand-written or legacy.
-    pub fn exact_pins(&self) -> Vec<(String, String)> {
+    pub fn exact_pins(&self) -> Vec<(PackageName, Version)> {
         self.deps
             .iter()
             .filter_map(|d| {
                 d.value
                     .as_str()
                     .and_then(exact_pin_version)
-                    .map(|v| (d.name.clone(), v.to_string()))
+                    .map(|v| (d.name.clone(), v))
             })
             .collect()
     }
@@ -384,18 +381,26 @@ impl Package {
 
 /// What discovery found at one candidate `pixi.toml`.
 ///
-/// Three outcomes rather than `Result<Option<Package>>` because the third one
-/// must not be `?`-able: discovery sweeps a directory nobody curated for it,
-/// and a manifest it cannot use — missing `[package]`, TOML syntax error, or a
-/// key whose type does not match the schema — says nothing about its
+/// Outcomes rather than `Result<Option<Package>>` because the failures must not
+/// all be `?`-able: discovery sweeps a directory nobody curated for it, and a
+/// manifest it cannot use — missing `[package]`, TOML syntax error, or a key
+/// whose type does not match the schema — usually says nothing about its
 /// neighbours. Returning the failure as a variant forces the sweep to decide
-/// what to do with it instead of aborting on it.
+/// what to do with each kind instead of aborting on all of them.
 enum Candidate {
     Package(Box<Package>),
     /// Parsed, but declares no `[package]` — see [`Manifest::WorkspaceOnly`].
     WorkspaceOnly,
-    /// Unreadable or unparseable.
+    /// Unreadable or unparseable, in a way that says nothing about whether this
+    /// was ever meant to be a releasable package.
     Unusable {
+        path: PathBuf,
+        error: anyhow::Error,
+    },
+    /// Declares a `[package]` whose own `name` or `version` this tool cannot
+    /// read. This *is* a package, and it is one we would otherwise drop on the
+    /// floor, so it is fatal even in a tolerant sweep.
+    UnreadableIdentity {
         path: PathBuf,
         error: anyhow::Error,
     },
@@ -403,31 +408,74 @@ enum Candidate {
 
 impl Candidate {
     fn read(manifest_path: &Path) -> Self {
-        match Manifest::read(manifest_path) {
+        let text = match std::fs::read_to_string(manifest_path) {
+            Ok(text) => text,
+            Err(e) => {
+                return Self::Unusable {
+                    path: manifest_path.to_path_buf(),
+                    error: anyhow::Error::new(e)
+                        .context(format!("reading {}", manifest_path.display())),
+                };
+            }
+        };
+        match Manifest::parse(&text).with_context(|| format!("parsing {}", manifest_path.display()))
+        {
             Ok(Manifest::Package(manifest)) => {
                 Self::Package(Box::new(Package::new(manifest_path, manifest)))
             }
             Ok(Manifest::WorkspaceOnly) => Self::WorkspaceOnly,
-            Err(error) => Self::Unusable {
-                path: manifest_path.to_path_buf(),
-                error,
-            },
-        }
-    }
-
-    /// The package, if this candidate is one. An unusable manifest is named in
-    /// a warning and dropped — silence would make a typo in one manifest look
-    /// like a package that simply isn't there.
-    fn into_package(self) -> Option<Package> {
-        match self {
-            Self::Package(pkg) => Some(*pkg),
-            Self::WorkspaceOnly => None,
-            Self::Unusable { path, error } => {
-                tracing::warn!("skipping {}: {error:#}", path.display());
-                None
+            Err(error) => {
+                let path = manifest_path.to_path_buf();
+                if declares_unreadable_identity(&text) {
+                    Self::UnreadableIdentity { path, error }
+                } else {
+                    Self::Unusable { path, error }
+                }
             }
         }
     }
+
+    /// The package, if this candidate is one.
+    ///
+    /// An unusable manifest is named in a warning and dropped — silence would
+    /// make a typo in one manifest look like a package that simply isn't
+    /// there. A manifest whose *identity* is unreadable is an error instead:
+    /// dropping it would take a package that exists, and that a release run is
+    /// very likely meant to include, out of the run without failing it.
+    fn into_package(self) -> Result<Option<Package>> {
+        match self {
+            Self::Package(pkg) => Ok(Some(*pkg)),
+            Self::WorkspaceOnly => Ok(None),
+            Self::Unusable { path, error } => {
+                tracing::warn!("skipping {}: {error:#}", path.display());
+                Ok(None)
+            }
+            Self::UnreadableIdentity { path, error } => Err(error.context(format!(
+                "{} declares a package this tool cannot identify; it would have been \
+                 skipped and never built",
+                path.display()
+            ))),
+        }
+    }
+}
+
+/// Whether `text` is valid TOML declaring a `[package]` table whose `name` or
+/// `version` is a string our own newtypes reject.
+///
+/// Deliberately structural rather than a match on the serde error text, and
+/// deliberately limited to identity: a `[package]` with a bad `build-number` is
+/// still discoverable, because nothing about releasing *this* package reads it.
+fn declares_unreadable_identity(text: &str) -> bool {
+    let Ok(value) = toml::from_str::<toml::Value>(text) else {
+        return false;
+    };
+    let Some(package) = value.get("package") else {
+        return false;
+    };
+    let bad = |key: &str, check: fn(&str) -> bool| {
+        package.get(key).and_then(|v| v.as_str()).is_some_and(check)
+    };
+    bad("name", |s| PackageName::new(s).is_err()) || bad("version", |s| Version::parse(s).is_err())
 }
 
 /// Discover per-package pixi workspaces under `package_dir`, parsing each
@@ -442,7 +490,7 @@ impl Candidate {
 /// to read or parse are logged and skipped. Failure must not be contagious —
 /// one mistyped key in a monorepo would otherwise block the release of every
 /// unrelated package sitting beside it.
-pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<Package>> {
+pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<Package>> {
     // Root-package layout: package_dir itself holds the package's pixi.toml
     // (e.g. mise — a single-package repo with pixi.toml at its root). Only take
     // this branch when the root pixi.toml actually names and versions a
@@ -451,11 +499,11 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<Package>
     // under package_dir.
     let root_pixi = package_dir.join(PIXI_TOML);
     if root_pixi.exists()
-        && let Some(pkg) = Candidate::read(&root_pixi).into_package()
+        && let Some(pkg) = Candidate::read(&root_pixi).into_package()?
         && let Ok(id) = pkg.identity()
     {
         match filter {
-            Some(name) if name != id.name => {
+            Some(name) if *name != id.name => {
                 anyhow::bail!("package {name} not found; root package is {}", id.name)
             }
             _ => return Ok(vec![pkg]),
@@ -463,7 +511,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<Package>
     }
 
     if let Some(name) = filter {
-        let pixi = package_dir.join(name).join(PIXI_TOML);
+        let pixi = package_dir.join(name.as_str()).join(PIXI_TOML);
         if !pixi.exists() {
             anyhow::bail!("package {name} not found at {}", pixi.display());
         }
@@ -489,7 +537,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<Package>
         if !pixi.exists() {
             continue;
         }
-        if let Some(pkg) = Candidate::read(&pixi).into_package() {
+        if let Some(pkg) = Candidate::read(&pixi).into_package()? {
             out.push(pkg);
         }
     }
@@ -508,7 +556,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<Package>
 /// `[package] version` shape and `ci sync-cargo` bumps it through here too.
 /// Errors if there is no `[package]` table or it has no `version` key —
 /// creating either would be papering over a manifest that isn't a package.
-pub fn set_package_version(toml_text: &str, version: &str) -> Result<String> {
+pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = toml_text.parse().context("parsing TOML")?;
     let package = doc
         .get_mut("package")
@@ -518,7 +566,7 @@ pub fn set_package_version(toml_text: &str, version: &str) -> Result<String> {
     if !package.contains_key("version") {
         anyhow::bail!("no version key in [package] table");
     }
-    package["version"] = toml_edit::value(version);
+    package["version"] = toml_edit::value(version.to_string());
     Ok(doc.to_string())
 }
 
@@ -574,14 +622,14 @@ pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
 
 /// Front-insert channels into `[workspace].channels`, so local just-built
 /// artifacts win over the real channel during the solve.
-pub fn prepend_channels(manifest_path: &Path, channels: &[String]) -> Result<()> {
+pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result<()> {
     let text = std::fs::read_to_string(manifest_path)?;
     let mut doc: toml_edit::DocumentMut = text.parse()?;
     let arr = doc["workspace"]["channels"].as_array_mut().ok_or_else(|| {
         anyhow::anyhow!("{}: no workspace.channels array", manifest_path.display())
     })?;
     for (i, ch) in channels.iter().enumerate() {
-        arr.insert(i, ch.as_str());
+        arr.insert(i, ch.to_string());
     }
     std::fs::write(manifest_path, doc.to_string())?;
     Ok(())
@@ -602,25 +650,10 @@ pub struct ResolvedDep {
     /// when it does, the published artifact is prefixed/transformed relative to
     /// it. The dep key is guaranteed correct because the consumer's manifest
     /// can only solve against the real channel name.
-    pub name: String,
-    pub version: String,
+    pub name: PackageName,
+    pub version: Version,
     /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
     pub manifest: PathBuf,
-}
-
-/// Derived pin for a sibling at `version`: `>=<version>,<<major+1>`. The floor
-/// is the sibling's version at the consumer's tagged rev (so a side-by-side
-/// release ratchets it to the fresh version); the major cap is the same trust
-/// model as committed cross-repo internal pins. Prerelease floors are fine:
-/// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
-fn range_pin(version: &str) -> Result<String> {
-    let major: u64 = version
-        .split(['.', '-'])
-        .next()
-        .unwrap_or("")
-        .parse()
-        .with_context(|| format!("version {version} does not start with a numeric major"))?;
-    Ok(format!(">={version},<{}", major + 1))
 }
 
 /// Rewrite every non-self `path =` dep in the manifest to
@@ -717,10 +750,10 @@ fn rewrite_path_deps_in(
                     sib_manifest.display()
                 )
             })?
-            .to_string();
-        table.insert(&key, toml_edit::value(range_pin(&version)?));
+            .clone();
+        table.insert(&key, toml_edit::value(version.range_pin()));
         resolved.push(ResolvedDep {
-            name: key.clone(),
+            name: PackageName::new(key)?,
             version,
             manifest: sib_manifest,
         });

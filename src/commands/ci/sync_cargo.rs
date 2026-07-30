@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub struct SyncCargo {
     /// New version, no leading 'v' (matches `${nextRelease.version}`).
     #[arg(long)]
-    pub version: String,
+    pub version: crate::types::Version,
     /// Path to Cargo.toml.
     #[arg(long, default_value = "Cargo.toml")]
     pub cargo_toml: PathBuf,
@@ -45,7 +45,11 @@ impl SyncCargo {
     }
 }
 
-fn bump_cargo_lock(body: &str, package: &str, new_version: &str) -> anyhow::Result<String> {
+fn bump_cargo_lock(
+    body: &str,
+    package: &str,
+    new_version: &crate::types::Version,
+) -> anyhow::Result<String> {
     let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.lock")?;
     let pkgs = doc
         .get_mut("package")
@@ -55,7 +59,7 @@ fn bump_cargo_lock(body: &str, package: &str, new_version: &str) -> anyhow::Resu
         .iter_mut()
         .find(|e| e.get("name").and_then(|n| n.as_str()) == Some(package))
         .ok_or_else(|| anyhow::anyhow!("no [[package]] named {package:?} in Cargo.lock"))?;
-    entry["version"] = toml_edit::value(new_version);
+    entry["version"] = toml_edit::value(new_version.to_string());
     Ok(doc.to_string())
 }
 

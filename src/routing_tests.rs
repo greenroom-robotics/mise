@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::{PackageName, RemoteChannel, Version};
 
 fn rules_from(yaml: &str, dir: &Path) -> Vec<RoutingRule> {
     std::fs::write(dir.join("routing.yaml"), yaml).unwrap();
@@ -49,27 +50,35 @@ fn first_match_wins_and_variant_substitutes() {
 fn published_urls_swap_last_segment() {
     let td = tempfile::TempDir::new().unwrap();
     let rules = rules_from(SAMPLE, td.path());
-    let base = "az://stg.blob.core.windows.net/general";
+    let base = RemoteChannel::parse("az://stg.blob.core.windows.net/general").unwrap();
+    let chans = |name: &str, version: &str| -> Vec<String> {
+        published_channels(
+            &rules,
+            &base,
+            &PackageName::new(name).unwrap(),
+            &Version::parse(version).unwrap(),
+        )
+        .iter()
+        .map(|c| c.to_string())
+        .collect()
+    };
     assert_eq!(
-        published_channel_urls(&rules, base, "gama_config", "7.5.0"),
+        chans("gama_config", "7.5.0"),
         vec!["az://stg.blob.core.windows.net/gama"],
     );
     assert_eq!(
-        published_channel_urls(&rules, base, "gama_config_blue_boat", "7.5.0"),
+        chans("gama_config_blue_boat", "7.5.0"),
         vec!["az://stg.blob.core.windows.net/gama-variant-blue-boat"],
     );
     assert_eq!(
-        published_channel_urls(&rules, base, "greenstream_config", "4.18.0"),
+        chans("greenstream_config", "4.18.0"),
         vec![
             "az://stg.blob.core.windows.net/greenstream",
             "az://stg.blob.core.windows.net/general",
         ],
     );
     // Unrouted packages keep the default channel URL untouched.
-    assert_eq!(
-        published_channel_urls(&rules, base, "launch_ext", "2.0.1"),
-        vec![base.to_string()],
-    );
+    assert_eq!(chans("launch_ext", "2.0.1"), vec![base.to_string()],);
 }
 
 #[test]

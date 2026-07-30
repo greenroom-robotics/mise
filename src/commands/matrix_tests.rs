@@ -1,4 +1,9 @@
 use super::*;
+use crate::types::PackageName;
+
+fn pkg(s: &str) -> PackageName {
+    PackageName::new(s).unwrap()
+}
 
 #[test]
 fn pipeline_serializes_to_kebab_case() {
@@ -183,7 +188,7 @@ fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
         .iter()
         .enumerate()
         .map(|(i, size)| PixiNativeEntry {
-            name: format!("pkg{i}"),
+            name: PackageName::new(format!("pkg{i}")).unwrap(),
             url: url.clone(),
             rev: sha.clone(),
             subdir: None,
@@ -330,12 +335,7 @@ packages:
     rev: 4444444444444444444444444444444444444444
 "#;
     let changed = diff_changed_packages(Some(base), head).unwrap();
-    assert_eq!(
-        changed,
-        ["added".to_string(), "beta".to_string()]
-            .into_iter()
-            .collect()
-    );
+    assert_eq!(changed, ["added", "beta"].into_iter().map(pkg).collect());
 }
 
 #[test]
@@ -354,7 +354,7 @@ packages:
     runner-size: 16cpu
 "#;
     let changed = diff_changed_packages(Some(base), head).unwrap();
-    assert_eq!(changed, ["alpha".to_string()].into_iter().collect());
+    assert_eq!(changed, ["alpha"].into_iter().map(pkg).collect());
 }
 
 #[test]
@@ -369,12 +369,7 @@ packages:
     rev: 2222222222222222222222222222222222222222
 "#;
     let changed = diff_changed_packages(None, head).unwrap();
-    assert_eq!(
-        changed,
-        ["alpha".to_string(), "beta".to_string()]
-            .into_iter()
-            .collect()
-    );
+    assert_eq!(changed, ["alpha", "beta"].into_iter().map(pkg).collect());
 }
 
 #[test]
@@ -404,7 +399,7 @@ fn build_matrix_only_prunes_to_changed_sizes() {
     // manifest_with_sizes names entries pkg0, pkg1, ... in order.
     let manifest = manifest_with_sizes(&[RunnerSize::Cpu4, RunnerSize::Cpu16]);
     let state = MatrixState {
-        pixi_native: PixiScope::Only(["pkg0".to_string()].into_iter().collect()),
+        pixi_native: PixiScope::Only(["pkg0"].into_iter().map(pkg).collect()),
         ..Default::default()
     };
     let out = build_matrix(&state, &manifest, "RUN");

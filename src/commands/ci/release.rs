@@ -2,11 +2,13 @@ use clap::Args;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::types::{PackageName, Version};
+
 #[derive(Args, Debug)]
 pub struct Release {
     /// Single package to release (default: all packages under --package-dir).
     #[arg(long)]
-    pub package: Option<String>,
+    pub package: Option<PackageName>,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
@@ -41,7 +43,7 @@ pub struct Release {
 /// semantic-release tag format. Both modes tag `<package>@<version>` — in
 /// multi-package mode multi-semantic-release substitutes `${name}` itself; in
 /// single-package mode the resolved package name is embedded literally.
-fn tag_format(multi: bool, single_pkg_name: &str) -> String {
+fn tag_format(multi: bool, single_pkg_name: &PackageName) -> String {
     if multi {
         "${name}@${version}".to_string()
     } else {
@@ -56,8 +58,8 @@ fn tag_format(multi: bool, single_pkg_name: &str) -> String {
 /// pins are excluded — a released consumer is decoupled and needs no ordering.
 fn msr_ordering_deps(
     graph: &crate::commands::ci::siblings::SiblingGraph,
-    name: &str,
-) -> BTreeSet<String> {
+    name: &PackageName,
+) -> BTreeSet<PackageName> {
     graph.path_deps.get(name).cloned().unwrap_or_default()
 }
 
@@ -92,14 +94,14 @@ fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
 /// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
 /// private workspace packages entirely (observed as "Queued 0 packages").
 /// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
-fn package_json_for(name: &str, version: &str, deps: &BTreeSet<String>) -> String {
+fn package_json_for(name: &PackageName, version: &Version, deps: &BTreeSet<PackageName>) -> String {
     let deps_obj: serde_json::Map<String, serde_json::Value> = deps
         .iter()
-        .map(|d| (d.clone(), serde_json::Value::String("*".into())))
+        .map(|d| (d.to_string(), serde_json::Value::String("*".into())))
         .collect();
     serde_json::to_string_pretty(&serde_json::json!({
         "name": name,
-        "version": version,
+        "version": version.to_string(),
         "dependencies": deps_obj,
     }))
     .expect("static json")
@@ -150,7 +152,7 @@ fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> 
 
 impl Release {
     pub fn run(self) -> anyhow::Result<()> {
-        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
@@ -198,7 +200,11 @@ impl Release {
     /// is passed in rather than re-read: it is embedded literally in both
     /// callbacks so multi-semantic-release needs no plugin-context env vars at
     /// runtime.
-    fn releaserc_json(&self, pixi: &std::path::Path, pkg_name: &str) -> anyhow::Result<String> {
+    fn releaserc_json(
+        &self,
+        pixi: &std::path::Path,
+        pkg_name: &PackageName,
+    ) -> anyhow::Result<String> {
         let branches = self
             .release_branches
             .split(',')

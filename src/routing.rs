@@ -13,6 +13,8 @@ use std::path::Path;
 use anyhow::Context;
 use serde::Deserialize;
 
+use crate::types::{PackageName, RemoteChannel, Version};
+
 #[derive(Debug)]
 pub struct RoutingRule {
     regex: regex::Regex,
@@ -110,26 +112,24 @@ pub fn resolve_channels(rules: &[RoutingRule], filename: &str) -> Option<Vec<Str
     None
 }
 
-/// The channel URLs the package `name` (at `version`) publishes to, derived
-/// by swapping the last path segment of `default_channel_url` for each routed
-/// channel name. Routing rules match built .conda filenames, so a synthetic
-/// `name-version-0.conda` stands in — every rule is name-anchored. No routing
-/// match means the package publishes to the default channel.
-pub fn published_channel_urls(
+/// The channels the package `name` (at `version`) publishes to, each a sibling
+/// of `default_channel` (see [`RemoteChannel::sibling`]). Routing rules match
+/// built .conda filenames, so a synthetic `name-version-0.conda` stands in —
+/// every rule is name-anchored. No routing match means the package publishes
+/// to the default channel.
+pub fn published_channels(
     rules: &[RoutingRule],
-    default_channel_url: &str,
-    name: &str,
-    version: &str,
-) -> Vec<String> {
+    default_channel: &RemoteChannel,
+    name: &PackageName,
+    version: &Version,
+) -> Vec<RemoteChannel> {
     let filename = format!("{name}-{version}-0.conda");
     let Some(channels) = resolve_channels(rules, &filename) else {
-        return vec![default_channel_url.to_string()];
+        return vec![default_channel.clone()];
     };
-    let base = default_channel_url.trim_end_matches('/');
-    let base = base.rsplit_once('/').map(|(b, _)| b).unwrap_or(base);
     channels
-        .into_iter()
-        .map(|c| format!("{base}/{c}"))
+        .iter()
+        .map(|c| default_channel.sibling(c))
         .collect()
 }
 

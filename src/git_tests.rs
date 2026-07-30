@@ -1,40 +1,6 @@
 use super::*;
 use crate::consts::DEFAULT_BRANCH;
 
-#[test]
-fn ssh_remote_is_normalized_to_https() {
-    assert_eq!(
-        https_remote_url("git@github.com:owner/repo.git"),
-        "https://github.com/owner/repo.git"
-    );
-    // scp form without the .git suffix still gains one.
-    assert_eq!(
-        https_remote_url("git@github.com:owner/repo"),
-        "https://github.com/owner/repo.git"
-    );
-}
-
-#[test]
-fn https_remote_keeps_its_shape_and_gains_a_git_suffix() {
-    assert_eq!(
-        https_remote_url("https://github.com/owner/repo.git"),
-        "https://github.com/owner/repo.git"
-    );
-    assert_eq!(
-        https_remote_url("https://github.com/owner/repo"),
-        "https://github.com/owner/repo.git"
-    );
-}
-
-#[test]
-fn short_name_drops_owner_and_suffix() {
-    assert_eq!(
-        short_name("https://github.com/owner/repo.git").unwrap(),
-        "repo"
-    );
-    assert_eq!(short_name("https://github.com/owner/repo").unwrap(), "repo");
-}
-
 /// A temp repo with one empty commit and a deterministic identity.
 fn temp_repo() -> tempfile::TempDir {
     let td = tempfile::TempDir::new().unwrap();

@@ -1,5 +1,13 @@
 use super::*;
 
+fn pkg(name: &str) -> PackageName {
+    PackageName::new(name).unwrap()
+}
+
+fn sha(hex_digit: char) -> Sha40 {
+    Sha40::new(std::iter::repeat_n(hex_digit, 40).collect::<String>()).unwrap()
+}
+
 #[test]
 fn release_target_vendored_when_no_manifest() {
     let td = tempfile::TempDir::new().unwrap();
@@ -7,8 +15,8 @@ fn release_target_vendored_when_no_manifest() {
     std::fs::create_dir_all(&pkgs).unwrap();
     // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
     assert_eq!(
-        release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
-        ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
+        release_target(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
+        ReleaseTarget::VendoredByName(pkg("deepstream_extensions"))
     );
 }
 
@@ -23,7 +31,7 @@ fn release_target_discovered_when_per_package_manifest_exists() {
     )
     .unwrap();
     assert_eq!(
-        release_target(&pkgs, Some("object_tracker")).unwrap(),
+        release_target(&pkgs, Some(&pkg("object_tracker"))).unwrap(),
         ReleaseTarget::Discovered
     );
 }
@@ -43,8 +51,8 @@ fn release_target_vendored_when_manifest_is_workspace_only() {
     )
     .unwrap();
     assert_eq!(
-        release_target(&pkgs, Some("deepstream_extensions")).unwrap(),
-        ReleaseTarget::VendoredByName("deepstream_extensions".to_string())
+        release_target(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
+        ReleaseTarget::VendoredByName(pkg("deepstream_extensions"))
     );
 }
 
@@ -58,7 +66,7 @@ fn release_target_discovered_for_root_package_repo() {
     )
     .unwrap();
     assert_eq!(
-        release_target(root, Some("mise")).unwrap(),
+        release_target(root, Some(&pkg("mise"))).unwrap(),
         ReleaseTarget::Discovered
     );
 }
@@ -84,7 +92,7 @@ fn recipe_action_applies_for_discovered() {
 #[test]
 fn recipe_action_applies_for_vendored_with_recipe() {
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName("x".into()), true, false),
+        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), true, false),
         RecipeAction::Apply
     );
 }
@@ -93,7 +101,7 @@ fn recipe_action_applies_for_vendored_with_recipe() {
 fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
     // No recipe + not allowed to miss (explicit target) -> loud error.
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, false),
+        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), false, false),
         RecipeAction::Error
     );
 }
@@ -102,15 +110,15 @@ fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
 fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
     // No recipe + allowed to miss (sweep) -> skip quietly.
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName("x".into()), false, true),
+        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), false, true),
         RecipeAction::Skip
     );
 }
 
-fn pkgs(entries: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+fn pkgs(entries: &[(&str, &str)]) -> std::collections::BTreeMap<PackageName, String> {
     entries
         .iter()
-        .map(|(n, t)| (n.to_string(), t.to_string()))
+        .map(|(n, t)| (pkg(n), t.to_string()))
         .collect()
 }
 
@@ -176,8 +184,8 @@ fn long_package_list_collapses_in_title_only() {
 // packages ride along.
 #[test]
 fn title_never_exceeds_subject_limit() {
-    let many: std::collections::BTreeMap<String, String> = (0..40)
-        .map(|i| (format!("some_ros_package_{i}"), "v1.2.3".to_string()))
+    let many: std::collections::BTreeMap<PackageName, String> = (0..40)
+        .map(|i| (pkg(&format!("some_ros_package_{i}")), "v1.2.3".to_string()))
         .collect();
     assert!(release_title("toolbox", &many, "v1.2.3").chars().count() <= MAX_TITLE_CHARS);
 }
@@ -207,23 +215,31 @@ fn release_branch_is_per_repo_not_per_package() {
 #[test]
 fn diff_ref_prefers_immutable_rev_over_tag() {
     use crate::commands::ci::recipes_upsert::OldRef;
-    let refs = vec![OldRef::Tag("1.2.3".into()), OldRef::Rev("deadbeef".into())];
+    let new = sha('b');
+    let old = sha('a');
+    let refs = vec![
+        OldRef::Tag("1.2.3".into()),
+        OldRef::Rev(old.as_str().into()),
+    ];
     // Rev wins even though the tag came first.
-    assert_eq!(diff_ref(&refs, "newsha"), Some("deadbeef"));
+    assert_eq!(diff_ref(&refs, &new), Some(old.as_str()));
     // Tag is used when that's all there is.
     assert_eq!(
-        diff_ref(&[OldRef::Tag("1.2.3".into())], "newsha"),
+        diff_ref(&[OldRef::Tag("1.2.3".into())], &new),
         Some("1.2.3")
     );
     // Same-rev re-pin and no prior pin both yield no link.
-    assert_eq!(diff_ref(&[OldRef::Rev("s".into())], "s"), None);
-    assert_eq!(diff_ref(&[], "s"), None);
+    assert_eq!(diff_ref(&[OldRef::Rev(new.as_str().into())], &new), None);
+    assert_eq!(diff_ref(&[], &new), None);
 }
 
+/// The compare link is derived from the parsed source repo, so the `.git`
+/// suffix a remote URL carries never reaches the URL.
 #[test]
-fn compare_url_strips_git_suffix() {
+fn compare_url_has_no_git_suffix() {
+    let repo = GithubRepoUrl::parse_remote("https://github.com/gr/mise.git").unwrap();
     assert_eq!(
-        compare_url("https://github.com/gr/mise.git", "v1.0.0", "abc123"),
+        repo.compare_url("v1.0.0", "abc123"),
         "https://github.com/gr/mise/compare/v1.0.0...abc123"
     );
 }

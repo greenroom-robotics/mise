@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub struct Build {
     /// Single package name (default: all packages under --package-dir).
     #[arg(long)]
-    pub package: Option<String>,
+    pub package: Option<crate::types::PackageName>,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
@@ -18,7 +18,7 @@ pub struct Build {
 
 impl Build {
     pub fn run(self) -> anyhow::Result<()> {
-        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }

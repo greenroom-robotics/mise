@@ -1,5 +1,14 @@
 use super::*;
+use crate::types::{PackageName, Version};
 use clap::Parser;
+
+fn pkg(s: &str) -> PackageName {
+    PackageName::new(s).unwrap()
+}
+
+fn ver(s: &str) -> Version {
+    Version::parse(s).unwrap()
+}
 
 // Minimal parser wrapper so we can exercise Release's arg definitions.
 #[derive(Parser, Debug)]
@@ -36,12 +45,12 @@ fn github_release_accepts_explicit_bool_value() {
 // ignore all existing `<name>@X.Y.Z` tags and restart at 1.0.0.
 #[test]
 fn single_package_tag_format_embeds_package_name() {
-    assert_eq!(tag_format(false, "mise"), "mise@${version}");
+    assert_eq!(tag_format(false, &pkg("mise")), "mise@${version}");
 }
 
 #[test]
 fn multi_package_tag_format_uses_msr_name_placeholder() {
-    assert_eq!(tag_format(true, "mise"), "${name}@${version}");
+    assert_eq!(tag_format(true, &pkg("mise")), "${name}@${version}");
 }
 
 // Extra prepare cmd + git assets must reach the .releaserc so the Cargo bump
@@ -62,7 +71,7 @@ fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
         "--extra-git-asset",
         "Cargo.lock",
     ]);
-    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
+    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let plugins = v["plugins"].as_array().unwrap();
 
@@ -97,7 +106,7 @@ fn pixi_toml_is_always_a_release_asset() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--changelog", "false"]);
-    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
+    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
         .as_array()
@@ -123,7 +132,10 @@ fn git_commit_message_names_the_package() {
     )
     .unwrap();
     let cli = TestCli::parse_from(["x"]);
-    let rc = cli.release.releaserc_json(&pixi, "object_tracker").unwrap();
+    let rc = cli
+        .release
+        .releaserc_json(&pixi, &pkg("object_tracker"))
+        .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
         .as_array()
@@ -151,7 +163,7 @@ fn exec_cmd_paths_are_absolute() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--package-dir", "packages"]);
-    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
+    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let exec = v["plugins"]
         .as_array()
@@ -177,7 +189,7 @@ fn prepare_cmd_runs_verify_siblings_before_bump() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x"]);
-    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
+    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let prepare = v["plugins"]
         .as_array()
@@ -205,8 +217,8 @@ fn prepare_cmd_runs_verify_siblings_before_bump() {
 #[test]
 fn package_json_encodes_sibling_deps_for_msr_ordering() {
     let mut deps = std::collections::BTreeSet::new();
-    deps.insert("geolocation".to_string());
-    let js = package_json_for("geolocation_node", "1.37.0", &deps);
+    deps.insert(pkg("geolocation"));
+    let js = package_json_for(&pkg("geolocation_node"), &ver("1.37.0"), &deps);
     let v: serde_json::Value = serde_json::from_str(&js).unwrap();
     assert_eq!(v["name"], "geolocation_node");
     assert_eq!(v["version"], "1.37.0");
@@ -222,11 +234,11 @@ fn msr_ordering_deps_encodes_path_deps_not_pins() {
     let mut graph = SiblingGraph::default();
     graph
         .path_deps
-        .insert("node".into(), BTreeSet::from(["lib".to_string()]));
+        .insert(pkg("node"), BTreeSet::from([pkg("lib")]));
     graph
         .pin_deps
-        .insert("node".into(), BTreeSet::from(["msgs".to_string()]));
-    let deps = msr_ordering_deps(&graph, "node");
+        .insert(pkg("node"), BTreeSet::from([pkg("msgs")]));
+    let deps = msr_ordering_deps(&graph, &pkg("node"));
     // Path dep orders the release; committed pin is not encoded at all.
     assert!(deps.contains("lib"));
     assert!(!deps.contains("msgs"), "pins must not be encoded: {deps:?}");

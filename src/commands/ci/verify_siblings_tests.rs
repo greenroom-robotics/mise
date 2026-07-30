@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::PackageName;
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -13,10 +14,27 @@ fn latest_tagged_version_picks_semver_max_for_package() {
         "geolocation@1.21.0-alpha.2".into(), // prerelease loses to release
     ];
     assert_eq!(
-        latest_tagged_version(&tags, "geolocation").as_deref(),
+        latest_tagged_version(&tags, &PackageName::new("geolocation").unwrap()),
         Some("1.21.0")
     );
-    assert_eq!(latest_tagged_version(&tags, "nope"), None);
+    assert_eq!(
+        latest_tagged_version(&tags, &PackageName::new("nope").unwrap()),
+        None
+    );
+}
+
+// Prerelease identifiers that look numeric order numerically, so `alpha.10`
+// is newer than `alpha.2`. Lexicographic string ordering gets this backwards.
+#[test]
+fn latest_tagged_version_orders_numeric_prereleases_numerically() {
+    let tags = vec![
+        "geolocation@1.0.0-alpha.2".into(),
+        "geolocation@1.0.0-alpha.10".into(),
+    ];
+    assert_eq!(
+        latest_tagged_version(&tags, &PackageName::new("geolocation").unwrap()),
+        Some("1.0.0-alpha.10")
+    );
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
@@ -96,4 +114,27 @@ fn never_released_sibling_fails() {
     };
     let err = cmd.run().unwrap_err().to_string();
     assert!(err.contains("never been released") || err.contains("no release tag"));
+}
+
+// A tag we cannot order still means "released". Returning None here makes
+// verify-siblings bail with "has never been released", which would block the
+// release of a package whose only crime is an old tag spelling.
+#[test]
+fn latest_tagged_version_falls_back_to_an_unorderable_tag() {
+    let tags = vec!["geolocation@1.0".into()];
+    assert_eq!(
+        latest_tagged_version(&tags, &PackageName::new("geolocation").unwrap()),
+        Some("1.0")
+    );
+    let junk = vec!["geolocation@rolling".into()];
+    assert_eq!(
+        latest_tagged_version(&junk, &PackageName::new("geolocation").unwrap()),
+        Some("rolling")
+    );
+    // ...but it never outranks a tag that does order.
+    let mixed = vec!["geolocation@rolling".into(), "geolocation@0.1.0".into()];
+    assert_eq!(
+        latest_tagged_version(&mixed, &PackageName::new("geolocation").unwrap()),
+        Some("0.1.0")
+    );
 }

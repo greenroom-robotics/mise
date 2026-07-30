@@ -9,7 +9,7 @@ use std::path::PathBuf;
 pub struct BumpPixi {
     /// New version, no leading 'v' (matches `${nextRelease.version}`).
     #[arg(long)]
-    pub version: String,
+    pub version: crate::types::Version,
     /// Path to the package's pixi.toml. Defaults to ./pixi.toml.
     #[arg(long, default_value = crate::consts::PIXI_TOML)]
     pub pixi_toml: PathBuf,
