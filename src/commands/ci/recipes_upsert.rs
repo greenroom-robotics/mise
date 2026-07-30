@@ -265,16 +265,6 @@ impl OldRef {
     }
 }
 
-/// The outcome of applying one package's release: which repo-relative file
-/// changed (for staging) and the ref the package was pinned to *before* this
-/// release (for building a source-repo diff link). `old_ref` is `None` for a
-/// brand-new package that had no prior pin.
-#[derive(Debug)]
-pub(crate) struct Applied {
-    pub path: PathBuf,
-    pub old_ref: Option<OldRef>,
-}
-
 /// Locate a hand-authored vendored recipe for `package`, tolerating the
 /// underscore→hyphen convention gap (ROS/tag names use `_`; conda recipe dirs
 /// use `-`). Returns the repo-relative path to the first existing recipe,
@@ -292,7 +282,54 @@ pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &PackageName) -
     })
 }
 
-/// Apply a release for one package to the cloned recipes repo.
+/// Where one package's release lands in the recipes repo, and the facts that
+/// destination needs.
+///
+/// This is the reified form of the routing decision below. Each arm holds
+/// exactly the fields its file format records, so the facts a destination does
+/// not use are not merely ignored — they are absent. A vendored recipe keeps
+/// its own `source.git`, so there is no `url` to get wrong; rosdistro pins a
+/// mutable tag and has nowhere to put a sha; pixi-native pins a sha and has
+/// nowhere to put a tag.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseTarget {
+    /// A hand-authored `vendor_recipes/<dir>/recipe.yaml`, patched in place.
+    /// `recipe_rel` is resolved during routing (the dir may be the hyphenated
+    /// spelling of the package name), so it is carried rather than re-derived.
+    Vendored {
+        recipe_rel: PathBuf,
+        version: Version,
+        sha: Sha40,
+    },
+    /// An entry in `rosdistro_additional_recipes.yaml`, which pins a tag.
+    Rosdistro {
+        package: PackageName,
+        url: GithubRepoUrl,
+        tag: String,
+        version: Version,
+    },
+    /// An entry in `pixi_native_packages.yaml`, which pins a rev.
+    PixiNative {
+        package: PackageName,
+        url: GithubRepoUrl,
+        sha: Sha40,
+        subdir: Option<String>,
+    },
+}
+
+impl ReleaseTarget {
+    /// The repo-relative file this target writes. Known at routing time, which
+    /// is what lets the caller stage it without waiting for the write.
+    pub fn rel_path(&self) -> PathBuf {
+        match self {
+            Self::Vendored { recipe_rel, .. } => recipe_rel.clone(),
+            Self::Rosdistro { .. } => PathBuf::from(crate::consts::ROSDISTRO_RECIPES_YAML),
+            Self::PixiNative { .. } => PathBuf::from(crate::consts::PIXI_NATIVE_PACKAGES_YAML),
+        }
+    }
+}
+
+/// Decide where a release for `package` lands, reading the cloned recipes repo.
 ///
 /// Routing (first match wins):
 ///  1. `vendor_recipes/<package>/recipe.yaml` exists -> patch it (version + rev).
@@ -300,10 +337,10 @@ pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &PackageName) -
 ///  3. package already has an entry in `rosdistro_additional_recipes.yaml` -> update there.
 ///  4. otherwise (brand-new) -> default to `pixi_native_packages.yaml`.
 ///
-/// For the vendored path, `url`/`tag`/`subdir` are unused (the recipe keeps its
-/// own source.git; only version + sha change). For the rosdistro path, `sha`/
-/// `subdir` are unused. For the pixi-native path, `tag` is unused (`sha` -> rev).
-pub(crate) fn apply_release(
+/// Pure decision plus reads: nothing here writes. The facts a chosen arm does
+/// not carry are dropped at this boundary rather than travelling on as unused
+/// parameters.
+pub(crate) fn route(
     recipes_root: &Path,
     package: &PackageName,
     url: &GithubRepoUrl,
@@ -311,45 +348,21 @@ pub(crate) fn apply_release(
     version: &Version,
     sha: &Sha40,
     subdir: Option<&str>,
-) -> anyhow::Result<Applied> {
+) -> anyhow::Result<ReleaseTarget> {
     // 1. Vendored (name-convention tolerant: `_` ROS name -> `-` recipe dir).
-    if let Some(vendored_rel) = vendored_recipe_path(recipes_root, package) {
-        let vendored_abs = recipes_root.join(&vendored_rel);
-        let text = std::fs::read_to_string(&vendored_abs)
-            .with_context(|| format!("reading {}", vendored_abs.display()))?;
-        let old_ref = yaml_block::field_of(&text, "source", "rev")
-            .map(str::to_string)
-            .map(OldRef::Rev);
-        let updated = mutate_vendored_recipe(&text, version, sha)?;
-        std::fs::write(&vendored_abs, updated)
-            .with_context(|| format!("writing {}", vendored_abs.display()))?;
-        return Ok(Applied {
-            path: vendored_rel,
-            old_ref,
+    if let Some(recipe_rel) = vendored_recipe_path(recipes_root, package) {
+        return Ok(ReleaseTarget::Vendored {
+            recipe_rel,
+            version: version.clone(),
+            sha: sha.clone(),
         });
     }
 
-    let pixi_native_rel = PathBuf::from(crate::consts::PIXI_NATIVE_PACKAGES_YAML);
-    let rosdistro_rel = PathBuf::from(crate::consts::ROSDISTRO_RECIPES_YAML);
-    let pixi_native_abs = recipes_root.join(&pixi_native_rel);
-    let rosdistro_abs = recipes_root.join(&rosdistro_rel);
+    let pixi_native_abs = recipes_root.join(crate::consts::PIXI_NATIVE_PACKAGES_YAML);
+    let rosdistro_abs = recipes_root.join(crate::consts::ROSDISTRO_RECIPES_YAML);
 
-    let pixi_native_text = if pixi_native_abs.exists() {
-        Some(
-            std::fs::read_to_string(&pixi_native_abs)
-                .with_context(|| format!("reading {}", pixi_native_abs.display()))?,
-        )
-    } else {
-        None
-    };
-    let rosdistro_text = if rosdistro_abs.exists() {
-        Some(
-            std::fs::read_to_string(&rosdistro_abs)
-                .with_context(|| format!("reading {}", rosdistro_abs.display()))?,
-        )
-    } else {
-        None
-    };
+    let pixi_native_text = read_if_exists(&pixi_native_abs)?;
+    let rosdistro_text = read_if_exists(&rosdistro_abs)?;
     let in_pixi_native = match pixi_native_text.as_deref() {
         Some(t) => crate::types::PixiNativeManifest::has_entry(t, package)
             .with_context(|| format!("parsing {}", pixi_native_abs.display()))?,
@@ -361,41 +374,99 @@ pub(crate) fn apply_release(
 
     // Arm 3: existing rosdistro entry (and not already pixi-native) -> update there.
     if in_rosdistro && !in_pixi_native {
-        let old_ref = rosdistro_text
-            .as_deref()
-            .and_then(|t| yaml_block::field_of(t, package.as_str(), "tag"))
-            .map(str::to_string)
-            .map(OldRef::Tag);
-        upsert(
-            &rosdistro_abs,
-            &Entry {
-                package,
-                url,
-                tag,
-                version,
-            },
-        )?;
-        return Ok(Applied {
-            path: rosdistro_rel,
-            old_ref,
+        return Ok(ReleaseTarget::Rosdistro {
+            package: package.clone(),
+            url: url.clone(),
+            tag: tag.to_string(),
+            version: version.clone(),
         });
     }
 
     // Arms 2 & 4: existing pixi-native entry, or brand-new package -> pixi-native.
-    let text = pixi_native_text.ok_or_else(|| {
-        anyhow::anyhow!(
-            "{} not found in recipes repo; cannot add pixi-native entry for {package}",
-            pixi_native_abs.display()
-        )
-    })?;
-    let old_ref = pixi_entry_rev(&text, package);
-    let updated = mutate_pixi_entry(&text, package, url, sha, subdir)?;
-    std::fs::write(&pixi_native_abs, updated)
-        .with_context(|| format!("writing {}", pixi_native_abs.display()))?;
-    Ok(Applied {
-        path: pixi_native_rel,
-        old_ref,
+    // The file has to exist to append to, and finding that out now keeps it out
+    // of the write stage.
+    anyhow::ensure!(
+        pixi_native_text.is_some(),
+        "{} not found in recipes repo; cannot add pixi-native entry for {package}",
+        pixi_native_abs.display()
+    );
+    Ok(ReleaseTarget::PixiNative {
+        package: package.clone(),
+        url: url.clone(),
+        sha: sha.clone(),
+        subdir: subdir.map(str::to_string),
     })
+}
+
+/// The file's contents, or `None` if it does not exist.
+fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    std::fs::read_to_string(path)
+        .map(Some)
+        .with_context(|| format!("reading {}", path.display()))
+}
+
+/// Write a routed release into the cloned recipes repo.
+///
+/// Returns the ref the package was pinned to *before* this release (for
+/// building a source-repo diff link), or `None` for a brand-new package that
+/// had no prior pin. The file written is [`ReleaseTarget::rel_path`].
+pub(crate) fn apply(recipes_root: &Path, target: &ReleaseTarget) -> anyhow::Result<Option<OldRef>> {
+    let abs = recipes_root.join(target.rel_path());
+    match target {
+        ReleaseTarget::Vendored {
+            version,
+            sha,
+            recipe_rel: _,
+        } => {
+            let text = std::fs::read_to_string(&abs)
+                .with_context(|| format!("reading {}", abs.display()))?;
+            let old_ref = yaml_block::field_of(&text, "source", "rev")
+                .map(str::to_string)
+                .map(OldRef::Rev);
+            let updated = mutate_vendored_recipe(&text, version, sha)?;
+            std::fs::write(&abs, updated).with_context(|| format!("writing {}", abs.display()))?;
+            Ok(old_ref)
+        }
+        ReleaseTarget::Rosdistro {
+            package,
+            url,
+            tag,
+            version,
+        } => {
+            // The previous pin is read before `upsert` replaces the block.
+            let old_ref = read_if_exists(&abs)?
+                .as_deref()
+                .and_then(|t| yaml_block::field_of(t, package.as_str(), "tag"))
+                .map(str::to_string)
+                .map(OldRef::Tag);
+            upsert(
+                &abs,
+                &Entry {
+                    package,
+                    url,
+                    tag,
+                    version,
+                },
+            )?;
+            Ok(old_ref)
+        }
+        ReleaseTarget::PixiNative {
+            package,
+            url,
+            sha,
+            subdir,
+        } => {
+            let text = std::fs::read_to_string(&abs)
+                .with_context(|| format!("reading {}", abs.display()))?;
+            let old_ref = pixi_entry_rev(&text, package);
+            let updated = mutate_pixi_entry(&text, package, url, sha, subdir.as_deref())?;
+            std::fs::write(&abs, updated).with_context(|| format!("writing {}", abs.display()))?;
+            Ok(old_ref)
+        }
+    }
 }
 
 /// The pin a `pixi_native_packages.yaml` entry currently carries: `rev:` as an

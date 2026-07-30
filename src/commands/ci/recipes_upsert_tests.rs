@@ -534,8 +534,24 @@ fn write(root: &std::path::Path, rel: &str, body: &str) {
     std::fs::write(p, body).unwrap();
 }
 
+/// Route then apply, the pair a release actually runs. Returns the file the
+/// target writes and the pin it replaced.
+fn route_and_apply(
+    root: &std::path::Path,
+    package: &PackageName,
+    url: &GithubRepoUrl,
+    tag: &str,
+    version: &Version,
+    sha: &Sha40,
+    subdir: Option<&str>,
+) -> anyhow::Result<(std::path::PathBuf, Option<OldRef>)> {
+    let target = route(root, package, url, tag, version, sha, subdir)?;
+    let path = target.rel_path();
+    Ok((path, apply(root, &target)?))
+}
+
 #[test]
-fn apply_release_patches_vendored_recipe_when_present() {
+fn release_patches_vendored_recipe_when_present() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -543,7 +559,7 @@ fn apply_release_patches_vendored_recipe_when_present() {
         "vendor_recipes/is-core/recipe.yaml",
         "package:\n  name: is-core\n  version: 1.0.0\n\nsource:\n  git: https://github.com/example/is-core.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 2\n",
     );
-    let applied = apply_release(
+    let (path, old_ref) = route_and_apply(
         root,
         &pkg("is-core"),
         &url("https://github.com/example/is-core.git"),
@@ -554,12 +570,12 @@ fn apply_release_patches_vendored_recipe_when_present() {
     )
     .unwrap();
     assert_eq!(
-        applied.path,
+        path,
         std::path::Path::new("vendor_recipes/is-core/recipe.yaml")
     );
     // Old ref is the source.rev the recipe pinned before this release.
     assert_eq!(
-        applied.old_ref,
+        old_ref,
         Some(OldRef::Rev(
             "0000000000000000000000000000000000000000".into()
         ))
@@ -573,7 +589,7 @@ fn apply_release_patches_vendored_recipe_when_present() {
 }
 
 #[test]
-fn apply_release_updates_existing_pixi_native_entry() {
+fn release_updates_existing_pixi_native_entry() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -581,7 +597,7 @@ fn apply_release_updates_existing_pixi_native_entry() {
         "pixi_native_packages.yaml",
         "rebuild_epoch: 0\n\npackages:\n  - name: mise\n    url: https://github.com/greenroom-robotics/mise\n    rev: 0000000000000000000000000000000000000000\n",
     );
-    let applied = apply_release(
+    let (path, old_ref) = route_and_apply(
         root,
         &pkg("mise"),
         &url("https://github.com/greenroom-robotics/mise"),
@@ -591,12 +607,9 @@ fn apply_release_updates_existing_pixi_native_entry() {
         None,
     )
     .unwrap();
+    assert_eq!(path, std::path::Path::new("pixi_native_packages.yaml"));
     assert_eq!(
-        applied.path,
-        std::path::Path::new("pixi_native_packages.yaml")
-    );
-    assert_eq!(
-        applied.old_ref,
+        old_ref,
         Some(OldRef::Rev(
             "0000000000000000000000000000000000000000".into()
         ))
@@ -607,7 +620,7 @@ fn apply_release_updates_existing_pixi_native_entry() {
 }
 
 #[test]
-fn apply_release_updates_existing_rosdistro_entry() {
+fn release_updates_existing_rosdistro_entry() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -620,7 +633,7 @@ fn apply_release_updates_existing_rosdistro_entry() {
         "rosdistro_additional_recipes.yaml",
         "foo_pkg:\n  url: https://github.com/example/foo_pkg.git\n  tag: 0.1.0\n  version: 0.1.0\n",
     );
-    let applied = apply_release(
+    let (path, old_ref) = route_and_apply(
         root,
         &pkg("foo_pkg"),
         &url("https://github.com/example/foo_pkg.git"),
@@ -631,17 +644,17 @@ fn apply_release_updates_existing_rosdistro_entry() {
     )
     .unwrap();
     assert_eq!(
-        applied.path,
+        path,
         std::path::Path::new("rosdistro_additional_recipes.yaml")
     );
     // rosdistro pins a tag; old ref is the previous tag.
-    assert_eq!(applied.old_ref, Some(OldRef::Tag("0.1.0".into())));
+    assert_eq!(old_ref, Some(OldRef::Tag("0.1.0".into())));
     let out = std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml")).unwrap();
     assert!(out.contains("tag: v0.2.0") && out.contains("version: 0.2.0"));
 }
 
 #[test]
-fn apply_release_defaults_brand_new_package_to_pixi_native() {
+fn release_defaults_brand_new_package_to_pixi_native() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -649,7 +662,7 @@ fn apply_release_defaults_brand_new_package_to_pixi_native() {
         "pixi_native_packages.yaml",
         "rebuild_epoch: 0\n\npackages:\n  - name: existing\n    url: https://example.invalid/existing\n    rev: 0000000000000000000000000000000000000000\n",
     );
-    let applied = apply_release(
+    let (path, old_ref) = route_and_apply(
         root,
         &pkg("newpkg"),
         &url("https://github.com/example/newpkg.git"),
@@ -659,12 +672,9 @@ fn apply_release_defaults_brand_new_package_to_pixi_native() {
         Some("packages/newpkg"),
     )
     .unwrap();
-    assert_eq!(
-        applied.path,
-        std::path::Path::new("pixi_native_packages.yaml")
-    );
+    assert_eq!(path, std::path::Path::new("pixi_native_packages.yaml"));
     // Brand-new package had no prior pin.
-    assert_eq!(applied.old_ref, None);
+    assert_eq!(old_ref, None);
     let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
     assert!(out.contains("- name: newpkg"));
     assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
@@ -672,12 +682,12 @@ fn apply_release_defaults_brand_new_package_to_pixi_native() {
 }
 
 #[test]
-fn apply_release_errors_when_pixi_native_absent() {
+fn release_errors_when_pixi_native_absent() {
     // Brand-new package, no vendored recipe, and no pixi_native_packages.yaml
     // to append to -> loud error rather than silently writing nothing.
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
-    let err = apply_release(
+    let err = route_and_apply(
         root,
         &pkg("newpkg"),
         &url("https://github.com/example/newpkg.git"),
@@ -691,7 +701,7 @@ fn apply_release_errors_when_pixi_native_absent() {
 }
 
 #[test]
-fn apply_release_resolves_hyphenated_vendored_dir() {
+fn release_resolves_hyphenated_vendored_dir() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -700,7 +710,7 @@ fn apply_release_resolves_hyphenated_vendored_dir() {
         "package:\n  name: deepstream-extensions\n  version: 1.0.1\n\nsource:\n  git: https://github.com/example/pp.git\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 0\n",
     );
     // Called with the underscore ROS/tag name; must resolve the hyphen dir.
-    let applied = apply_release(
+    let (path, _old_ref) = route_and_apply(
         root,
         &pkg("deepstream_extensions"),
         &url("https://github.com/example/pp.git"),
@@ -711,7 +721,7 @@ fn apply_release_resolves_hyphenated_vendored_dir() {
     )
     .unwrap();
     assert_eq!(
-        applied.path,
+        path,
         std::path::Path::new("vendor_recipes/deepstream-extensions/recipe.yaml")
     );
     let out =
@@ -720,4 +730,75 @@ fn apply_release_resolves_hyphenated_vendored_dir() {
     assert!(out.contains("version: 1.1.0"));
     assert!(out.contains("rev: 1111111111111111111111111111111111111111"));
     assert!(out.contains("number: 0"));
+}
+
+#[test]
+fn route_picks_pixi_native_over_rosdistro_when_both_list_the_package() {
+    // A package that got migrated keeps its stale rosdistro block; the
+    // pixi-native entry wins, and the routing decision says so before
+    // anything is written.
+    let td = tempfile::TempDir::new().unwrap();
+    let root = td.path();
+    write(
+        root,
+        "pixi_native_packages.yaml",
+        "packages:\n  - name: both\n    url: https://github.com/example/both\n    rev: 0000000000000000000000000000000000000000\n",
+    );
+    write(
+        root,
+        "rosdistro_additional_recipes.yaml",
+        "both:\n  url: https://github.com/example/both.git\n  tag: 0.1.0\n  version: 0.1.0\n",
+    );
+    let target = route(
+        root,
+        &pkg("both"),
+        &url("https://github.com/example/both.git"),
+        "v0.2.0",
+        &ver("0.2.0"),
+        &sha("1111111111111111111111111111111111111111"),
+        None,
+    )
+    .unwrap();
+    assert!(matches!(target, ReleaseTarget::PixiNative { .. }));
+    assert_eq!(
+        target.rel_path(),
+        std::path::Path::new("pixi_native_packages.yaml")
+    );
+    // The rosdistro file is untouched: routing does not write.
+    assert!(
+        std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml"))
+            .unwrap()
+            .contains("tag: 0.1.0")
+    );
+}
+
+#[test]
+fn route_carries_only_the_facts_its_arm_records() {
+    // The vendored recipe keeps its own source.git, so no url or tag reaches
+    // the target; only the version and the sha it pins do.
+    let td = tempfile::TempDir::new().unwrap();
+    let root = td.path();
+    write(
+        root,
+        "vendor_recipes/vend/recipe.yaml",
+        "package:\n  name: vend\n  version: 1.0.0\n\nsource:\n  rev: 0000000000000000000000000000000000000000\n\nbuild:\n  number: 0\n",
+    );
+    let target = route(
+        root,
+        &pkg("vend"),
+        &url("https://github.com/example/vend.git"),
+        "v1.1.0",
+        &ver("1.1.0"),
+        &sha("1111111111111111111111111111111111111111"),
+        Some("packages/vend"),
+    )
+    .unwrap();
+    assert_eq!(
+        target,
+        ReleaseTarget::Vendored {
+            recipe_rel: std::path::PathBuf::from("vendor_recipes/vend/recipe.yaml"),
+            version: ver("1.1.0"),
+            sha: sha("1111111111111111111111111111111111111111"),
+        }
+    );
 }

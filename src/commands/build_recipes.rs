@@ -584,7 +584,7 @@ fn build_local_dep(
 }
 
 /// A pixi-native entry selected for building, along with the info needed to
-/// order it relative to other builds (see `topo_sort_builds`).
+/// order it relative to other builds (see [`BuildPlan::new`]).
 #[derive(Debug)]
 pub(crate) struct BuildItem<'a> {
     pub entry: &'a PixiNativeEntry,
@@ -597,9 +597,42 @@ pub(crate) struct BuildItem<'a> {
     pub pin_dep_names: Vec<PackageName>,
 }
 
-/// Order build items so same-repo dependency targets build before consumers.
-/// Path-dep edge: consumer.subdir/rel_path (normalized) == target.subdir, same
-/// url. Pin edge: consumer's `==` pin key == target `entry.name`, same url.
+/// The build order, as a value.
+///
+/// The only constructor is [`BuildPlan::new`], which *is* the topological sort,
+/// so holding one is proof that every same-repo dependency target precedes its
+/// consumers. The build loop iterates it and does not re-check; a dependency
+/// cycle is rejected here, at the end of the check phase, before any build has
+/// run.
+#[derive(Debug)]
+pub(crate) struct BuildPlan<'a>(Vec<BuildItem<'a>>);
+
+impl<'a> BuildPlan<'a> {
+    /// Order build items so same-repo dependency targets build before
+    /// consumers. Path-dep edge: consumer.subdir/rel_path (normalized) ==
+    /// target.subdir, same url. Pin edge: consumer's `==` pin key == target
+    /// `entry.name`, same url. Errors if those edges form a cycle.
+    fn new(items: Vec<BuildItem<'a>>) -> anyhow::Result<Self> {
+        topo_sort_builds(items).map(Self)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl<'a> IntoIterator for BuildPlan<'a> {
+    type Item = BuildItem<'a>;
+    type IntoIter = std::vec::IntoIter<BuildItem<'a>>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
     use crate::commands::ci::siblings::normalize;
 
@@ -1231,18 +1264,24 @@ fn pixi(
         }
     }
 
-    if to_build.is_empty() {
+    // End of the check phase: everything below consumes the plan and performs
+    // side effects, so the dependency order (and any cycle) is settled here.
+    // A cycle is reported with the entries that were in the failing set — the
+    // ordinary "building N entries" line below is never reached in that case,
+    // and a cycle is undiagnosable without knowing what was being ordered.
+    let queued = to_build.len();
+    let plan = BuildPlan::new(to_build)
+        .with_context(|| format!("ordering {queued} entries: {}", build_labels.join(", ")))?;
+    if plan.is_empty() {
         tracing::info!("nothing to build");
         return Ok(());
     }
 
     tracing::info!(
         "building {} entries: {}",
-        to_build.len(),
+        plan.len(),
         build_labels.join(", "),
     );
-
-    let to_build = topo_sort_builds(to_build)?;
 
     // Dep satisfaction deliberately only consults the default channel, same as
     // before routing was introduced: routing decides where an artifact is
@@ -1251,7 +1290,7 @@ fn pixi(
 
     let output_channel = LocalChannel::new(&abs_output);
     let mut built_this_job: BTreeSet<PackageName> = BTreeSet::new();
-    for item in to_build {
+    for item in plan {
         let entry = item.entry;
         let effective_build = item.effective_build;
         tracing::debug!("building {} (build order name: {})", entry.name, item.name);

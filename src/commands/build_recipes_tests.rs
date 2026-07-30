@@ -131,7 +131,7 @@ fn channel_index_empty_channel_publishes_nothing() {
 }
 
 #[test]
-fn topo_sort_builds_orders_same_repo_path_deps() {
+fn build_plan_orders_same_repo_path_deps() {
     let lib = test_entry("lib", "packages/lib");
     let node = test_entry("node", "packages/node");
     let items = vec![
@@ -150,13 +150,13 @@ fn topo_sort_builds_orders_same_repo_path_deps() {
             pin_dep_names: vec![],
         },
     ];
-    let sorted = topo_sort_builds(items).unwrap();
+    let sorted: Vec<BuildItem> = BuildPlan::new(items).unwrap().into_iter().collect();
     assert_eq!(sorted[0].name.as_str(), "lib");
     assert_eq!(sorted[1].name.as_str(), "node");
 }
 
 #[test]
-fn topo_sort_builds_orders_same_repo_pin_deps() {
+fn build_plan_orders_same_repo_pin_deps() {
     // node pins lib by its channel artifact name (entry.name), not a path.
     let lib = test_entry("lib", "packages/lib");
     let node = test_entry("node", "packages/node");
@@ -176,13 +176,13 @@ fn topo_sort_builds_orders_same_repo_pin_deps() {
             pin_dep_names: vec![],
         },
     ];
-    let sorted = topo_sort_builds(items).unwrap();
+    let sorted: Vec<BuildItem> = BuildPlan::new(items).unwrap().into_iter().collect();
     assert_eq!(sorted[0].name.as_str(), "lib");
     assert_eq!(sorted[1].name.as_str(), "node");
 }
 
 #[test]
-fn topo_sort_builds_rejects_cycles() {
+fn build_plan_rejects_cycles() {
     let a = test_entry("a", "packages/a");
     let b = test_entry("b", "packages/b");
     let items = vec![
@@ -202,7 +202,7 @@ fn topo_sort_builds_rejects_cycles() {
         },
     ];
     assert!(
-        topo_sort_builds(items)
+        BuildPlan::new(items)
             .unwrap_err()
             .to_string()
             .contains("cycle")

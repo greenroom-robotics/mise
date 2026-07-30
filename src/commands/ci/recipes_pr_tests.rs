@@ -9,19 +9,19 @@ fn sha(hex_digit: char) -> Sha40 {
 }
 
 #[test]
-fn release_target_vendored_when_no_manifest() {
+fn release_mode_vendored_when_no_manifest() {
     let td = tempfile::TempDir::new().unwrap();
     let pkgs = td.path().join("packages");
     std::fs::create_dir_all(&pkgs).unwrap();
     // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
     assert_eq!(
-        release_target(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
-        ReleaseTarget::VendoredByName(pkg("deepstream_extensions"))
+        release_mode(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
+        ReleaseMode::VendoredByName(pkg("deepstream_extensions"))
     );
 }
 
 #[test]
-fn release_target_discovered_when_per_package_manifest_exists() {
+fn release_mode_discovered_when_per_package_manifest_exists() {
     let td = tempfile::TempDir::new().unwrap();
     let pkgs = td.path().join("packages");
     std::fs::create_dir_all(pkgs.join("object_tracker")).unwrap();
@@ -31,13 +31,13 @@ fn release_target_discovered_when_per_package_manifest_exists() {
     )
     .unwrap();
     assert_eq!(
-        release_target(&pkgs, Some(&pkg("object_tracker"))).unwrap(),
-        ReleaseTarget::Discovered
+        release_mode(&pkgs, Some(&pkg("object_tracker"))).unwrap(),
+        ReleaseMode::Discovered
     );
 }
 
 #[test]
-fn release_target_vendored_when_manifest_is_workspace_only() {
+fn release_mode_vendored_when_manifest_is_workspace_only() {
     // deepstream_extensions ships a dev-env pixi.toml (no [package]) so it
     // can be built with colcon in a DS container, but its conda artifact
     // still comes from vendor_recipes/. The manifest's mere existence must
@@ -51,13 +51,13 @@ fn release_target_vendored_when_manifest_is_workspace_only() {
     )
     .unwrap();
     assert_eq!(
-        release_target(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
-        ReleaseTarget::VendoredByName(pkg("deepstream_extensions"))
+        release_mode(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
+        ReleaseMode::VendoredByName(pkg("deepstream_extensions"))
     );
 }
 
 #[test]
-fn release_target_discovered_for_root_package_repo() {
+fn release_mode_discovered_for_root_package_repo() {
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     std::fs::write(
@@ -66,17 +66,17 @@ fn release_target_discovered_for_root_package_repo() {
     )
     .unwrap();
     assert_eq!(
-        release_target(root, Some(&pkg("mise"))).unwrap(),
-        ReleaseTarget::Discovered
+        release_mode(root, Some(&pkg("mise"))).unwrap(),
+        ReleaseMode::Discovered
     );
 }
 
 #[test]
-fn release_target_discovered_when_no_package_filter() {
+fn release_mode_discovered_when_no_package_filter() {
     let td = tempfile::TempDir::new().unwrap();
     assert_eq!(
-        release_target(td.path(), None).unwrap(),
-        ReleaseTarget::Discovered
+        release_mode(td.path(), None).unwrap(),
+        ReleaseMode::Discovered
     );
 }
 
@@ -84,7 +84,7 @@ fn release_target_discovered_when_no_package_filter() {
 fn recipe_action_applies_for_discovered() {
     // Discovered packages always apply, regardless of has_recipe/allow.
     assert_eq!(
-        recipe_action(&ReleaseTarget::Discovered, false, false),
+        recipe_action(&ReleaseMode::Discovered, false, false),
         RecipeAction::Apply
     );
 }
@@ -92,7 +92,7 @@ fn recipe_action_applies_for_discovered() {
 #[test]
 fn recipe_action_applies_for_vendored_with_recipe() {
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), true, false),
+        recipe_action(&ReleaseMode::VendoredByName(pkg("x")), true, false),
         RecipeAction::Apply
     );
 }
@@ -101,7 +101,7 @@ fn recipe_action_applies_for_vendored_with_recipe() {
 fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
     // No recipe + not allowed to miss (explicit target) -> loud error.
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), false, false),
+        recipe_action(&ReleaseMode::VendoredByName(pkg("x")), false, false),
         RecipeAction::Error
     );
 }
@@ -110,7 +110,7 @@ fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
 fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
     // No recipe + allowed to miss (sweep) -> skip quietly.
     assert_eq!(
-        recipe_action(&ReleaseTarget::VendoredByName(pkg("x")), false, true),
+        recipe_action(&ReleaseMode::VendoredByName(pkg("x")), false, true),
         RecipeAction::Skip
     );
 }

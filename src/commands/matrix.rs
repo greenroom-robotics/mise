@@ -79,17 +79,14 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     let changed = gh::changed_files(&repo, &event)?;
 
     let run_id = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| "0".into());
-    let mut state = classify(&changed, &ds);
-    if state.pixi_native == PixiScope::ManifestScoped {
-        state.pixi_native = resolve_pixi_scope(&repo, &event)?;
-    }
-    let entries = build_matrix(&state, &manifest, &run_id);
+    let plan = resolve(classify(&changed, &ds), &repo, &event)?;
+    let entries = build_matrix(&plan, &manifest, &run_id);
 
     let has_work = !entries.is_empty();
     let entries = if has_work {
         entries
     } else {
-        vec![placeholder_entry(&run_id)]
+        vec![MatrixRow::should_not_run(&run_id)]
     };
 
     let matrix_json = serde_json::to_string(&serde_json::json!({ "include": entries }))?;
@@ -100,13 +97,13 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
         .collect::<Vec<_>>()
         .join(",");
 
-    let pixi_only = match &state.pixi_native {
+    let pixi_only = match &plan.pixi_native {
         PixiScope::Only(names) => names
             .iter()
             .map(PackageName::as_str)
             .collect::<Vec<_>>()
             .join(","),
-        _ => String::new(),
+        PixiScope::All | PixiScope::None => String::new(),
     };
 
     gh::outputs::set("matrix-json", &matrix_json)?;
@@ -120,62 +117,178 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn placeholder_entry(run_id: &str) -> MatrixEntry {
-    MatrixEntry {
-        pipeline: Pipeline::ShouldNotRun,
-        target_platform: Arch::Linux64,
-        ds_version: String::new(),
-        ds_image: String::new(),
-        runner: format!("runs-on={run_id}/runner=1cpu-linux-x64"),
-        runner_size: String::new(),
-        artifact_name: "should-not-run".into(),
-    }
-}
-
+/// The `pipeline` field of a row, and the only thing the consuming workflow
+/// switches on. Several [`RowKind`]s map onto one pipeline, so this is derived
+/// from the kind rather than stored beside it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Pipeline {
+enum Pipeline {
     Vinca,
     PixiNative,
     /// Sentinel emitted when there is no work — trips a guard step in CI.
     ShouldNotRun,
 }
 
-/// One row of the matrix JSON output. Field names mirror the original Python
-/// (kebab-case) so the consuming workflow YAML keeps working unchanged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct MatrixEntry {
-    pub pipeline: Pipeline,
-    #[serde(rename = "target-platform")]
-    pub target_platform: Arch,
-    /// Empty string for non-DS rows (matches Python output exactly).
-    #[serde(rename = "ds-version")]
-    pub ds_version: String,
-    #[serde(rename = "ds-image")]
-    pub ds_image: String,
-    pub runner: String,
-    /// Empty for vinca and DS rows; one of "4cpu", "8cpu", "16cpu", "32cpu" for pixi-native rows.
-    #[serde(rename = "runner-size")]
-    pub runner_size: String,
-    #[serde(rename = "artifact-name")]
-    pub artifact_name: String,
+/// What a matrix row is for, carrying exactly the fields that kind of row has.
+///
+/// The serialized shape still spells the absent fields as `""` (see
+/// [`MatrixRow`]'s `Serialize`), but that shape exists only at the JSON
+/// boundary: a runner size on a vinca row, or a DeepStream image on a
+/// pixi-native one, has nowhere to live in this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RowKind {
+    /// A plain vinca/rattler build of `recipes/`.
+    Vinca,
+    /// A pixi-native build job, which handles every entry of one runner size.
+    PixiNative { runner: RunnerSize },
+    /// A vinca build of the DeepStream recipes against one DS version. The
+    /// container image is a function of the version ([`ds_image_for`]) and so
+    /// is derived rather than stored — the two cannot disagree.
+    Deepstream { version: DeepstreamVersion },
+    /// No work: one placeholder row, because an empty matrix is an error to
+    /// GitHub Actions.
+    ShouldNotRun,
 }
 
+impl RowKind {
+    fn pipeline(&self) -> Pipeline {
+        match self {
+            // A DeepStream row runs the vinca pipeline; the DS axis is a
+            // variant of it, not a pipeline of its own.
+            Self::Vinca | Self::Deepstream { .. } => Pipeline::Vinca,
+            Self::PixiNative { .. } => Pipeline::PixiNative,
+            Self::ShouldNotRun => Pipeline::ShouldNotRun,
+        }
+    }
+}
+
+/// One row of the matrix JSON output.
+///
+/// Fields are private and the constructors below are the only way to make one,
+/// so `runner` and `artifact_name` are always the strings that this kind of row
+/// on this arch is supposed to carry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatrixRow {
+    kind: RowKind,
+    target_platform: Arch,
+    runner: String,
+    artifact_name: String,
+}
+
+impl MatrixRow {
+    fn vinca(arch: Arch, runner_tmpl: &str, run_id: &str) -> Self {
+        Self {
+            kind: RowKind::Vinca,
+            target_platform: arch,
+            runner: runner_tmpl.replace("{run_id}", run_id),
+            artifact_name: format!("build-{arch}"),
+        }
+    }
+
+    fn pixi_native(arch: Arch, runner: RunnerSize, run_id: &str) -> Self {
+        let tag = ds_arch_tag(arch);
+        Self {
+            kind: RowKind::PixiNative { runner },
+            target_platform: arch,
+            runner: format!("runs-on={run_id}/runner={runner}-linux-{tag}"),
+            artifact_name: format!("build-pixi-native-{arch}-{runner}"),
+        }
+    }
+
+    fn deepstream(arch: Arch, version: DeepstreamVersion, run_id: &str) -> Self {
+        let tag = ds_arch_tag(arch);
+        let family = ds_runner_family(arch);
+        Self {
+            kind: RowKind::Deepstream { version },
+            target_platform: arch,
+            runner: format!("runs-on={run_id}/family={family}/image=deepstream-{tag}-{version}"),
+            artifact_name: format!("build-deepstream-{arch}-ds{version}"),
+        }
+    }
+
+    fn should_not_run(run_id: &str) -> Self {
+        Self {
+            kind: RowKind::ShouldNotRun,
+            target_platform: Arch::Linux64,
+            runner: format!("runs-on={run_id}/runner=1cpu-linux-x64"),
+            artifact_name: "should-not-run".into(),
+        }
+    }
+}
+
+/// Field names mirror the original Python (kebab-case) and every row carries
+/// every key, with `""` where the kind has no such field, so the consuming
+/// workflow YAML keeps working unchanged. This is the *only* place that shape
+/// exists.
+impl Serialize for MatrixRow {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let (ds_version, ds_image) = match &self.kind {
+            RowKind::Deepstream { version } => (version.to_string(), ds_image_for(*version)),
+            _ => (String::new(), ""),
+        };
+        let runner_size = match &self.kind {
+            RowKind::PixiNative { runner } => runner.to_string(),
+            _ => String::new(),
+        };
+        let mut row = s.serialize_struct("MatrixRow", 7)?;
+        row.serialize_field("pipeline", &self.kind.pipeline())?;
+        row.serialize_field("target-platform", &self.target_platform)?;
+        row.serialize_field("ds-version", &ds_version)?;
+        row.serialize_field("ds-image", ds_image)?;
+        row.serialize_field("runner", &self.runner)?;
+        row.serialize_field("runner-size", &runner_size)?;
+        row.serialize_field("artifact-name", &self.artifact_name)?;
+        row.end()
+    }
+}
+
+/// How much pixi-native work the changed files imply, as far as the file list
+/// alone can say. [`RawScope::ManifestScoped`] still needs the manifest diffed
+/// against the base ref, which is IO — so this is what [`classify`] returns and
+/// [`resolve`] consumes.
+///
+/// Note there is no `Only` arm: naming packages requires that diff, so a raw
+/// scope cannot claim to know them.
 #[derive(Debug, Default, PartialEq, Eq)]
-enum PixiScope {
+enum RawScope {
     /// No pixi-native work.
     #[default]
     None,
     /// Build every package (dispatch, or a global file changed).
     All,
-    /// `pixi_native_packages.yaml` changed; specific names resolved by `compute()`.
+    /// `pixi_native_packages.yaml` changed; which entries changed is not known
+    /// until the manifest is diffed against the base ref.
     ManifestScoped,
-    /// Build only the named packages.
+}
+
+/// Which pixi-native packages to build — the resolved form, the only one
+/// [`build_matrix`] accepts. Reaching it costs a [`resolve`] call, so a scope
+/// that still needs resolving cannot be built from.
+#[derive(Debug, Default, PartialEq, Eq)]
+enum PixiScope {
+    /// No pixi-native work.
+    #[default]
+    None,
+    /// Build every package.
+    All,
+    /// Build only the named packages. Non-empty: an empty change set resolves
+    /// to `None` instead.
     Only(BTreeSet<PackageName>),
 }
 
+/// What the changed-file list alone says about this run.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct MatrixState {
+struct RawState {
+    vinca: bool,
+    pixi_native: RawScope,
+    ds_versions: BTreeSet<DeepstreamVersion>,
+}
+
+/// A [`RawState`] with its pixi-native scope resolved: everything
+/// [`build_matrix`] needs, and nothing left to look up.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct MatrixPlan {
     vinca: bool,
     pixi_native: PixiScope,
     ds_versions: BTreeSet<DeepstreamVersion>,
@@ -234,13 +347,29 @@ fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScop
     }
 }
 
-fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
-    let mut state = MatrixState::default();
+/// The parse stage's last step: consume the raw classification and produce the
+/// plan. Only `ManifestScoped` costs any IO; the other arms already say all
+/// there is to say.
+fn resolve(raw: RawState, repo: &Repo, event: &gh::Event) -> anyhow::Result<MatrixPlan> {
+    let pixi_native = match raw.pixi_native {
+        RawScope::None => PixiScope::None,
+        RawScope::All => PixiScope::All,
+        RawScope::ManifestScoped => resolve_pixi_scope(repo, event)?,
+    };
+    Ok(MatrixPlan {
+        vinca: raw.vinca,
+        pixi_native,
+        ds_versions: raw.ds_versions,
+    })
+}
+
+fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
+    let mut state = RawState::default();
 
     let paths: &[std::path::PathBuf] = match changed {
         ChangedFiles::All => {
             state.vinca = true;
-            state.pixi_native = PixiScope::All;
+            state.pixi_native = RawScope::All;
             state.ds_versions = ds.versions.clone();
             return state;
         }
@@ -261,7 +390,7 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
                 .any(|prefix| p.starts_with(prefix))
         {
             state.vinca = true;
-            state.pixi_native = PixiScope::All;
+            state.pixi_native = RawScope::All;
             state.ds_versions.extend(ds.versions.iter().copied());
             continue;
         }
@@ -279,8 +408,8 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
             continue;
         }
         if p == PIXI_NATIVE_PACKAGES_YAML {
-            if state.pixi_native != PixiScope::All {
-                state.pixi_native = PixiScope::ManifestScoped;
+            if state.pixi_native != RawScope::All {
+                state.pixi_native = RawScope::ManifestScoped;
             }
             continue;
         }
@@ -303,28 +432,18 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
     state
 }
 
-fn build_matrix(
-    state: &MatrixState,
-    manifest: &PixiNativeManifest,
-    run_id: &str,
-) -> Vec<MatrixEntry> {
+fn build_matrix(plan: &MatrixPlan, manifest: &PixiNativeManifest, run_id: &str) -> Vec<MatrixRow> {
     let mut out = Vec::new();
 
-    if state.vinca {
+    if plan.vinca {
         for (arch, runner_tmpl) in ARCHS {
-            out.push(MatrixEntry {
-                pipeline: Pipeline::Vinca,
-                target_platform: *arch,
-                ds_version: String::new(),
-                ds_image: String::new(),
-                runner: runner_tmpl.replace("{run_id}", run_id),
-                runner_size: String::new(),
-                artifact_name: format!("build-{arch}"),
-            });
+            out.push(MatrixRow::vinca(*arch, runner_tmpl, run_id));
         }
     }
 
-    let pixi_sizes: BTreeSet<RunnerSize> = match &state.pixi_native {
+    // One job per distinct runner size, not per package: each job builds every
+    // entry of its size.
+    let pixi_sizes: BTreeSet<RunnerSize> = match &plan.pixi_native {
         PixiScope::All => manifest.packages.iter().map(|e| e.runner_size).collect(),
         PixiScope::Only(names) => manifest
             .packages
@@ -332,37 +451,17 @@ fn build_matrix(
             .filter(|e| names.contains(&e.name))
             .map(|e| e.runner_size)
             .collect(),
-        PixiScope::None | PixiScope::ManifestScoped => BTreeSet::new(),
+        PixiScope::None => BTreeSet::new(),
     };
     for size in pixi_sizes {
-        let size_str = size.to_string();
         for (arch, _) in ARCHS {
-            let tag = ds_arch_tag(*arch);
-            out.push(MatrixEntry {
-                pipeline: Pipeline::PixiNative,
-                target_platform: *arch,
-                ds_version: String::new(),
-                ds_image: String::new(),
-                runner: format!("runs-on={run_id}/runner={size_str}-linux-{tag}"),
-                runner_size: size_str.clone(),
-                artifact_name: format!("build-pixi-native-{arch}-{size_str}"),
-            });
+            out.push(MatrixRow::pixi_native(*arch, size, run_id));
         }
     }
 
-    for ver in &state.ds_versions {
+    for ver in &plan.ds_versions {
         for (arch, _) in ARCHS {
-            let tag = ds_arch_tag(*arch);
-            let family = ds_runner_family(*arch);
-            out.push(MatrixEntry {
-                pipeline: Pipeline::Vinca,
-                target_platform: *arch,
-                ds_version: ver.to_string(),
-                ds_image: ds_image_for(*ver).to_string(),
-                runner: format!("runs-on={run_id}/family={family}/image=deepstream-{tag}-{ver}"),
-                runner_size: String::new(),
-                artifact_name: format!("build-deepstream-{arch}-ds{ver}"),
-            });
+            out.push(MatrixRow::deepstream(*arch, *ver, run_id));
         }
     }
 

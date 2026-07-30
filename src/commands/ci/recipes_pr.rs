@@ -63,10 +63,10 @@ impl RecipesPr {
         // it is also where the source repo's remote is read from.
         let cwd = std::env::current_dir()?;
 
-        let mode = release_target(&self.package_dir, self.package.as_ref())?;
+        let mode = release_mode(&self.package_dir, self.package.as_ref())?;
         let targets: Vec<(PackageName, Option<String>)> = match &mode {
-            ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
-            ReleaseTarget::Discovered => {
+            ReleaseMode::VendoredByName(name) => vec![(name.clone(), None)],
+            ReleaseMode::Discovered => {
                 let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
                 if pkgs.is_empty() {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
@@ -154,7 +154,7 @@ impl RecipesPr {
         let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
         for (name, subdir) in &targets {
             // A vendored-by-name target with no recipe would otherwise fall
-            // through apply_release to a spurious pixi-native entry. Decide
+            // through routing to a spurious pixi-native entry. Decide
             // skip-vs-error based on whether this is a tolerant sweep.
             let has_recipe = recipes_upsert::vendored_recipe_path(&recipes_root, name).is_some();
             match recipe_action(&mode, has_recipe, self.allow_missing_recipe) {
@@ -169,7 +169,7 @@ impl RecipesPr {
                 ),
                 RecipeAction::Apply => {}
             }
-            let applied = recipes_upsert::apply_release(
+            let target = recipes_upsert::route(
                 &recipes_root,
                 name,
                 &src_url,
@@ -178,8 +178,8 @@ impl RecipesPr {
                 &self.sha,
                 subdir.as_deref(),
             )?;
-            changed.insert(applied.path);
-            old_refs.extend(applied.old_ref);
+            changed.insert(target.rel_path());
+            old_refs.extend(recipes_upsert::apply(&recipes_root, &target)?);
             released.insert(name.clone(), tag.clone());
         }
 
@@ -328,9 +328,12 @@ fn release_title(
 /// 256-char title cap.
 const MAX_TITLE_CHARS: usize = 72;
 
-/// How `recipes-pr` sources the package(s) to release.
+/// How `recipes-pr` sources the package(s) to release. Distinct from
+/// [`recipes_upsert::ReleaseTarget`], which is where one package's release
+/// *lands* in the recipes repo — this only says where the list of packages
+/// comes from.
 #[derive(Debug, PartialEq, Eq)]
-enum ReleaseTarget {
+enum ReleaseMode {
     /// Discover pixi packages under `--package-dir` (existing behavior).
     Discovered,
     /// A single package named by `--package` that has no monorepo pixi.toml;
@@ -355,21 +358,21 @@ fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
     ))
 }
 
-/// Choose the release target. A `--package` with neither a per-package
+/// Choose the release mode. A `--package` with neither a per-package
 /// `<dir>/<pkg>/pixi.toml` nor a root `<dir>/pixi.toml` *declaring a package*
 /// is a vendored monorepo package; everything else discovers as before.
-fn release_target(
+fn release_mode(
     package_dir: &std::path::Path,
     package: Option<&PackageName>,
-) -> anyhow::Result<ReleaseTarget> {
+) -> anyhow::Result<ReleaseMode> {
     match package {
         Some(pkg)
             if !declares_package_at(&package_dir.join(pkg.as_str()).join(PIXI_TOML))?
                 && !declares_package_at(&package_dir.join(PIXI_TOML))? =>
         {
-            Ok(ReleaseTarget::VendoredByName(pkg.clone()))
+            Ok(ReleaseMode::VendoredByName(pkg.clone()))
         }
-        _ => Ok(ReleaseTarget::Discovered),
+        _ => Ok(ReleaseMode::Discovered),
     }
 }
 
@@ -383,9 +386,9 @@ enum RecipeAction {
     Error,
 }
 
-fn recipe_action(mode: &ReleaseTarget, has_recipe: bool, allow_missing: bool) -> RecipeAction {
+fn recipe_action(mode: &ReleaseMode, has_recipe: bool, allow_missing: bool) -> RecipeAction {
     match mode {
-        ReleaseTarget::VendoredByName(_) if !has_recipe => {
+        ReleaseMode::VendoredByName(_) if !has_recipe => {
             if allow_missing {
                 RecipeAction::Skip
             } else {
