@@ -2,8 +2,6 @@ use clap::Subcommand;
 
 pub mod build;
 pub mod bump_pixi;
-pub mod packages;
-pub mod pixi_meta;
 pub mod recipes_pr;
 pub mod recipes_upsert;
 pub mod release;
@@ -11,6 +9,7 @@ pub mod siblings;
 pub mod sync_cargo;
 pub mod test;
 pub mod verify_siblings;
+mod yaml_block;
 
 use build::Build;
 use bump_pixi::BumpPixi;

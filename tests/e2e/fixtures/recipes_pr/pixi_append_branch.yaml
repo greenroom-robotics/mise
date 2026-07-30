@@ -1,0 +1,17 @@
+# Packages built straight from their own pixi manifests.
+rebuild_epoch: 0
+
+packages:
+  - name: existing_pkg
+    url: https://github.com/greenroom-robotics/existing_pkg.git
+    rev: 5555555555555555555555555555555555555555
+
+  - name: other_pkg
+    url: https://github.com/greenroom-robotics/mono.git
+    rev: 6666666666666666666666666666666666666666
+    subdir: packages/other_pkg
+
+  - name: pkg_two
+    url: https://github.com/greenroom-robotics/mono.git
+    rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    subdir: packages/pkg_two

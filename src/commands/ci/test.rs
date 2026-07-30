@@ -1,18 +1,17 @@
+use crate::manifest::Package;
 use anyhow::Context;
 use clap::Args;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
 pub struct Test {
     /// Single package name (default: all packages under --package-dir).
     #[arg(long)]
-    pub package: Option<String>,
+    pub package: Option<crate::types::PackageName>,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
-    /// ROS distro identifier (passed to pixi-env tasks).
-    #[arg(long, default_value = "kilted")]
-    pub ros_distro: String,
     /// Directory to collect JUnit XML test reports into.
     #[arg(long, default_value = "test-reports")]
     pub report_dir: PathBuf,
@@ -65,57 +64,62 @@ fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
 impl Test {
     pub fn run(self) -> anyhow::Result<()> {
         let jobs = parse_jobs(&self.jobs)?;
-        let pkgs =
-            crate::commands::ci::packages::discover(&self.package_dir, self.package.as_deref())?;
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
-        let mut failed = Vec::new();
-        for pixi in pkgs {
-            let pkg_dir = pixi.parent().unwrap();
-            for job in &jobs {
-                println!(
-                    "==> mise ci test :: {} [{}:{}]",
-                    pkg_dir.display(),
-                    job.env,
-                    job.task
-                );
-                // Lockfile satisfaction is strict by default; --no-locked
-                // opts out and re-resolves from the manifest instead.
-                let mut cmd = std::process::Command::new("pixi");
-                cmd.arg("run");
-                if self.locked {
-                    cmd.arg("--locked");
-                }
-                let status = cmd
-                    .arg("--manifest-path")
-                    .arg(&pixi)
-                    .arg("-e")
-                    .arg(&job.env)
-                    .arg(&job.task)
-                    .status()
-                    .map_err(|e| anyhow::anyhow!("failed to spawn pixi: {e}"))?;
-                // Collect reports after each job, namespaced by env, so variants
-                // that share the same colcon `build/` (e.g. standalone vs Boost
-                // Asio) don't overwrite each other's JUnit XML. Collect
-                // regardless of pass/fail so failing-test XML is captured too.
-                match collect_reports(pkg_dir, &self.report_dir, &job.env) {
-                    Ok(0) => eprintln!("    no JUnit XML found under {}/build", pkg_dir.display()),
-                    Ok(n) => println!(
-                        "    collected {n} report(s) into {}",
-                        self.report_dir.display()
-                    ),
-                    Err(e) => eprintln!("    failed to collect reports: {e:#}"),
-                }
-                if !status.success() {
-                    failed.push(format!("{} [{}:{}]", pkg_dir.display(), job.env, job.task));
-                }
-            }
-        }
+        let failed: Vec<String> = pkgs
+            .iter()
+            .flat_map(|pkg| jobs.iter().map(move |job| (pkg, job)))
+            .map(|(pkg, job)| self.run_job(pkg, job))
+            .filter_map(Result::transpose)
+            .collect::<anyhow::Result<_>>()?;
         if !failed.is_empty() {
             anyhow::bail!("tests failed for: {}", failed.join(", "));
         }
         Ok(())
+    }
+
+    /// Run one `<env>:<task>` against one package and collect its JUnit XML.
+    /// Returns the failure label when the job did not exit 0 — the exit code is
+    /// the test result, not an error, so a failing job (including one killed by
+    /// a signal, which ROS tests do manage) is reported alongside the others by
+    /// the caller rather than abandoning the remaining packages.
+    fn run_job(&self, pkg: &Package, job: &Job) -> anyhow::Result<Option<String>> {
+        let pkg_dir = &pkg.dir;
+        println!(
+            "==> mise ci test :: {} [{}:{}]",
+            pkg_dir.display(),
+            job.env,
+            job.task
+        );
+        // Lockfile satisfaction is strict by default; --no-locked opts out and
+        // re-resolves from the manifest instead.
+        let mut argv: Vec<&OsStr> = vec![OsStr::new("run")];
+        if self.locked {
+            argv.push(OsStr::new("--locked"));
+        }
+        argv.extend([
+            OsStr::new("--manifest-path"),
+            pkg.manifest_path.as_os_str(),
+            OsStr::new("-e"),
+            OsStr::new(&job.env),
+            OsStr::new(&job.task),
+        ]);
+        let code = crate::process::status_code("pixi", &argv)?;
+        // Collect reports after each job, namespaced by env, so variants that
+        // share the same colcon `build/` (e.g. standalone vs Boost Asio) don't
+        // overwrite each other's JUnit XML. Collect regardless of pass/fail so
+        // failing-test XML is captured too.
+        match collect_reports(pkg_dir, &self.report_dir, &job.env) {
+            Ok(0) => eprintln!("    no JUnit XML found under {}/build", pkg_dir.display()),
+            Ok(n) => println!(
+                "    collected {n} report(s) into {}",
+                self.report_dir.display()
+            ),
+            Err(e) => eprintln!("    failed to collect reports: {e:#}"),
+        }
+        Ok((code != Some(0)).then(|| format!("{} [{}:{}]", pkg_dir.display(), job.env, job.task)))
     }
 }
 
@@ -138,9 +142,7 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
         .unwrap_or_else(|| "package".into());
     let dest_root = report_dir.join(&pkg_name).join(env);
 
-    let mut xml = Vec::new();
-    find_xml(&build, &mut xml)?;
-
+    let xml = find_xml(&build)?;
     for src in &xml {
         let rel = src.strip_prefix(pkg_dir).unwrap_or(src);
         let dest = dest_root.join(rel);
@@ -154,8 +156,9 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
     Ok(xml.len())
 }
 
-/// Recursively collect `*.xml` files under `dir` into `out`.
-fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+/// Recursively collect `*.xml` files under `dir`.
+fn find_xml(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         if path.is_dir() {
@@ -164,7 +167,7 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
             if path.file_name().is_some_and(|n| n == "Testing") {
                 continue;
             }
-            find_xml(&path, out)?;
+            out.extend(find_xml(&path)?);
         } else if path.extension().is_some_and(|e| e == "xml")
             && path.file_name().is_some_and(|n| n != "package.xml")
         {
@@ -174,98 +177,9 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
             out.push(path);
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn collect_reports_copies_junit_xml_namespaced_by_package() {
-        let tmp = TempDir::new().unwrap();
-        let pkg_dir = tmp.path().join("packages/foo");
-        let results = pkg_dir.join("build/foo/test_results/foo");
-        fs::create_dir_all(&results).unwrap();
-        fs::write(results.join("foo.gtest.xml"), "<testsuite/>").unwrap();
-        // Non-XML files under build/ must be ignored.
-        fs::write(pkg_dir.join("build/foo/other.txt"), "x").unwrap();
-        // CTest's native Test.xml is not JUnit and must be excluded.
-        let ctest = pkg_dir.join("build/foo/Testing/20240101-0000");
-        fs::create_dir_all(&ctest).unwrap();
-        fs::write(ctest.join("Test.xml"), "<Site/>").unwrap();
-        // The ROS package manifest is not JUnit and must be excluded.
-        fs::write(pkg_dir.join("build/foo/package.xml"), "<package/>").unwrap();
-
-        let report_dir = tmp.path().join("test-reports");
-        let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
-
-        assert_eq!(n, 1);
-        let dest = report_dir.join("foo/tests/build/foo/test_results/foo/foo.gtest.xml");
-        assert!(dest.exists(), "expected {} to exist", dest.display());
-        assert_eq!(fs::read_to_string(&dest).unwrap(), "<testsuite/>");
-    }
-
-    #[test]
-    fn collect_reports_namespaces_by_env_so_variants_dont_collide() {
-        let tmp = TempDir::new().unwrap();
-        let pkg_dir = tmp.path().join("packages/foo");
-        let results = pkg_dir.join("build/foo/test_results/foo");
-        fs::create_dir_all(&results).unwrap();
-        let report_dir = tmp.path().join("test-reports");
-
-        // Standalone Asio run writes its XML, then the Boost run overwrites the
-        // same path in build/ — but each is collected under its own env dir.
-        fs::write(results.join("foo.gtest.xml"), "<standalone/>").unwrap();
-        collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
-        fs::write(results.join("foo.gtest.xml"), "<boost/>").unwrap();
-        collect_reports(&pkg_dir, &report_dir, "tests-boost").unwrap();
-
-        let standalone = report_dir.join("foo/tests/build/foo/test_results/foo/foo.gtest.xml");
-        let boost = report_dir.join("foo/tests-boost/build/foo/test_results/foo/foo.gtest.xml");
-        assert_eq!(fs::read_to_string(&standalone).unwrap(), "<standalone/>");
-        assert_eq!(fs::read_to_string(&boost).unwrap(), "<boost/>");
-    }
-
-    #[test]
-    fn collect_reports_returns_zero_when_no_build_dir() {
-        let tmp = TempDir::new().unwrap();
-        let pkg_dir = tmp.path().join("packages/empty");
-        fs::create_dir_all(&pkg_dir).unwrap();
-        let report_dir = tmp.path().join("test-reports");
-        let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
-        assert_eq!(n, 0);
-    }
-
-    #[test]
-    fn parse_jobs_defaults_to_default_test() {
-        let jobs = parse_jobs(&[]).unwrap();
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].env, "default");
-        assert_eq!(jobs[0].task, "test");
-    }
-
-    #[test]
-    fn parse_jobs_parses_env_task_pairs() {
-        let raw = vec!["tests:test".to_string(), "lint:lint".to_string()];
-        let jobs = parse_jobs(&raw).unwrap();
-        assert_eq!(jobs.len(), 2);
-        assert_eq!(
-            (jobs[0].env.as_str(), jobs[0].task.as_str()),
-            ("tests", "test")
-        );
-        assert_eq!(
-            (jobs[1].env.as_str(), jobs[1].task.as_str()),
-            ("lint", "lint")
-        );
-    }
-
-    #[test]
-    fn parse_jobs_rejects_malformed_specs() {
-        assert!(parse_jobs(&["noselector".to_string()]).is_err());
-        assert!(parse_jobs(&[":test".to_string()]).is_err());
-        assert!(parse_jobs(&["tests:".to_string()]).is_err());
-    }
-}
+#[path = "test_tests.rs"]
+mod tests;
