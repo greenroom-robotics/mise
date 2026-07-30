@@ -1,5 +1,11 @@
 use clap::Args;
+use std::ffi::OsStr;
 use std::path::PathBuf;
+
+use crate::consts::{ORIGIN, PIXI_TOML, RECIPES_REPO};
+use crate::gh::{self, PrRef};
+use crate::git;
+use crate::process;
 
 /// Called by semantic-release's @semantic-release/exec plugin once a new version
 /// has been determined. Opens/updates a PR on the recipes repo with the new pin.
@@ -9,7 +15,7 @@ pub struct RecipesPr {
     #[arg(long)]
     pub version: String,
     /// owner/repo of the recipes repository.
-    #[arg(long, default_value = "greenroom-robotics/ros-recipes")]
+    #[arg(long, default_value = RECIPES_REPO)]
     pub recipes_repo: String,
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
@@ -52,6 +58,10 @@ impl RecipesPr {
         //    vendored monorepo package — its conda artifact is built from a
         //    hand-authored vendor_recipes/<name>/recipe.yaml, so there's
         //    nothing to discover.
+        // Resolved once: every path-relativization below anchors on it, and
+        // it is also where the source repo's remote is read from.
+        let cwd = std::env::current_dir()?;
+
         let mode = release_target(&self.package_dir, self.package.as_deref())?;
         let targets: Vec<(String, Option<String>)> = match &mode {
             ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
@@ -61,24 +71,22 @@ impl RecipesPr {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
                 }
                 let mut out = Vec::new();
+                // Path from the source-repo root to the dir holding each
+                // package's pixi.toml. "" or "." means the package sits at
+                // the repo root. Anchor on the git toplevel, not cwd:
+                // multi-semantic-release runs the publish step with cwd =
+                // the package dir, and --package-dir arrives absolute, so
+                // cwd-stripping would leak an absolute subdir.
+                let toplevel = git::toplevel(&cwd)?;
                 for pixi in &pixis {
                     let pkg = pixi_meta::read(pixi)?;
-                    // Path from the source-repo root to the dir holding this
-                    // package's pixi.toml. "" or "." means the package sits at
-                    // the repo root. Anchor on the git toplevel, not cwd:
-                    // multi-semantic-release runs the publish step with cwd =
-                    // the package dir, and --package-dir arrives absolute, so
-                    // cwd-stripping would leak an absolute subdir.
-                    let toplevel = source_repo_toplevel()?;
                     let parent = pixi
                         .parent()
                         .map(|p| {
                             let abs = if p.is_absolute() {
                                 p.to_owned()
                             } else {
-                                std::env::current_dir()
-                                    .map(|cwd| cwd.join(p))
-                                    .unwrap_or_else(|_| p.to_owned())
+                                cwd.join(p)
                             };
                             abs.strip_prefix(&toplevel)
                                 .map(|r| r.to_owned())
@@ -98,15 +106,19 @@ impl RecipesPr {
         };
 
         // 2. Identify the source repo from the current git remote.
-        let src_url = source_repo_https_url()?;
-        let src_short = source_repo_short_name(&src_url)?;
+        let src_url = git::https_remote_url(&git::remote_url(&cwd, ORIGIN)?);
+        let src_short = git::short_name(&src_url)?;
         let tag = format!("v{}", self.version);
         let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
         // 3. Clone the recipes repo into a tempdir.
         let tmp = tempfile::TempDir::new()?;
         let recipes_root = tmp.path().join("recipes");
-        clone_recipes_repo(&self.recipes_repo, &recipes_root)?;
+        git::shallow_clone(
+            &gh::clone_url(&self.recipes_repo),
+            crate::consts::DEFAULT_BRANCH,
+            &recipes_root,
+        )?;
 
         // 4. Create or continue the rolling release branch. The rolling PR
         //    being open is the sole signal: pending entries on an open
@@ -117,17 +129,18 @@ impl RecipesPr {
         //    releases: the first package's push creates the PR, so the
         //    second package sees it open and appends.
         let branch = release_branch(&src_short);
-        let existing_body = pr_body_of(&self.recipes_repo, &branch);
+        let pr = PrRef::new(&self.recipes_repo, &branch)?;
+        let existing_body = gh::pr::list_body(pr);
         let pr_open = existing_body.is_some();
         if pr_open {
-            fetch_recipes_branch(&recipes_root, &branch)?;
-            crate::process::run_in(
+            git::fetch_branch(&recipes_root, &branch)?;
+            process::run_in(
                 &recipes_root,
                 "git",
                 &["checkout", "-b", &branch, "FETCH_HEAD"],
             )?;
         } else {
-            crate::process::run_in(&recipes_root, "git", &["checkout", "-b", &branch])?;
+            process::run_in(&recipes_root, "git", &["checkout", "-b", &branch])?;
         }
 
         // 5. Apply each package's release (vendored recipe or rosdistro upsert).
@@ -182,13 +195,10 @@ impl RecipesPr {
         }
 
         // 6. Commit + push + open PR.
-        let mut add_args: Vec<String> = vec!["add".into()];
-        add_args.extend(changed.iter().map(|p| p.to_string_lossy().into_owned()));
-        crate::process::run_in(
-            &recipes_root,
-            "git",
-            &add_args.iter().map(String::as_str).collect::<Vec<_>>(),
-        )?;
+        let add_args: Vec<&OsStr> = std::iter::once(OsStr::new("add"))
+            .chain(changed.iter().map(|p| p.as_os_str()))
+            .collect();
+        process::run_in(&recipes_root, "git", &add_args)?;
         let title = release_title(&src_short, &released, &tag);
         // A package can be a no-op against the recipes checkout: an earlier CI
         // run (e.g. a sibling release workflow sweeping the same tag) may have
@@ -201,7 +211,7 @@ impl RecipesPr {
         // empty PR. If we appended to an open PR, the branch carries prior
         // pending content that still needs to reach the remote, so we skip
         // only the commit and continue through push + PR refresh.
-        match classify_noop(nothing_staged(&recipes_root)?, pr_open) {
+        match classify_noop(git::nothing_staged(&recipes_root)?, pr_open) {
             NoopOutcome::EarlyReturn => {
                 println!("recipe for {title} already up to date; nothing to publish");
                 return Ok(());
@@ -221,7 +231,7 @@ impl RecipesPr {
                 if let Some(id) = &run_id {
                     commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
                 }
-                crate::process::run_in(
+                process::run_in(
                     &recipes_root,
                     "git",
                     &[
@@ -239,11 +249,7 @@ impl RecipesPr {
         // Plain --force, not --force-with-lease: the recipes repo is cloned
         // shallow on `main` only, so there's no remote-tracking ref for the
         // rolling branch and --force-with-lease would reject the push.
-        crate::process::run_in(
-            &recipes_root,
-            "git",
-            &["push", "--force", "origin", &branch],
-        )?;
+        process::run_in(&recipes_root, "git", &["push", "--force", ORIGIN, &branch])?;
 
         // Link to the source-repo diff between what the recipe was pinned to
         // before and this release, so a reviewer sees what changed.
@@ -256,37 +262,22 @@ impl RecipesPr {
         if pr_open {
             // The rolling PR already exists from a previous release; refresh its
             // title and body so the version and diff link aren't stale.
-            let (prog, args) = pr_edit_args(&self.recipes_repo, &branch, &title, &body);
-            crate::process::run_in(
-                &recipes_root,
-                prog,
-                &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            )?;
+            gh::pr::edit(pr, &title, &body)?;
             println!("PR already exists for {branch}; branch, title and body updated.");
         } else {
-            let (prog, args) = pr_create_args(&self.recipes_repo, &branch, &title, &body);
-            crate::process::run_in(
-                &recipes_root,
-                prog,
-                &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            )?;
+            gh::pr::create(pr, &title, &body)?;
         }
 
         // Enable GitHub native auto-merge so the PR lands once CI passes
         // (mirrors `mise bump`'s behavior).
-        let (prog, args) = pr_automerge_args(&self.recipes_repo, &branch);
-        crate::process::run_in(
-            &recipes_root,
-            prog,
-            &args.iter().map(String::as_str).collect::<Vec<_>>(),
-        )?;
+        gh::pr::merge_auto(pr)?;
 
         // Drop a link to the recipes PR into the Actions run summary so the
         // release job's page points straight at it. Best-effort: a missing URL
         // or no $GITHUB_STEP_SUMMARY (local run) must not fail the release.
-        if let Some(url) = pr_url(&self.recipes_repo, &branch) {
+        if let Some(url) = gh::pr::view_url(pr) {
             println!("recipes PR: {url}");
-            write_step_summary(&format!("### Recipes PR\n\n[{title}]({url})\n"));
+            gh::summary::append(&format!("### Recipes PR\n\n[{title}]({url})\n"));
         }
 
         Ok(())
@@ -303,20 +294,6 @@ fn release_branch(src_short: &str) -> String {
 
 fn run_marker(run_id: &str) -> String {
     format!("[mise-run:{run_id}]")
-}
-
-/// Fetch the remote rolling branch so `FETCH_HEAD` is populated for `git
-/// checkout -b <branch> FETCH_HEAD` (the append path). Only called when the
-/// rolling PR is open, so the branch is known to exist on the remote.
-fn fetch_recipes_branch(recipes_root: &std::path::Path, branch: &str) -> anyhow::Result<()> {
-    let status = std::process::Command::new("git")
-        .args(["fetch", "--depth=1", "origin", branch])
-        .current_dir(recipes_root)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("git fetch --depth=1 origin {branch} failed with {status}");
-    }
-    Ok(())
 }
 
 /// PR title / commit message, mirroring `release_branch`. Single-package repos
@@ -387,8 +364,8 @@ fn release_target(
 ) -> anyhow::Result<ReleaseTarget> {
     match package {
         Some(pkg)
-            if !declares_package_at(&package_dir.join(pkg).join("pixi.toml"))?
-                && !declares_package_at(&package_dir.join("pixi.toml"))? =>
+            if !declares_package_at(&package_dir.join(pkg).join(PIXI_TOML))?
+                && !declares_package_at(&package_dir.join(PIXI_TOML))? =>
         {
             Ok(ReleaseTarget::VendoredByName(pkg.to_string()))
         }
@@ -417,23 +394,6 @@ fn recipe_action(mode: &ReleaseTarget, has_recipe: bool, allow_missing: bool) ->
         }
         _ => RecipeAction::Apply,
     }
-}
-
-/// The PR commands all shell out to the GitHub CLI; the `(program, args)`
-/// shape keeps the program out of the argv vector so no caller has to know
-/// element 0 is special.
-const GH: &str = "gh";
-
-fn pr_edit_args(repo: &str, branch: &str, title: &str, body: &str) -> (&'static str, Vec<String>) {
-    (
-        GH,
-        [
-            "pr", "edit", "--repo", repo, branch, "--title", title, "--body", body,
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect(),
-    )
 }
 
 /// GitHub compare URL between two refs of the source repo.
@@ -517,117 +477,6 @@ fn pr_body(diff: Option<&str>, packages: &std::collections::BTreeMap<String, Str
     body
 }
 
-fn pr_create_args(
-    repo: &str,
-    branch: &str,
-    title: &str,
-    body: &str,
-) -> (&'static str, Vec<String>) {
-    (
-        GH,
-        [
-            "pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", title,
-            "--body", body,
-        ]
-        .into_iter()
-        .map(String::from)
-        .collect(),
-    )
-}
-
-fn pr_automerge_args(repo: &str, branch: &str) -> (&'static str, Vec<String>) {
-    (
-        GH,
-        ["pr", "merge", "--repo", repo, branch, "--auto", "--squash"]
-            .into_iter()
-            .map(String::from)
-            .collect(),
-    )
-}
-
-/// Absolute path of the source repo's working-tree root, from wherever the
-/// command runs (msr invokes the publish step with cwd = the package dir).
-fn source_repo_toplevel() -> anyhow::Result<std::path::PathBuf> {
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .output()?;
-    if !out.status.success() {
-        anyhow::bail!("git rev-parse --show-toplevel failed");
-    }
-    Ok(std::path::PathBuf::from(
-        String::from_utf8(out.stdout)?.trim(),
-    ))
-}
-
-fn source_repo_https_url() -> anyhow::Result<String> {
-    let raw = std::process::Command::new("git")
-        .args(["config", "--get", "remote.origin.url"])
-        .output()?;
-    if !raw.status.success() {
-        anyhow::bail!("git config --get remote.origin.url failed");
-    }
-    let raw = String::from_utf8(raw.stdout)?.trim().to_string();
-    if let Some(rest) = raw.strip_prefix("git@github.com:") {
-        let rest = rest.trim_end_matches(".git");
-        return Ok(format!("https://github.com/{rest}.git"));
-    }
-    if raw.ends_with(".git") {
-        Ok(raw)
-    } else {
-        Ok(format!("{raw}.git"))
-    }
-}
-
-fn source_repo_short_name(https_url: &str) -> anyhow::Result<String> {
-    let last = https_url
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("could not parse repo name from {https_url}"))?;
-    Ok(last.trim_end_matches(".git").to_string())
-}
-
-fn clone_recipes_repo(repo: &str, dest: &std::path::Path) -> anyhow::Result<()> {
-    let url = recipes_repo_https_url(repo);
-    let status = std::process::Command::new("git")
-        .args(["clone", "--depth=1", "--branch=main", &url])
-        .arg(dest)
-        .status()?;
-    if !status.success() {
-        anyhow::bail!("git clone failed for {repo}");
-    }
-    Ok(())
-}
-
-fn recipes_repo_https_url(repo: &str) -> String {
-    if let Ok(token) = std::env::var("API_TOKEN_GITHUB").or_else(|_| std::env::var("GITHUB_TOKEN"))
-    {
-        format!("https://x-access-token:{token}@github.com/{repo}.git")
-    } else {
-        format!("git@github.com:{repo}.git")
-    }
-}
-
-/// Whether nothing is staged in the index relative to HEAD (`git diff
-/// --cached --quiet`). `git commit` fails with "nothing to commit, working
-/// tree clean" in this case, so callers must check first rather than let the
-/// commit error out. Unlike `git status --porcelain`, this ignores untracked
-/// files: an untracked file left behind in the checkout must not be mistaken
-/// for a real change to commit.
-fn nothing_staged(recipes_root: &std::path::Path) -> anyhow::Result<bool> {
-    let status = std::process::Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(recipes_root)
-        .status()?;
-    match status.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => anyhow::bail!(
-            "git diff --cached --quiet failed in {} with {status}",
-            recipes_root.display()
-        ),
-    }
-}
-
 /// The three things that can happen with a staged upsert, depending on
 /// whether anything is actually staged and whether the rolling PR is open
 /// (i.e. whether the branch was appended-to or reset from main).
@@ -650,52 +499,6 @@ fn classify_noop(nothing_staged: bool, pr_open: bool) -> NoopOutcome {
         (true, true) => NoopOutcome::SkipCommitKeepPush,
         (true, false) => NoopOutcome::EarlyReturn,
     }
-}
-
-/// URL of the PR for `branch`. `None` if gh fails or prints nothing — the
-/// caller treats the summary link as best-effort.
-fn pr_url(repo: &str, branch: &str) -> Option<String> {
-    let out = std::process::Command::new("gh")
-        .args([
-            "pr", "view", branch, "--repo", repo, "--json", "url", "--jq", ".url",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!url.is_empty()).then_some(url)
-}
-
-/// Append a Markdown section to the GitHub Actions run summary. No-op when
-/// $GITHUB_STEP_SUMMARY is unset (local/standalone runs).
-fn write_step_summary(md: &str) {
-    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
-            let _ = writeln!(f, "{md}");
-        }
-    }
-}
-
-/// Body of the open rolling PR for `branch`, or `None` if there is no such PR.
-/// Doubles as the PR-exists check, so it must distinguish "no PR" from "PR with
-/// an empty body" — hence the JSON parse rather than a `--jq` string.
-fn pr_body_of(repo: &str, branch: &str) -> Option<String> {
-    let out = std::process::Command::new("gh")
-        .args([
-            "pr", "list", "--repo", repo, "--head", branch, "--json", "body",
-        ])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        // gh exits non-zero if no PR — accept that as "doesn't exist"
-        return None;
-    }
-    let prs: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
-    let pr = prs.first()?;
-    Some(pr["body"].as_str().unwrap_or_default().to_string())
 }
 
 #[cfg(test)]

@@ -125,6 +125,9 @@ impl BuildRecipes {
     }
 }
 
+use crate::consts::{PIXI_TOML, ROBOSTACK_CHANNEL};
+use crate::gh;
+use crate::git;
 use crate::process;
 use crate::repo::Repo;
 
@@ -141,6 +144,10 @@ fn vinca(
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let mode = VincaBuildMode::from_flags(ds_recipes, ds_version, only)?;
+
+    // rattler-build fetches recipe sources over git, including from private
+    // repos; mise owns that auth setup (see gh::ensure_git_auth).
+    gh::ensure_git_auth()?;
 
     let abs_output = if output_dir.is_absolute() {
         output_dir
@@ -199,7 +206,7 @@ fn vinca(
     }
     args.extend_from_slice(&[
         "-c",
-        "https://prefix.dev/robostack-kilted",
+        ROBOSTACK_CHANNEL,
         "-c",
         "https://prefix.dev/conda-forge",
         "--skip-existing=all",
@@ -632,7 +639,7 @@ fn visit_table(
         if path == "." {
             continue;
         }
-        let sib_manifest = manifest_dir.join(path).join("pixi.toml");
+        let sib_manifest = manifest_dir.join(path).join(PIXI_TOML);
         let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
             format!(
                 "path dep {key}: no pixi.toml at {} in checkout",
@@ -737,7 +744,7 @@ fn resolve_sibling_pins(
         let Some(subdir) = sibling_subdirs.get(&name) else {
             continue; // not a same-repo sibling; real channel owns it
         };
-        let sib_manifest = workdir.join(subdir).join("pixi.toml");
+        let sib_manifest = workdir.join(subdir).join(PIXI_TOML);
         let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
             format!(
                 "pin dep {name}: no pixi.toml at {} in checkout",
@@ -876,18 +883,8 @@ fn build_local_dep(
         )?;
     }
     let target_channel = format!("file://{}", ctx.local_deps_dir.display());
-    process::run(
-        "pixi",
-        &[
-            "publish",
-            "--path",
-            dep.manifest.to_str().unwrap(),
-            "--target-channel",
-            &target_channel,
-            "--target-platform",
-            &ctx.target_platform.arch().to_string(),
-        ],
-    )?;
+    let arch = ctx.target_platform.arch().to_string();
+    process::run("pixi", &publish_argv(&dep.manifest, &target_channel, &arch))?;
     local_built.insert(dep.name.clone());
     Ok(())
 }
@@ -981,124 +978,131 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'
 
 use crate::types::{GithubRepoUrl, PixiNativeEntry, Sha40};
 
-/// Fetch `pixi.toml` for an entry from `raw.githubusercontent.com`. Uses Bearer
-/// auth from `GITHUB_TOKEN` / `GH_TOKEN` when present.
-fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
-    let subdir = entry
+/// The manifest path of an entry relative to its repo root: the entry's subdir
+/// (when it has a meaningful one) plus `pixi.toml`.
+fn entry_manifest_rel_path(entry: &PixiNativeEntry) -> String {
+    entry
         .subdir
         .as_deref()
         .map(|p| p.to_string_lossy().trim_matches('/').to_string())
         .filter(|s| !s.is_empty() && s != ".")
-        .map(|s| format!("{s}/pixi.toml"))
-        .unwrap_or_else(|| "pixi.toml".to_string());
+        .map(|s| format!("{s}/{PIXI_TOML}"))
+        .unwrap_or_else(|| PIXI_TOML.to_string())
+}
 
-    let raw_url = format!(
-        "https://raw.githubusercontent.com/{}/{}/{}/{}",
-        entry.url.owner,
-        entry.url.repo,
+/// Fetch an entry's `pixi.toml` at its pinned rev without cloning.
+fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
+    gh::fetch_raw_file(
+        &entry.url.owner,
+        &entry.url.repo,
         entry.rev.as_str(),
-        subdir
-    );
-
-    let token = std::env::var("GITHUB_TOKEN")
-        .or_else(|_| std::env::var("GH_TOKEN"))
-        .ok();
-
-    let mut req = ureq::get(&raw_url);
-    if let Some(t) = &token {
-        req = req.set("Authorization", &format!("Bearer {t}"));
-    }
-    match req.call() {
-        Ok(resp) => resp
-            .into_string()
-            .with_context(|| format!("read body of {raw_url}")),
-        Err(ureq::Error::Status(code, _)) => {
-            let hint = if token.is_none() && (code == 401 || code == 403 || code == 404) {
-                " (set GITHUB_TOKEN for private repos)"
-            } else {
-                ""
-            };
-            anyhow::bail!(
-                "entry {}: failed to fetch {raw_url} ({code}){hint}",
-                entry.name
-            )
-        }
-        Err(e) => anyhow::bail!("entry {}: fetch {raw_url}: {e}", entry.name),
-    }
+        &entry_manifest_rel_path(entry),
+    )
+    .with_context(|| format!("entry {}", entry.name))
 }
 
-/// Initialize a fresh git repo in `dest`, fetch the given commit, and check it out.
+/// Materialize one commit of an entry's repo in `dest`.
 fn fetch_at_rev(url: &GithubRepoUrl, rev: &Sha40, dest: &Path) -> anyhow::Result<()> {
-    let url_str = format!("https://github.com/{}/{}", url.owner, url.repo);
-
-    process::git(&["init", "--quiet", dest.to_str().unwrap()])?;
-    process::git(&[
-        "-C",
-        dest.to_str().unwrap(),
-        "remote",
-        "add",
-        "origin",
-        &url_str,
-    ])?;
-    process::git(&[
-        "-C",
-        dest.to_str().unwrap(),
-        "fetch",
-        "--depth=1",
-        "--quiet",
-        "origin",
-        rev.as_str(),
-    ])?;
-    process::git(&[
-        "-C",
-        dest.to_str().unwrap(),
-        "checkout",
-        "--quiet",
-        "FETCH_HEAD",
-    ])?;
-    Ok(())
+    git::fetch_rev(
+        dest,
+        &format!("https://github.com/{}/{}", url.owner, url.repo),
+        rev,
+    )
 }
 
-use std::process::Command;
+/// `pixi publish` argv. Built from `OsStr` so a non-UTF-8 manifest path is
+/// passed through rather than panicking a `to_str().unwrap()`.
+fn publish_argv<'a>(
+    manifest: &'a Path,
+    target_channel: &'a str,
+    arch: &'a str,
+) -> [&'a std::ffi::OsStr; 7] {
+    use std::ffi::OsStr;
+    [
+        OsStr::new("publish"),
+        OsStr::new("--path"),
+        manifest.as_os_str(),
+        OsStr::new("--target-channel"),
+        OsStr::new(target_channel),
+        OsStr::new("--target-platform"),
+        OsStr::new(arch),
+    ]
+}
+
+/// Substrings in `pixi search` stderr that mean the channel could not be
+/// consulted at all, as opposed to being consulted and having nothing to say.
+///
+/// The distinction matters because the two outcomes lead opposite ways: a
+/// genuinely empty channel means "not published, go build it", while an
+/// unreachable one means the publish check has no idea and building would
+/// risk republishing an artifact that already exists. Matching on message text
+/// is unpleasant, but `pixi search` exits non-zero for both cases and offers
+/// no other signal.
+const UNREACHABLE_MARKERS: &[&str] = &[
+    "error sending request",
+    "failed to fetch",
+    "failed to download",
+    "dns error",
+    "connection refused",
+    "connection reset",
+    "operation timed out",
+    "timed out",
+    "certificate",
+    "unauthorized",
+    "403 forbidden",
+    "500 internal server error",
+    "502 bad gateway",
+    "503 service unavailable",
+];
+
+/// Whether a failed `pixi search` means "could not reach the channel" rather
+/// than "the channel has no such package".
+fn channel_unreachable(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    UNREACHABLE_MARKERS.iter().any(|m| lower.contains(m))
+}
 
 /// Run `pixi search --json <spec> -c <channel> -p <arch>` and return the parsed
-/// records grouped by subdir. `None` on any failure — callers treat that as
-/// "nothing published" and proceed as if the package needs building.
+/// records grouped by subdir.
+///
+/// Three outcomes, kept distinct on purpose:
+///
+/// - `Ok(Some(records))` — the channel answered.
+/// - `Ok(None)` — the channel answered that it has nothing matching `spec`.
+///   `pixi search` reports no match with a non-zero exit, so this is a normal
+///   result and callers proceed as if the package needs building.
+/// - `Err(_)` — the channel could not be consulted (see
+///   [`channel_unreachable`]) or produced output that could not be parsed.
+///   Treating this as "nothing published" would silently rebuild and
+///   republish the whole channel, so it is a hard error.
 fn search_channel(
     spec: &str,
     channel_url: &str,
     target_platform: TargetPlatform,
-) -> Option<BTreeMap<String, Vec<SearchRecord>>> {
+) -> anyhow::Result<Option<BTreeMap<String, Vec<SearchRecord>>>> {
     let arch = target_platform.arch().to_string();
 
-    let output = match Command::new("pixi")
-        .args(["search", "--json", spec, "-c", channel_url, "-p", &arch])
-        .output()
+    let stdout = match process::capture_probe(
+        "pixi",
+        &["search", "--json", spec, "-c", channel_url, "-p", &arch],
+    )
+    .with_context(|| format!("pixi search {spec} in {channel_url}"))?
     {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::info!("pixi search for {spec} failed to spawn: {e}");
-            return None;
+        process::Captured::Output(out) => out,
+        process::Captured::Failed { code, stderr } => {
+            anyhow::ensure!(
+                !channel_unreachable(&stderr),
+                "pixi search {spec} could not reach {channel_url} (exit {code:?}): {}",
+                stderr.trim(),
+            );
+            tracing::info!("pixi search for {spec} in {channel_url} found nothing");
+            return Ok(None);
         }
     };
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::info!(
-            "pixi search for {spec} exited {}: {}",
-            output.status,
-            stderr.trim(),
-        );
-        return None;
-    }
-
-    match serde_json::from_slice(&output.stdout) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::info!("pixi search for {spec} returned non-JSON stdout: {e}");
-            None
-        }
-    }
+    serde_json::from_str(&stdout)
+        .map(Some)
+        .with_context(|| format!("pixi search {spec} in {channel_url} returned non-JSON stdout"))
 }
 
 /// One record from `pixi search --json`. Only the fields the publish checks need.
@@ -1178,12 +1182,13 @@ struct ChannelIndex {
 }
 
 impl ChannelIndex {
-    /// Sweep `channel_url` for `target_platform`. An unreachable or empty
-    /// channel yields an empty index, i.e. "nothing is published yet" — the
-    /// same fail-open behaviour the per-package searches had.
-    fn sweep(channel_url: &str, target_platform: TargetPlatform) -> Self {
+    /// Sweep `channel_url` for `target_platform`. An *empty* channel yields an
+    /// empty index — "nothing is published yet". An *unreachable* one is an
+    /// error: an index that wrongly looks empty makes every package look
+    /// unpublished.
+    fn sweep(channel_url: &str, target_platform: TargetPlatform) -> anyhow::Result<Self> {
         let index = Self::from_records(
-            &search_channel("*", channel_url, target_platform).unwrap_or_default(),
+            &search_channel("*", channel_url, target_platform)?.unwrap_or_default(),
         );
         tracing::info!(
             "swept {channel_url} for {}: {} name/version pairs across {} subdir slots",
@@ -1191,7 +1196,7 @@ impl ChannelIndex {
             index.versions.len(),
             index.builds.len(),
         );
-        index
+        Ok(index)
     }
 
     /// Fold `pixi search --json` output into the lookup tables. Every subdir the
@@ -1257,14 +1262,14 @@ impl ChannelIndexCache {
     }
 
     /// The snapshot for `channel_url`, sweeping it if this is the first ask.
-    fn get(&self, channel_url: &str) -> Arc<ChannelIndex> {
+    fn get(&self, channel_url: &str) -> anyhow::Result<Arc<ChannelIndex>> {
         let mut swept = self.swept.lock().expect("channel index cache poisoned");
         if let Some(index) = swept.get(channel_url) {
-            return Arc::clone(index);
+            return Ok(Arc::clone(index));
         }
-        let index = Arc::new(ChannelIndex::sweep(channel_url, self.target_platform));
+        let index = Arc::new(ChannelIndex::sweep(channel_url, self.target_platform)?);
         swept.insert(channel_url.to_string(), Arc::clone(&index));
-        index
+        Ok(index)
     }
 }
 
@@ -1280,15 +1285,15 @@ fn version_published(
     version: &str,
     channel_url: &str,
     target_platform: TargetPlatform,
-) -> bool {
+) -> anyhow::Result<bool> {
     let spec = format!("{name}=={version}");
-    let Some(parsed) = search_channel(&spec, channel_url, target_platform) else {
-        return false;
+    let Some(parsed) = search_channel(&spec, channel_url, target_platform)? else {
+        return Ok(false);
     };
-    parsed
+    Ok(parsed
         .values()
         .flatten()
-        .any(|r| r.name == name && r.version == version)
+        .any(|r| r.name == name && r.version == version))
 }
 
 enum CheckOutcome {
@@ -1356,14 +1361,16 @@ fn check_entry(
         &upstream.package.version,
     );
     let subdir = BuildSubdir::of(&upstream, target_platform);
-    if published_urls.iter().all(|url| {
-        channels.get(url).has_build(
+    let mut published_everywhere = true;
+    for url in &published_urls {
+        published_everywhere &= channels.get(url)?.has_build(
             &upstream.package.name,
             &upstream.package.version,
             effective_build,
             subdir,
-        )
-    }) {
+        );
+    }
+    if published_everywhere {
         return Ok(CheckOutcome::SkipAlreadyPublished {
             name: upstream.package.name,
             version: upstream.package.version,
@@ -1456,6 +1463,10 @@ fn pixi(
     let repo = Repo::or_discover(repo_root)?;
     let manifest = repo.pixi_native_manifest()?;
 
+    // Entry checkouts (`fetch_at_rev`) and their sibling path deps come from
+    // private repos over HTTPS; mise owns that auth setup.
+    gh::ensure_git_auth()?;
+
     let abs_output = if output_dir.is_absolute() {
         output_dir
     } else {
@@ -1464,7 +1475,10 @@ fn pixi(
     fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
 
     if manifest.packages.is_empty() {
-        tracing::info!("pixi_native_packages.yaml has no entries; nothing to build");
+        tracing::info!(
+            "{} has no entries; nothing to build",
+            crate::consts::PIXI_NATIVE_PACKAGES_YAML
+        );
         return Ok(());
     }
 
@@ -1578,7 +1592,7 @@ fn pixi(
     // Dep satisfaction deliberately only consults the default channel, same as
     // before routing was introduced: routing decides where an artifact is
     // *published*, not which channels a consumer solves against.
-    let default_channel = channels.get(&channel_url);
+    let default_channel = channels.get(&channel_url)?;
 
     let mut built_this_job: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for item in to_build {
@@ -1595,7 +1609,7 @@ fn pixi(
 
         let subdir = entry.subdir.as_deref().unwrap_or(Path::new("."));
         let manifest_dir = workdir.join(subdir);
-        let manifest_path = manifest_dir.join("pixi.toml");
+        let manifest_path = manifest_dir.join(PIXI_TOML);
         if !manifest_path.is_file() {
             anyhow::bail!(
                 "entry {}: no pixi.toml at {}/pixi.toml in checkout",
@@ -1637,9 +1651,9 @@ fn pixi(
             let output_channel = format!("file://{}", abs_output.display());
             // The output channel gains packages as this loop publishes into it,
             // so it has to be asked live rather than swept.
-            if built_this_job.contains(&dep.name)
-                || version_published(&dep.name, &dep.version, &output_channel, target_platform)
-            {
+            let in_output_channel = built_this_job.contains(&dep.name)
+                || version_published(&dep.name, &dep.version, &output_channel, target_platform)?;
+            if in_output_channel {
                 push_unique(&mut extra_channels, output_channel);
             } else if default_channel.has_version(&dep.name, &dep.version) {
                 // Satisfied by the real channel; nothing to do.
@@ -1678,15 +1692,7 @@ fn pixi(
         let arch = target_platform.arch().to_string();
         process::run(
             "pixi",
-            &[
-                "publish",
-                "--path",
-                manifest_path.to_str().unwrap(),
-                "--target-channel",
-                &target_channel,
-                "--target-platform",
-                &arch,
-            ],
+            &publish_argv(&manifest_path, &target_channel, &arch),
         )?;
         built_this_job.insert(item.name.clone());
     }
@@ -1704,11 +1710,9 @@ fn deepstream_container(
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
 
-    // 1. Configure git to use GH_TOKEN for HTTPS auth (private repo clones).
-    if let Ok(token) = std::env::var("GH_TOKEN") {
-        let insteadof = format!("url.https://x-access-token:{token}@github.com/.insteadOf");
-        process::git(&["config", "--global", &insteadof, "https://github.com/"])?;
-    }
+    // 1. Configure git HTTPS auth for private repo clones. The container
+    //    cannot inherit the runner's git config, so this has to happen here.
+    gh::ensure_git_auth()?;
 
     // 2. Host's .pixi/ has host-absolute shebangs that fail in-container; rebuild.
     let host_pixi = repo.root().join(".pixi");

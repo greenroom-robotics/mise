@@ -29,7 +29,7 @@ impl VerifySiblings {
             return Ok(()); // no path deps, nothing to verify
         };
 
-        let tags = git_tags(&self.package_dir)?;
+        let tags = crate::git::tags(&self.package_dir)?;
         for target in targets {
             let dir = graph
                 .dirs
@@ -42,7 +42,7 @@ impl VerifySiblings {
                 )
             })?;
             let tag = format!("{target}@{version}");
-            if !dir_clean_at(&self.package_dir, &tag, dir)? {
+            if !crate::git::is_clean(&self.package_dir, &tag, "HEAD", dir)? {
                 anyhow::bail!(
                     "sibling {target} has changed since {tag} and is not releasing in \
                      this run — {consumer}'s derived pin would not match published \
@@ -52,37 +52,6 @@ impl VerifySiblings {
             }
         }
         Ok(())
-    }
-}
-
-/// All git tags of the repo containing `cwd`.
-fn git_tags(cwd: &std::path::Path) -> Result<Vec<String>> {
-    let out = std::process::Command::new("git")
-        .args(["tag", "--list"])
-        .current_dir(cwd)
-        .output()
-        .context("running git tag --list")?;
-    if !out.status.success() {
-        anyhow::bail!("git tag --list failed");
-    }
-    Ok(String::from_utf8(out.stdout)?
-        .lines()
-        .map(str::to_string)
-        .collect())
-}
-
-/// `git diff --quiet <tag> HEAD -- <dir>`: true when the dir is byte-identical.
-fn dir_clean_at(cwd: &std::path::Path, tag: &str, dir: &std::path::Path) -> Result<bool> {
-    let st = std::process::Command::new("git")
-        .args(["diff", "--quiet", tag, "HEAD", "--"])
-        .arg(dir)
-        .current_dir(cwd)
-        .status()
-        .context("running git diff")?;
-    match st.code() {
-        Some(0) => Ok(true),
-        Some(1) => Ok(false),
-        _ => anyhow::bail!("git diff {tag} HEAD -- {} failed", dir.display()),
     }
 }
 

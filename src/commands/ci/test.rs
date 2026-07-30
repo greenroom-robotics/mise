@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::Args;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
@@ -79,19 +80,22 @@ impl Test {
                 );
                 // Lockfile satisfaction is strict by default; --no-locked
                 // opts out and re-resolves from the manifest instead.
-                let mut cmd = std::process::Command::new("pixi");
-                cmd.arg("run");
+                let mut argv: Vec<&OsStr> = vec![OsStr::new("run")];
                 if self.locked {
-                    cmd.arg("--locked");
+                    argv.push(OsStr::new("--locked"));
                 }
-                let status = cmd
-                    .arg("--manifest-path")
-                    .arg(&pixi)
-                    .arg("-e")
-                    .arg(&job.env)
-                    .arg(&job.task)
-                    .status()
-                    .map_err(|e| anyhow::anyhow!("failed to spawn pixi: {e}"))?;
+                argv.extend([
+                    OsStr::new("--manifest-path"),
+                    pixi.as_os_str(),
+                    OsStr::new("-e"),
+                    OsStr::new(&job.env),
+                    OsStr::new(&job.task),
+                ]);
+                // The exit code is the test result, not an error: a failing
+                // job (including one killed by a signal, which ROS tests do
+                // manage) is collected and reported alongside the others
+                // below rather than abandoning the remaining packages.
+                let code = crate::process::status_code("pixi", &argv)?;
                 // Collect reports after each job, namespaced by env, so variants
                 // that share the same colcon `build/` (e.g. standalone vs Boost
                 // Asio) don't overwrite each other's JUnit XML. Collect
@@ -104,7 +108,7 @@ impl Test {
                     ),
                     Err(e) => eprintln!("    failed to collect reports: {e:#}"),
                 }
-                if !status.success() {
+                if code != Some(0) {
                     failed.push(format!("{} [{}:{}]", pkg_dir.display(), job.env, job.task));
                 }
             }

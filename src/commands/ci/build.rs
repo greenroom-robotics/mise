@@ -1,4 +1,6 @@
+use anyhow::Context;
 use clap::Args;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
@@ -24,26 +26,24 @@ impl Build {
         let out_dir = std::env::var("RUNNER_TEMP")
             .map(|t| std::path::PathBuf::from(t).join("conda-bld"))
             .unwrap_or_else(|_| std::path::PathBuf::from("./output"));
-        std::fs::create_dir_all(&out_dir)?;
+        std::fs::create_dir_all(&out_dir)
+            .with_context(|| format!("creating {}", out_dir.display()))?;
 
         for pixi in pkgs {
             let pkg_dir = pixi.parent().unwrap();
             println!("==> mise ci build :: {}", pkg_dir.display());
-            let mut cmd = std::process::Command::new("pixi");
-            cmd.arg("build")
-                .arg("--path")
-                .arg(&pixi)
-                .arg("--output-dir")
-                .arg(&out_dir);
+            let mut argv: Vec<&OsStr> = vec![
+                OsStr::new("build"),
+                OsStr::new("--path"),
+                pixi.as_os_str(),
+                OsStr::new("--output-dir"),
+                out_dir.as_os_str(),
+            ];
             if let Some(plat) = &self.target_platform {
-                cmd.arg("--target-platform").arg(plat);
+                argv.extend([OsStr::new("--target-platform"), OsStr::new(plat)]);
             }
-            let status = cmd
-                .status()
-                .map_err(|e| anyhow::anyhow!("failed to spawn pixi: {e}"))?;
-            if !status.success() {
-                anyhow::bail!("pixi build failed for {}", pkg_dir.display());
-            }
+            crate::process::run("pixi", &argv)
+                .with_context(|| format!("pixi build failed for {}", pkg_dir.display()))?;
         }
         Ok(())
     }

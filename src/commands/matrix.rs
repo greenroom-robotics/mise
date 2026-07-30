@@ -5,6 +5,7 @@ use anyhow::Context;
 use clap::Subcommand;
 use serde::Serialize;
 
+use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML, ROSDISTRO_RECIPES_YAML};
 use crate::gh::{self, ChangedFiles};
 use crate::repo::{DeepstreamCfg, Repo};
 use crate::types::{Arch, DeepstreamVersion, PixiNativeEntry, PixiNativeManifest, RunnerSize};
@@ -17,7 +18,7 @@ const GLOBAL_VINCA: &[&str] = &[
     "rosdistro_snapshot.yaml",
 ];
 
-const GLOBAL_BOTH: &[&str] = &["pixi.toml", "pixi.lock"];
+const GLOBAL_BOTH: &[&str] = &[PIXI_TOML, "pixi.lock"];
 
 const GLOBAL_BOTH_PREFIXES: &[&str] = &[".github/workflows/", ".github/actions/", "scripts/"];
 
@@ -216,9 +217,9 @@ fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScop
         // No base ref to diff against — fail safe by building everything.
         return Ok(PixiScope::All);
     };
-    let head_yaml = std::fs::read_to_string(repo.root().join("pixi_native_packages.yaml"))
-        .context("read pixi_native_packages.yaml")?;
-    let base_yaml = gh::file_at_rev(repo, base, "pixi_native_packages.yaml")?;
+    let head_yaml = std::fs::read_to_string(repo.root().join(PIXI_NATIVE_PACKAGES_YAML))
+        .with_context(|| format!("read {PIXI_NATIVE_PACKAGES_YAML}"))?;
+    let base_yaml = crate::git::file_at_rev(repo.root(), base, PIXI_NATIVE_PACKAGES_YAML)?;
     let changed = diff_changed_packages(base_yaml.as_deref(), &head_yaml)?;
     if changed.is_empty() {
         Ok(PixiScope::None)
@@ -267,11 +268,11 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> MatrixState {
             state.ds_versions.extend(ds.versions.iter().copied());
             continue;
         }
-        if p == "rosdistro_additional_recipes.yaml" {
+        if p == ROSDISTRO_RECIPES_YAML {
             state.vinca = true;
             continue;
         }
-        if p == "pixi_native_packages.yaml" {
+        if p == PIXI_NATIVE_PACKAGES_YAML {
             if state.pixi_native != PixiScope::All {
                 state.pixi_native = PixiScope::ManifestScoped;
             }

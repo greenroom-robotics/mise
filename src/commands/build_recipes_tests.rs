@@ -939,3 +939,26 @@ packages:
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "gamma"]);
 }
+
+// The publish check leans on this distinction: "channel says no such package"
+// means build it, "channel could not be reached" means we have no idea and
+// building would risk republishing.
+#[test]
+fn an_unreachable_channel_is_told_apart_from_an_empty_one() {
+    for stderr in [
+        "error sending request for url (https://prefix.dev/general/noarch/repodata.json)",
+        "  × failed to fetch repodata",
+        "dns error: failed to lookup address information",
+        "HTTP status client error (403 Forbidden) for url",
+        "the operation timed out",
+    ] {
+        assert!(channel_unreachable(stderr), "{stderr:?}");
+    }
+    for stderr in [
+        "",
+        "No packages found matching 'foo==1.2.3'",
+        "  × could not find package foo",
+    ] {
+        assert!(!channel_unreachable(stderr), "{stderr:?}");
+    }
+}

@@ -382,8 +382,8 @@ pub(crate) fn apply_release(
         });
     }
 
-    let pixi_native_rel = PathBuf::from("pixi_native_packages.yaml");
-    let rosdistro_rel = PathBuf::from("rosdistro_additional_recipes.yaml");
+    let pixi_native_rel = PathBuf::from(crate::consts::PIXI_NATIVE_PACKAGES_YAML);
+    let rosdistro_rel = PathBuf::from(crate::consts::ROSDISTRO_RECIPES_YAML);
     let pixi_native_abs = recipes_root.join(&pixi_native_rel);
     let rosdistro_abs = recipes_root.join(&rosdistro_rel);
 

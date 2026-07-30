@@ -107,24 +107,6 @@ fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
     );
 }
 
-// The recipes repo merges bump PRs via GitHub's native auto-merge, not a
-// label — `--label automerge` only attaches a literal label and the PR
-// never merges.
-#[test]
-fn create_args_do_not_use_automerge_label() {
-    let (prog, args) = pr_create_args("greenroom-robotics/ros-recipes", "release/mise", "t", "b");
-    assert_eq!(prog, "gh");
-    assert!(!args.iter().any(|a| a == "--label"));
-}
-
-#[test]
-fn automerge_args_enable_native_auto_squash_merge() {
-    let (prog, args) = pr_automerge_args("greenroom-robotics/ros-recipes", "release/mise");
-    assert_eq!(prog, "gh");
-    assert!(args.contains(&"--auto".to_string()));
-    assert!(args.contains(&"--squash".to_string()));
-}
-
 fn pkgs(entries: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
     entries
         .iter()
@@ -223,21 +205,6 @@ fn release_branch_is_per_repo_not_per_package() {
 }
 
 #[test]
-fn edit_args_refresh_pr_title() {
-    let (prog, args) = pr_edit_args(
-        "greenroom-robotics/ros-recipes",
-        "release/mise",
-        "release: mise v4.5.2",
-        "body",
-    );
-    assert_eq!(prog, "gh");
-    assert!(args.contains(&"--title".to_string()));
-    assert!(args.contains(&"release: mise v4.5.2".to_string()));
-    // Body is refreshed on edit so the diff link doesn't go stale.
-    assert!(args.contains(&"--body".to_string()));
-}
-
-#[test]
 fn diff_ref_prefers_immutable_rev_over_tag() {
     use crate::commands::ci::recipes_upsert::OldRef;
     let refs = vec![OldRef::Tag("1.2.3".into()), OldRef::Rev("deadbeef".into())];
@@ -259,70 +226,6 @@ fn compare_url_strips_git_suffix() {
         compare_url("https://github.com/gr/mise.git", "v1.0.0", "abc123"),
         "https://github.com/gr/mise/compare/v1.0.0...abc123"
     );
-}
-
-// Guards against re-running `git commit` when an earlier sibling run
-// already staged the identical recipe content: `git commit` errors with
-// "nothing to commit, working tree clean" in that case, so the caller
-// must detect it beforehand via `nothing_staged` and skip the commit.
-#[test]
-fn nothing_staged_detects_no_pending_index_changes() {
-    let td = tempfile::TempDir::new().unwrap();
-    let repo = td.path();
-    crate::process::run_in(repo, "git", &["init"]).unwrap();
-    crate::process::run_in(
-        repo,
-        "git",
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t.com",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "init",
-        ],
-    )
-    .unwrap();
-
-    // Nothing staged after a fresh checkout -> nothing staged.
-    assert!(nothing_staged(repo).unwrap());
-
-    // Writing and staging a file the same as an already-committed one
-    // (i.e. re-applying an identical recipe update) leaves nothing
-    // staged -> still nothing staged.
-    std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
-    crate::process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
-    crate::process::run_in(
-        repo,
-        "git",
-        &[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t.com",
-            "commit",
-            "-m",
-            "add recipe",
-        ],
-    )
-    .unwrap();
-    std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
-    crate::process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
-    assert!(nothing_staged(repo).unwrap());
-
-    // An untracked file left behind in the checkout (e.g. a build
-    // artifact) must not be mistaken for something to commit — unlike
-    // `git status --porcelain`, `git diff --cached` ignores it.
-    std::fs::write(repo.join("untracked.tmp"), "leftover\n").unwrap();
-    assert!(nothing_staged(repo).unwrap());
-    std::fs::remove_file(repo.join("untracked.tmp")).unwrap();
-
-    // A genuine content change leaves something staged -> not clean.
-    std::fs::write(repo.join("recipe.yaml"), "different content\n").unwrap();
-    crate::process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
-    assert!(!nothing_staged(repo).unwrap());
 }
 
 // The three-way outcome that gates commit/push/PR: only "nothing staged

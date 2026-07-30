@@ -14,7 +14,9 @@ use crate::harness::{E2e, Shim, assert_golden, flag_value, package_pixi_toml, wr
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const RECIPES_REPO: &str = "greenroom-robotics/ros-recipes";
+// The same constant the binary defaults to; a divergence here would make this
+// suite pass against a repo slug the tool no longer uses.
+use mise::consts::RECIPES_REPO;
 const TOKEN: &str = "test-token";
 const RELEASE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -231,6 +233,10 @@ fn vendored_recipe_arm_patches_recipe_and_opens_pr() {
         flag_value(&create, "--title"),
         Some("release: demo_pkg v2.0.0")
     );
+    assert_eq!(flag_value(&create, "--base"), Some("main"));
+    // Merging is native auto-merge, never a label: `--label automerge` only
+    // attaches a literal label and the PR then never merges.
+    assert!(!create.iter().any(|a| a == "--label"), "{create:?}");
     let merge = gh_pr_call(&e2e, "merge");
     assert!(merge.contains(&"--auto".to_string()) && merge.contains(&"--squash".to_string()));
 

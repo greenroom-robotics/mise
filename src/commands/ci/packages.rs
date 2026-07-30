@@ -28,7 +28,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>
     // this branch when the root pixi.toml actually declares a [package]; a
     // workspace-only root manifest falls through to the per-subdir scan so it
     // doesn't shadow real packages under package_dir.
-    let root_pixi = package_dir.join("pixi.toml");
+    let root_pixi = package_dir.join(crate::consts::PIXI_TOML);
     if root_pixi.exists()
         && let Ok(pkg) = crate::commands::ci::pixi_meta::read(&root_pixi)
     {
@@ -41,7 +41,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>
     }
 
     if let Some(name) = filter {
-        let pixi = package_dir.join(name).join("pixi.toml");
+        let pixi = package_dir.join(name).join(crate::consts::PIXI_TOML);
         if !pixi.exists() {
             anyhow::bail!("package {name} not found at {}", pixi.display());
         }
@@ -62,7 +62,7 @@ pub fn discover(package_dir: &Path, filter: Option<&str>) -> Result<Vec<PathBuf>
         .with_context(|| format!("reading {}", package_dir.display()))?;
     for entry in entries {
         let entry = entry?;
-        let pixi = entry.path().join("pixi.toml");
+        let pixi = entry.path().join(crate::consts::PIXI_TOML);
         if pixi.exists() && declares_package(&pixi)? {
             out.push(pixi);
         }

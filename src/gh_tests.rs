@@ -100,3 +100,126 @@ fn outputs_set_rejects_multiline_value() {
         env::remove_var("GITHUB_OUTPUT");
     }
 }
+
+// --- token precedence -------------------------------------------------------
+
+/// A lookup over a fixed table, so precedence is tested without touching the
+/// process environment (which is shared and would race other tests).
+fn lookup_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+    let table: Vec<(String, String)> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    move |var: &str| {
+        table
+            .iter()
+            .find(|(k, _)| k == var)
+            .map(|(_, v)| v.to_string())
+    }
+}
+
+fn token_of(pairs: &[(&str, &str)]) -> Option<String> {
+    token_from(lookup_of(pairs)).map(|t| t.expose().to_string())
+}
+
+#[test]
+fn token_precedence_is_api_token_then_gh_then_github() {
+    assert_eq!(
+        token_of(&[
+            ("API_TOKEN_GITHUB", "api"),
+            ("GH_TOKEN", "gh"),
+            ("GITHUB_TOKEN", "github"),
+        ]),
+        Some("api".into())
+    );
+    assert_eq!(
+        token_of(&[("GH_TOKEN", "gh"), ("GITHUB_TOKEN", "github")]),
+        Some("gh".into())
+    );
+    assert_eq!(
+        token_of(&[("GITHUB_TOKEN", "github")]),
+        Some("github".into())
+    );
+    assert_eq!(token_of(&[]), None);
+}
+
+// CI routinely exports a variable with no value when a secret is unavailable;
+// an empty winner would mean "authenticated with the empty string".
+#[test]
+fn an_empty_token_variable_is_skipped_rather_than_winning() {
+    assert_eq!(
+        token_of(&[("API_TOKEN_GITHUB", ""), ("GH_TOKEN", "gh")]),
+        Some("gh".into())
+    );
+    assert_eq!(token_of(&[("GH_TOKEN", "")]), None);
+}
+
+#[test]
+fn a_token_is_wrapped_so_it_cannot_be_formatted_into_a_message() {
+    let t = token_from(lookup_of(&[("GH_TOKEN", "tok-gh-fmt-case")])).unwrap();
+    assert!(!format!("{t} {t:?}").contains("tok-gh-fmt-case"));
+}
+
+// --- insteadOf cleanup ------------------------------------------------------
+
+// The token is part of the config *key*, so a rotated token writes a new key
+// instead of replacing the old one. Every one of ours has to be found.
+#[test]
+fn stale_instead_of_keys_finds_every_previously_written_rule() {
+    let output = "\
+url.https://x-access-token:old1@github.com/.insteadof https://github.com/
+url.https://x-access-token:old2@github.com/.insteadof https://github.com/
+";
+    assert_eq!(
+        stale_instead_of_keys(output),
+        vec![
+            "url.https://x-access-token:old1@github.com/.insteadof",
+            "url.https://x-access-token:old2@github.com/.insteadof",
+        ]
+    );
+}
+
+#[test]
+fn stale_instead_of_keys_leaves_unrelated_config_alone() {
+    let output = "\
+url.file:///tmp/bare.insteadof https://github.com/o/r
+url.https://x-access-token:t@github.com/.pushinsteadof https://github.com/
+user.name someone
+";
+    assert!(stale_instead_of_keys(output).is_empty());
+    assert!(stale_instead_of_keys("").is_empty());
+}
+
+// --- PrRef ------------------------------------------------------------------
+
+#[test]
+fn pr_ref_rejects_anything_that_is_not_owner_slash_repo() {
+    assert!(PrRef::new("owner/repo", "b").is_ok());
+    for bad in ["repo", "a/b/c", "/repo", "owner/", "own er/repo", ""] {
+        assert!(PrRef::new(bad, "b").is_err(), "{bad:?} should be rejected");
+    }
+    assert!(PrRef::new("owner/repo", "").is_err());
+}
+
+// Every `gh pr` subcommand must be scoped to the recipes repo, never to
+// whatever repo the runner happens to be checked out in.
+#[test]
+fn pr_ref_always_yields_the_repo_flag() {
+    let pr = PrRef::new("owner/repo", "release/x").unwrap();
+    assert_eq!(pr.repo_flag(), ["--repo", "owner/repo"]);
+    assert_eq!(pr.branch(), "release/x");
+}
+
+// --- base URLs --------------------------------------------------------------
+
+#[test]
+fn a_base_url_override_never_produces_a_double_slash() {
+    // SAFETY: single-threaded within this test; the var is read immediately.
+    unsafe { std::env::set_var("MISE_TEST_BASE_URL", "http://127.0.0.1:9/") };
+    assert_eq!(
+        base_url("MISE_TEST_BASE_URL", "unused"),
+        "http://127.0.0.1:9"
+    );
+    unsafe { std::env::remove_var("MISE_TEST_BASE_URL") };
+    assert_eq!(base_url("MISE_TEST_BASE_URL", "https://x/"), "https://x");
+}

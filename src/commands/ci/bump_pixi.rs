@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -10,17 +11,17 @@ pub struct BumpPixi {
     #[arg(long)]
     pub version: String,
     /// Path to the package's pixi.toml. Defaults to ./pixi.toml.
-    #[arg(long, default_value = "pixi.toml")]
+    #[arg(long, default_value = crate::consts::PIXI_TOML)]
     pub pixi_toml: PathBuf,
 }
 
 impl BumpPixi {
     pub fn run(self) -> anyhow::Result<()> {
         let body = std::fs::read_to_string(&self.pixi_toml)
-            .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.pixi_toml.display()))?;
+            .with_context(|| format!("reading {}", self.pixi_toml.display()))?;
         let new_body = bump_toml(&body, &self.version)?;
         std::fs::write(&self.pixi_toml, new_body)
-            .map_err(|e| anyhow::anyhow!("writing {}: {e}", self.pixi_toml.display()))?;
+            .with_context(|| format!("writing {}", self.pixi_toml.display()))?;
         println!(
             "Bumped {} to version {}",
             self.pixi_toml.display(),
@@ -31,9 +32,7 @@ impl BumpPixi {
 }
 
 fn bump_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
-    let mut doc: toml_edit::DocumentMut = body
-        .parse()
-        .map_err(|e| anyhow::anyhow!("parsing pixi.toml: {e}"))?;
+    let mut doc: toml_edit::DocumentMut = body.parse().context("parsing pixi.toml")?;
 
     let pkg = doc
         .get_mut("package")

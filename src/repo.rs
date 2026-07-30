@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::Deserialize;
 
+use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML};
 use crate::types::{DeepstreamVersion, PixiNativeManifest, RecipeName};
 
 #[derive(Debug, Clone)]
@@ -24,7 +25,7 @@ impl Repo {
     pub fn discover_from(start: &Path) -> anyhow::Result<Self> {
         let mut cur: &Path = start;
         loop {
-            if cur.join("pixi.toml").is_file() {
+            if cur.join(PIXI_TOML).is_file() {
                 return Ok(Self {
                     root: cur.canonicalize().context("canonicalize repo root")?,
                 });
@@ -38,7 +39,7 @@ impl Repo {
 
     /// Use an explicit path. Must contain `pixi.toml`.
     pub fn at(root: PathBuf) -> anyhow::Result<Self> {
-        if !root.join("pixi.toml").is_file() {
+        if !root.join(PIXI_TOML).is_file() {
             anyhow::bail!("{} does not contain pixi.toml", root.display());
         }
         Ok(Self {
@@ -79,7 +80,7 @@ impl Repo {
     }
 
     pub fn pixi_native_manifest(&self) -> anyhow::Result<PixiNativeManifest> {
-        let path = self.root.join("pixi_native_packages.yaml");
+        let path = self.root.join(PIXI_NATIVE_PACKAGES_YAML);
         let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         PixiNativeManifest::from_yaml_str(&text)
             .with_context(|| format!("parse {}", path.display()))

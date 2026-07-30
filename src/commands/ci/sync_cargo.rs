@@ -1,3 +1,4 @@
+use anyhow::Context;
 use clap::Args;
 use std::path::PathBuf;
 
@@ -25,17 +26,17 @@ pub struct SyncCargo {
 impl SyncCargo {
     pub fn run(self) -> anyhow::Result<()> {
         let toml = std::fs::read_to_string(&self.cargo_toml)
-            .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.cargo_toml.display()))?;
+            .with_context(|| format!("reading {}", self.cargo_toml.display()))?;
         std::fs::write(&self.cargo_toml, bump_cargo_toml(&toml, &self.version)?)
-            .map_err(|e| anyhow::anyhow!("writing {}: {e}", self.cargo_toml.display()))?;
+            .with_context(|| format!("writing {}", self.cargo_toml.display()))?;
 
         let lock = std::fs::read_to_string(&self.cargo_lock)
-            .map_err(|e| anyhow::anyhow!("reading {}: {e}", self.cargo_lock.display()))?;
+            .with_context(|| format!("reading {}", self.cargo_lock.display()))?;
         std::fs::write(
             &self.cargo_lock,
             bump_cargo_lock(&lock, &self.package, &self.version)?,
         )
-        .map_err(|e| anyhow::anyhow!("writing {}: {e}", self.cargo_lock.display()))?;
+        .with_context(|| format!("writing {}", self.cargo_lock.display()))?;
 
         println!("Synced Cargo.toml/Cargo.lock to version {}", self.version);
         Ok(())
@@ -43,9 +44,7 @@ impl SyncCargo {
 }
 
 fn bump_cargo_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
-    let mut doc: toml_edit::DocumentMut = body
-        .parse()
-        .map_err(|e| anyhow::anyhow!("parsing Cargo.toml: {e}"))?;
+    let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.toml")?;
     let pkg = doc
         .get_mut("package")
         .ok_or_else(|| anyhow::anyhow!("no [package] table in Cargo.toml"))?
@@ -59,9 +58,7 @@ fn bump_cargo_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
 }
 
 fn bump_cargo_lock(body: &str, package: &str, new_version: &str) -> anyhow::Result<String> {
-    let mut doc: toml_edit::DocumentMut = body
-        .parse()
-        .map_err(|e| anyhow::anyhow!("parsing Cargo.lock: {e}"))?;
+    let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.lock")?;
     let pkgs = doc
         .get_mut("package")
         .and_then(|p| p.as_array_of_tables_mut())

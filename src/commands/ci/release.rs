@@ -11,7 +11,7 @@ pub struct Release {
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
     /// owner/repo of the conda recipes repository to upsert into.
-    #[arg(long, default_value = "greenroom-robotics/ros-recipes")]
+    #[arg(long, default_value = crate::consts::RECIPES_REPO)]
     pub recipes_repo: String,
     /// Whether to commit CHANGELOG.md back to the source repo.
     // ArgAction::Set so the flag takes an explicit value (`--changelog false`);
@@ -133,20 +133,24 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
 /// Merge a `workspaces` array into the root package.json (staged by the
 /// release action), creating a minimal one for standalone/local runs.
 fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
+    use anyhow::Context;
     let mut v: serde_json::Value = if root_pkg_json.exists() {
-        serde_json::from_str(&std::fs::read_to_string(root_pkg_json)?)?
+        let text = std::fs::read_to_string(root_pkg_json)
+            .with_context(|| format!("reading {}", root_pkg_json.display()))?;
+        serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", root_pkg_json.display()))?
     } else {
         serde_json::json!({ "name": "mise-release-root", "private": true })
     };
     v["workspaces"] = serde_json::json!(globs);
-    std::fs::write(root_pkg_json, serde_json::to_string_pretty(&v)?)?;
+    std::fs::write(root_pkg_json, serde_json::to_string_pretty(&v)?)
+        .with_context(|| format!("writing {}", root_pkg_json.display()))?;
     Ok(())
 }
 
 impl Release {
     pub fn run(self) -> anyhow::Result<()> {
         use crate::commands::ci::packages;
-        use std::process::Command;
 
         let pixis = packages::discover(&self.package_dir, self.package.as_deref())?;
         if pixis.is_empty() {
@@ -190,16 +194,7 @@ impl Release {
         let tag_format = tag_format(multi, &single_pkg.name);
 
         let argv = release_argv(multi, &tag_format);
-        let bin = argv[1].clone();
-        let mut cmd = Command::new("npx");
-        cmd.args(&argv);
-        let status = cmd
-            .status()
-            .map_err(|e| anyhow::anyhow!("failed to spawn npx {bin}: {e}"))?;
-        if !status.success() {
-            anyhow::bail!("npx {bin} failed");
-        }
-        Ok(())
+        crate::process::run("npx", &argv)
     }
 
     fn releaserc_json(&self, pixi: &std::path::Path) -> anyhow::Result<String> {

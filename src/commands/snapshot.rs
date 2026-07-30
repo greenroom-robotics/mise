@@ -24,7 +24,6 @@ impl Snapshot {
 
 const SNAPSHOT_URL: &str =
     "https://raw.githubusercontent.com/RoboStack/ros-kilted/main/rosdistro_snapshot.yaml";
-const CHANNEL_BASE: &str = "https://prefix.dev/robostack-kilted";
 const SUBDIRS: &[&str] = &["linux-64", "noarch"];
 
 fn refresh(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
@@ -39,7 +38,10 @@ fn refresh(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     for subdir in SUBDIRS {
         let dir = cache_root.join(subdir);
         std::fs::create_dir_all(&dir).with_context(|| format!("mkdir {}", dir.display()))?;
-        let url = format!("{CHANNEL_BASE}/{subdir}/repodata.json");
+        let url = format!(
+            "{}/{subdir}/repodata.json",
+            crate::consts::ROBOSTACK_CHANNEL
+        );
         let dest = dir.join("repodata.json");
         download_to(&url, &dest)?;
         tracing::info!("Refreshed {}", dest.display());
