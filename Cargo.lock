@@ -527,6 +527,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "url",
+ "zeroize",
 ]
 
 [[package]]

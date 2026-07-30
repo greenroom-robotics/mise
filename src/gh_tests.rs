@@ -118,6 +118,11 @@ fn lookup_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> 
     }
 }
 
+/// Fixture tokens are deliberately distinctive strings rather than words like
+/// `gh` or `github`. Constructing a [`Secret`] registers its plaintext with the
+/// process-wide scrub registry for the life of the process, and `scrub` is a
+/// substring replace — a token of `gh` would redact those two letters out of
+/// every command label any later test in the same process logs.
 fn token_of(pairs: &[(&str, &str)]) -> Option<String> {
     token_from(lookup_of(pairs)).map(|t| t.expose_secret().to_string())
 }
@@ -126,19 +131,22 @@ fn token_of(pairs: &[(&str, &str)]) -> Option<String> {
 fn token_precedence_is_api_token_then_gh_then_github() {
     assert_eq!(
         token_of(&[
-            ("API_TOKEN_GITHUB", "api"),
-            ("GH_TOKEN", "gh"),
-            ("GITHUB_TOKEN", "github"),
+            ("API_TOKEN_GITHUB", "tok-from-api-var"),
+            ("GH_TOKEN", "tok-from-gh-var"),
+            ("GITHUB_TOKEN", "tok-from-github-var"),
         ]),
-        Some("api".into())
+        Some("tok-from-api-var".into())
     );
     assert_eq!(
-        token_of(&[("GH_TOKEN", "gh"), ("GITHUB_TOKEN", "github")]),
-        Some("gh".into())
+        token_of(&[
+            ("GH_TOKEN", "tok-from-gh-var"),
+            ("GITHUB_TOKEN", "tok-from-github-var")
+        ]),
+        Some("tok-from-gh-var".into())
     );
     assert_eq!(
-        token_of(&[("GITHUB_TOKEN", "github")]),
-        Some("github".into())
+        token_of(&[("GITHUB_TOKEN", "tok-from-github-var")]),
+        Some("tok-from-github-var".into())
     );
     assert_eq!(token_of(&[]), None);
 }
@@ -148,8 +156,8 @@ fn token_precedence_is_api_token_then_gh_then_github() {
 #[test]
 fn an_empty_token_variable_is_skipped_rather_than_winning() {
     assert_eq!(
-        token_of(&[("API_TOKEN_GITHUB", ""), ("GH_TOKEN", "gh")]),
-        Some("gh".into())
+        token_of(&[("API_TOKEN_GITHUB", ""), ("GH_TOKEN", "tok-from-gh-var")]),
+        Some("tok-from-gh-var".into())
     );
     assert_eq!(token_of(&[("GH_TOKEN", "")]), None);
 }

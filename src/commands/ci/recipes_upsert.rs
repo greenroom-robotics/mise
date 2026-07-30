@@ -146,8 +146,9 @@ pub(crate) fn mutate_vendored_recipe(
 /// column-2 indent (two-space indent for the dash, and sub-keys at column 4).
 ///
 /// Behavior:
-/// - If an item with the given `name` exists: update `url:`, `rev:`,
-///   optionally `subdir:` (insert if absent), delete `ref:` if present.
+/// - If an item with the given `name` exists: update `url:` and `rev:`, set
+///   `subdir:` to match the argument (inserting or removing the line as
+///   needed), and delete `ref:` if present.
 /// - If absent: append a new item at the end of the file with the same
 ///   indentation conventions.
 /// - The file is rebuilt line by line, so it comes back with the terminator
@@ -157,6 +158,10 @@ pub(crate) fn mutate_pixi_entry(
     name: &PackageName,
     url: &GithubRepoUrl,
     rev: &Sha40,
+    // `None` means the package sits at the root of its source repo, not "leave
+    // whatever is there alone" — the only producer computes it as the package
+    // directory relative to the git toplevel, so an absent value is a fact
+    // about the package, and the entry's `subdir:` line is removed to match.
     subdir: Option<&str>,
 ) -> anyhow::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
@@ -193,7 +198,7 @@ pub(crate) fn mutate_pixi_entry(
                 if let Some(s) = subdir {
                     subdir_seen = true;
                     out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
-                } // else: drop the existing subdir line — caller didn't pass one
+                } // else: no subdir means no subdir line — see the note on `subdir`
                 continue;
             }
             out.push(line.to_string());

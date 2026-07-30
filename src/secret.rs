@@ -22,6 +22,8 @@
 use std::fmt;
 use std::sync::{OnceLock, RwLock};
 
+use zeroize::Zeroizing;
+
 pub use secrecy::ExposeSecret;
 use secrecy::SecretString;
 
@@ -70,8 +72,17 @@ impl fmt::Debug for Secret {
 /// error message, and the whole of [`Secret`]'s `Debug` output.
 pub const REDACTED: &str = "[REDACTED]";
 
-fn registry() -> &'static RwLock<Vec<String>> {
-    static REGISTRY: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
+/// The registered plaintexts, held in [`Zeroizing`] so the copies this module
+/// keeps are wiped when the process tears the registry down — [`Secret`] gets
+/// that from the crate, and a plain `String` here would quietly undo it.
+///
+/// Entries are never removed. Deregistering on drop would be unsound with
+/// `Secret: Clone`: the first copy dropped would unregister a plaintext its
+/// live clones still hold, and every later log line carrying that token would
+/// go out in the clear. Scrubbing a secret that no longer exists is harmless;
+/// failing to scrub one that does is the bug this exists to prevent.
+fn registry() -> &'static RwLock<Vec<Zeroizing<String>>> {
+    static REGISTRY: OnceLock<RwLock<Vec<Zeroizing<String>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| RwLock::new(Vec::new()))
 }
 
@@ -80,8 +91,8 @@ fn register(value: &str) {
     // recovering the inner value is a duplicate entry, and failing to scrub
     // would be far worse than that.
     let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
-    if !guard.iter().any(|v| v == value) {
-        guard.push(value.to_string());
+    if !guard.iter().any(|v| v.as_str() == value) {
+        guard.push(Zeroizing::new(value.to_string()));
     }
 }
 
