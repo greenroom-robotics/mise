@@ -53,7 +53,7 @@ fn reads_name_and_version() {
     .unwrap();
     let pkg = Package::read(&p).unwrap();
     assert_eq!(
-        pkg.identity().unwrap(),
+        pkg.identity(),
         PackageIdentity {
             name: pn("foo"),
             version: ver("1.2.3")
@@ -79,20 +79,41 @@ fn workspace_only_manifest_parses_as_its_own_variant() {
     ));
 }
 
+// Identity is mandatory: a [package] table missing either key is not a
+// package this tool can release, and saying so at the manifest is what makes
+// `identity()` infallible everywhere downstream.
 #[test]
-fn package_xml_mode_manifest_has_a_version_but_no_name() {
-    let m = PackageManifest::parse("[package]\nversion = \"1.0.0\"\n").unwrap();
-    assert_eq!(m.name(), None);
-    assert_eq!(m.version(), Some(&ver("1.0.0")));
-    let err = m.identity().unwrap_err();
-    assert!(err.to_string().contains("package.name"));
+fn package_without_a_name_is_rejected_at_parse() {
+    let err = PackageManifest::parse("[package]\nversion = \"1.0.0\"\n").unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("[package]"), "got: {msg}");
+    assert!(msg.contains("missing field `name`"), "got: {msg}");
+}
+
+#[test]
+fn package_without_a_version_is_rejected_at_parse() {
+    let err = PackageManifest::parse("[package]\nname = \"foo\"\n").unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("[package]"), "got: {msg}");
+    assert!(msg.contains("missing field `version`"), "got: {msg}");
+}
+
+// ...and the file is named, so the report points at the manifest to fix.
+#[test]
+fn reading_a_manifest_with_no_package_name_names_the_file() {
+    let tmp = TempDir::new().unwrap();
+    let p = tmp.path().join("pixi.toml");
+    fs::write(&p, "[package]\nversion = \"1.0.0\"\n").unwrap();
+    let msg = format!("{:#}", Package::read(&p).unwrap_err());
+    assert!(msg.contains(&p.display().to_string()), "got: {msg}");
+    assert!(msg.contains("name"), "got: {msg}");
 }
 
 #[test]
 fn parses_minimal() {
     let p = PackageManifest::parse("[package]\nname = \"foo\"\nversion = \"1.2.3\"\n").unwrap();
-    assert_eq!(p.name(), Some(&pn("foo")));
-    assert_eq!(p.version(), Some(&ver("1.2.3")));
+    assert_eq!(*p.name(), pn("foo"));
+    assert_eq!(*p.version(), ver("1.2.3"));
     assert_eq!(p.build_number(), 0);
 }
 
@@ -266,8 +287,8 @@ fn discovery_parses_each_manifest_once_into_a_package() {
     make_pkg(tmp.path(), "alpha");
     let pkgs = discover(tmp.path(), None).unwrap();
     let alpha = &pkgs[0];
-    assert_eq!(alpha.identity().unwrap().name, pn("alpha"));
-    assert_eq!(alpha.identity().unwrap().version, ver("1.0.0"));
+    assert_eq!(alpha.identity().name, pn("alpha"));
+    assert_eq!(alpha.identity().version, ver("1.0.0"));
     assert_eq!(alpha.dir, tmp.path().join("alpha"));
     assert_eq!(alpha.manifest_path, tmp.path().join("alpha/pixi.toml"));
 }
@@ -373,6 +394,40 @@ fn a_sibling_with_a_type_mismatched_field_does_not_hide_its_neighbours() {
     assert!(result[0].ends_with("alpha/pixi.toml"));
 }
 
+#[test]
+fn a_sibling_whose_package_key_is_not_a_table_does_not_hide_its_neighbours() {
+    // A `package` that is a scalar rather than a table is a malformed manifest
+    // — a stray line or a `[[package]]` typo — not a package that names itself
+    // unreadably. It must stay a tolerated skip, or one broken file aborts
+    // discovery for every sibling beside it.
+    let tmp = TempDir::new().unwrap();
+    make_pkg(tmp.path(), "alpha");
+    let pkg = tmp.path().join("broken");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("pixi.toml"), "package = \"oops\"\n").unwrap();
+
+    assert!(Manifest::read(&pkg.join("pixi.toml")).is_err());
+    let result = manifest_paths(&discover(tmp.path(), None).unwrap());
+    assert_eq!(result.len(), 1);
+    assert!(result[0].ends_with("alpha/pixi.toml"));
+}
+
+#[test]
+fn a_sibling_with_no_package_name_is_fatal_to_the_sweep() {
+    // The other side of the line: a real `[package]` table that fails to name
+    // itself IS a package, so warn-and-skip would silently drop it from a
+    // release. It has to be loud.
+    let tmp = TempDir::new().unwrap();
+    make_pkg(tmp.path(), "alpha");
+    let pkg = tmp.path().join("nameless");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("pixi.toml"), "[package]\nversion = \"1.0.0\"\n").unwrap();
+
+    let err = discover(tmp.path(), None).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("nameless"), "got: {msg}");
+}
+
 // A short conda version is legal in pixi.toml. It must not take the package
 // out of a release run, and writing the manifest back must not rewrite it.
 #[test]
@@ -387,7 +442,7 @@ fn a_two_component_version_is_a_package_and_keeps_its_spelling() {
     .unwrap();
     let found = discover(tmp.path(), None).unwrap();
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].identity().unwrap().version.to_string(), "1.0");
+    assert_eq!(found[0].identity().version.to_string(), "1.0");
 }
 
 // The opposite of the tolerant sweep: a version we genuinely cannot read
@@ -647,10 +702,9 @@ fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
 fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
-    // Sibling dir/manifest is named "lib" (e.g. package-xml mode: no
-    // stable relationship between package.name and the channel artifact
-    // name), but the consumer depends on it under the artifact-name key
-    // "ros-kilted-lib".
+    // The sibling's own package.name is "lib", but the channel artifact it
+    // publishes is "ros-kilted-lib", which is the key the consumer depends on
+    // it under. The rewrite must key off the dep key, not the sibling's name.
     write_checkout_pkg(root, "lib", "");
     let consumer = write_checkout_pkg(
         root,
@@ -688,10 +742,9 @@ fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
         "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
     );
     let err = resolve_path_deps(&consumer).unwrap_err();
-    assert!(
-        format!("{err:#}").contains("package.version"),
-        "got: {err:#}"
-    );
+    let msg = format!("{err:#}");
+    assert!(msg.contains("path dep lib"), "got: {msg}");
+    assert!(msg.contains("missing field `version`"), "got: {msg}");
 }
 
 #[test]

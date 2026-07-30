@@ -1,8 +1,5 @@
-use anyhow::{Context, Result};
-use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
-use std::sync::OnceLock;
 
 use crate::manifest::Package;
 use crate::types::PackageName;
@@ -20,24 +17,13 @@ pub struct SiblingGraph {
 
 /// Build the sibling graph from packages already parsed by discovery. Every
 /// dependency table in [`crate::manifest::DEP_TABLES`] is scanned.
-pub fn analyze(packages: &[Package]) -> Result<SiblingGraph> {
+pub fn analyze(packages: &[Package]) -> SiblingGraph {
     let mut g = SiblingGraph::default();
     let mut named: Vec<(PackageName, PathBuf, &Package)> = Vec::new();
 
     for pkg in packages {
         let dir = normalize(&pkg.dir);
-        let name = pkg
-            .manifest
-            .name()
-            .cloned()
-            .or_else(|| package_xml_name(&dir))
-            .with_context(|| {
-                format!(
-                    "{}: missing package.name and no <name> in {}",
-                    pkg.manifest_path.display(),
-                    dir.join("package.xml").display()
-                )
-            })?;
+        let name = pkg.manifest.name().clone();
         g.dirs.insert(name.clone(), dir.clone());
         named.push((name, dir, pkg));
     }
@@ -67,19 +53,7 @@ pub fn analyze(packages: &[Package]) -> Result<SiblingGraph> {
             }
         }
     }
-    Ok(g)
-}
-
-/// Package-xml mode: `pixi.toml [package]` has no `name` key, and identity
-/// comes from a `package.xml` beside the manifest. Extracts the first
-/// `<name>...</name>` element's text, or `None` if there's no `package.xml`,
-/// no `<name>` element in it, or its text is not a package name.
-fn package_xml_name(dir: &Path) -> Option<PackageName> {
-    static NAME_RE: OnceLock<Regex> = OnceLock::new();
-    let re = NAME_RE.get_or_init(|| Regex::new(r"(?s)<name>\s*(.*?)\s*</name>").unwrap());
-    let text = std::fs::read_to_string(dir.join("package.xml")).ok()?;
-    let raw = re.captures(&text).and_then(|c| c.get(1))?.as_str();
-    PackageName::new(raw).ok()
+    g
 }
 
 /// Lexical path normalization (no fs access): resolves `.` and `..`.

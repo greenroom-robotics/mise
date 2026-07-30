@@ -164,14 +164,14 @@ impl Release {
         // Path deps are guarded (verify-siblings) and stay committed permanently
         // — the buildfarm derives range pins ephemerally at build time via
         // `mise build-recipes` (resolve_path_deps), not pixi.
-        let graph = crate::commands::ci::siblings::analyze(&pkgs)?;
+        let graph = crate::commands::ci::siblings::analyze(&pkgs);
 
         // Write a .releaserc (and, in multi mode, a package.json encoding
         // sibling deps) next to each package's pixi.toml.
         let mut workspace_globs: Vec<String> = Vec::new();
         for pkg in &pkgs {
             let pkg_dir = &pkg.dir;
-            let id = pkg.identity()?;
+            let id = pkg.identity();
             let releaserc = self.releaserc_json(&pkg.manifest_path, &id.name)?;
             std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
             if multi {
@@ -190,7 +190,7 @@ impl Release {
 
         // In single-package mode `pkgs` holds exactly the package being
         // released, so its name can be embedded literally in the tag format.
-        let tag_format = tag_format(multi, &pkgs[0].identity()?.name);
+        let tag_format = tag_format(multi, &pkgs[0].identity().name);
 
         let argv = release_argv(multi, &tag_format);
         crate::process::run("npx", &argv)

@@ -25,8 +25,8 @@ impl VerifySiblings {
         use crate::manifest::{self, Package};
 
         let pkgs = manifest::discover(&self.package_dir, None)?;
-        let graph = siblings::analyze(&pkgs)?;
-        let consumer = Package::read(&self.pixi_toml)?.identity()?.name;
+        let graph = siblings::analyze(&pkgs);
+        let consumer = Package::read(&self.pixi_toml)?.identity().name;
 
         let Some(targets) = graph.path_deps.get(&consumer) else {
             return Ok(()); // no path deps, nothing to verify

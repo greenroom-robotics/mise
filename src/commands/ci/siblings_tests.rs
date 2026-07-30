@@ -22,7 +22,7 @@ fn detects_path_dep_between_siblings() {
         "geolocation_node",
         "[package.run-dependencies]\ngeolocation = { path = \"../geolocation\" }\n",
     );
-    let g = analyze(&[a, b]).unwrap();
+    let g = analyze(&[a, b]);
     assert!(g.path_deps["geolocation_node"].contains("geolocation"));
     assert!(g.path_deps.get("geolocation").is_none_or(|s| s.is_empty()));
 }
@@ -31,7 +31,7 @@ fn detects_path_dep_between_siblings() {
 fn self_path_dep_idiom_is_ignored() {
     let tmp = TempDir::new().unwrap();
     let a = write_pkg(tmp.path(), "solo", "");
-    let g = analyze(&[a]).unwrap();
+    let g = analyze(&[a]);
     assert!(g.path_deps.get("solo").is_none_or(|s| s.is_empty()));
 }
 
@@ -44,7 +44,7 @@ fn detects_version_pin_on_sibling() {
         "geolocation_node",
         "[package.run-dependencies]\ngeolocation = \"==1.0.0\"\n",
     );
-    let g = analyze(&[a, b]).unwrap();
+    let g = analyze(&[a, b]);
     assert!(g.pin_deps["geolocation_node"].contains("geolocation"));
 }
 
@@ -57,7 +57,7 @@ fn host_dependencies_also_scanned() {
         "geolocation_node",
         "[package.host-dependencies]\ngeolocation_msgs = { path = \"../geolocation_msgs\" }\n",
     );
-    let g = analyze(&[a, b]).unwrap();
+    let g = analyze(&[a, b]);
     assert!(g.path_deps["geolocation_node"].contains("geolocation_msgs"));
 }
 
@@ -69,43 +69,6 @@ fn external_deps_produce_no_edges() {
         "geolocation",
         "[package.run-dependencies]\nros-kilted-rclpy = \"*\"\npydantic = \">=2,<3\"\n",
     );
-    let g = analyze(&[a]).unwrap();
+    let g = analyze(&[a]);
     assert!(g.pin_deps.get("geolocation").is_none_or(|s| s.is_empty()));
-}
-
-#[test]
-fn package_xml_mode_manifest_falls_back_to_package_xml_name() {
-    let tmp = TempDir::new().unwrap();
-    let dir = tmp.path().join("geolocation");
-    fs::create_dir_all(&dir).unwrap();
-    let pixi = dir.join("pixi.toml");
-    fs::write(
-        &pixi,
-        "[workspace]\nname = \"geolocation\"\n\n[package]\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-    fs::write(
-            dir.join("package.xml"),
-            "<?xml version=\"1.0\"?>\n<package format=\"3\">\n  <name>geolocation</name>\n  <version>1.0.0</version>\n</package>\n",
-        )
-        .unwrap();
-    let g = analyze(&[Package::read(&pixi).unwrap()]).unwrap();
-    assert!(g.dirs.contains_key("geolocation"));
-}
-
-#[test]
-fn missing_name_in_both_manifest_and_package_xml_errors_mentioning_both() {
-    let tmp = TempDir::new().unwrap();
-    let dir = tmp.path().join("geolocation");
-    fs::create_dir_all(&dir).unwrap();
-    let pixi = dir.join("pixi.toml");
-    fs::write(
-        &pixi,
-        "[workspace]\nname = \"geolocation\"\n\n[package]\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-    let err = analyze(&[Package::read(&pixi).unwrap()]).unwrap_err();
-    let msg = err.to_string();
-    assert!(msg.contains("package.name"));
-    assert!(msg.contains("package.xml"));
 }

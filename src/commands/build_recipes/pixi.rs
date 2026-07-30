@@ -90,9 +90,7 @@ fn check_entry(
     let pixi_toml_text = fetch_pixi_toml(entry)?;
     let upstream = PackageManifest::parse(&pixi_toml_text)
         .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
-    let id = upstream
-        .identity()
-        .with_context(|| format!("entry {}: upstream pixi.toml", entry.name))?;
+    let id = upstream.identity();
 
     if !upstream.supports_platform(target_platform) {
         return Ok(CheckOutcome::SkipPlatformUnsupported {

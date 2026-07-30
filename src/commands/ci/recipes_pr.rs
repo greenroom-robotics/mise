@@ -95,7 +95,7 @@ impl RecipesPr {
                         "" | "." => None,
                         s => Some(s.to_string()),
                     };
-                    out.push((pkg.identity()?.name, subdir));
+                    out.push((pkg.identity().name, subdir));
                 }
                 out
             }

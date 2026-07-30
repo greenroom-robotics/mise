@@ -53,14 +53,13 @@ pub(super) fn resolve_sibling_pins(
             )
         })?;
         let sib_version = PackageManifest::parse(&sib_text)
-            .with_context(|| format!("parse sibling manifest for {name}"))?
-            .version()
             .with_context(|| {
                 format!(
-                    "pin dep {name}: sibling manifest {} has no package.version",
+                    "pin dep {name}: parsing sibling manifest {}",
                     sib_manifest.display()
                 )
             })?
+            .version()
             .clone();
         if sib_version == pin {
             out.push(ResolvedDep {

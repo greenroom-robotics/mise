@@ -70,8 +70,10 @@ pub struct PackageManifest {
 }
 
 /// A package's name and version together, which is what every release path
-/// needs. Read via [`PackageManifest::identity`] so "named but unversioned"
-/// fails once, at the manifest, instead of at each use.
+/// needs. Guaranteed present on any [`PackageManifest`] value: both keys are
+/// required to deserialize `[package]`, so a manifest that parses into one
+/// always has an identity. A `[package]` that fails on those keys never becomes
+/// a `PackageManifest` — see [`Candidate::UnreadableIdentity`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct PackageIdentity {
     pub name: PackageName,
@@ -89,20 +91,20 @@ pub struct Dep {
 
 #[derive(Debug, Deserialize)]
 struct ManifestRaw {
+    /// Left as a raw value so the `[package]` table is deserialized separately
+    /// and its errors can be attributed to that table by name.
     #[serde(default)]
-    package: Option<PackageSection>,
+    package: Option<toml::Value>,
     #[serde(default)]
     workspace: Option<Workspace>,
 }
 
+/// Both identity keys are required: a `[package]` table that does not name and
+/// version itself is rejected here, once, rather than at every use.
 #[derive(Debug, Deserialize)]
 struct PackageSection {
-    /// Absent in package-xml mode, where identity lives in a `package.xml`
-    /// beside the manifest.
-    #[serde(default)]
-    name: Option<PackageName>,
-    #[serde(default)]
-    version: Option<Version>,
+    name: PackageName,
+    version: Version,
     #[serde(default)]
     build: Option<BuildSection>,
 }
@@ -144,7 +146,7 @@ impl Manifest {
         Ok(match raw.package {
             None => Manifest::WorkspaceOnly,
             Some(package) => Manifest::Package(PackageManifest {
-                package,
+                package: package.try_into().context("[package]")?,
                 workspace: raw.workspace,
                 deps,
             }),
@@ -226,29 +228,20 @@ impl PackageManifest {
         }
     }
 
-    /// `package.name`, absent in package-xml mode.
-    pub fn name(&self) -> Option<&PackageName> {
-        self.package.name.as_ref()
+    pub fn name(&self) -> &PackageName {
+        &self.package.name
     }
 
-    /// `package.version`, absent in manifests that only exist to be built from
-    /// a `package.xml`-derived version.
-    pub fn version(&self) -> Option<&Version> {
-        self.package.version.as_ref()
+    pub fn version(&self) -> &Version {
+        &self.package.version
     }
 
-    /// Name and version together. Errors naming the missing key.
-    pub fn identity(&self) -> Result<PackageIdentity> {
-        let name = self
-            .name()
-            .ok_or_else(|| anyhow::anyhow!("missing package.name"))?;
-        let version = self
-            .version()
-            .ok_or_else(|| anyhow::anyhow!("missing package.version"))?;
-        Ok(PackageIdentity {
-            name: name.clone(),
-            version: version.clone(),
-        })
+    /// Name and version together.
+    pub fn identity(&self) -> PackageIdentity {
+        PackageIdentity {
+            name: self.package.name.clone(),
+            version: self.package.version.clone(),
+        }
     }
 
     /// Every dependency entry, across all of [`DEP_TABLES`].
@@ -371,11 +364,9 @@ impl Package {
         }
     }
 
-    /// Name and version, with the manifest named in the error.
-    pub fn identity(&self) -> Result<PackageIdentity> {
-        self.manifest
-            .identity()
-            .with_context(|| self.manifest_path.display().to_string())
+    /// Name and version.
+    pub fn identity(&self) -> PackageIdentity {
+        self.manifest.identity()
     }
 }
 
@@ -384,8 +375,8 @@ impl Package {
 /// Outcomes rather than `Result<Option<Package>>` because the failures must not
 /// all be `?`-able: discovery sweeps a directory nobody curated for it, and a
 /// manifest it cannot use — missing `[package]`, TOML syntax error, or a key
-/// whose type does not match the schema — usually says nothing about its
-/// neighbours. Returning the failure as a variant forces the sweep to decide
+/// that is missing or whose type does not match the schema — usually says
+/// nothing about its neighbours. Returning the failure as a variant forces the sweep to decide
 /// what to do with each kind instead of aborting on all of them.
 enum Candidate {
     Package(Box<Package>),
@@ -397,9 +388,10 @@ enum Candidate {
         path: PathBuf,
         error: anyhow::Error,
     },
-    /// Declares a `[package]` whose own `name` or `version` this tool cannot
-    /// read. This *is* a package, and it is one we would otherwise drop on the
-    /// floor, so it is fatal even in a tolerant sweep.
+    /// Declares a `[package]` that does not give this tool a readable `name`
+    /// and `version` — either key absent, or spelled in a way our newtypes
+    /// reject. This *is* a package, and it is one we would otherwise drop on
+    /// the floor, so it is fatal even in a tolerant sweep.
     UnreadableIdentity {
         path: PathBuf,
         error: anyhow::Error,
@@ -460,22 +452,31 @@ impl Candidate {
 }
 
 /// Whether `text` is valid TOML declaring a `[package]` table whose `name` or
-/// `version` is a string our own newtypes reject.
+/// `version` is missing, or is not a string our own newtypes accept.
 ///
 /// Deliberately structural rather than a match on the serde error text, and
 /// deliberately limited to identity: a `[package]` with a bad `build-number` is
-/// still discoverable, because nothing about releasing *this* package reads it.
+/// not fatal, because nothing about releasing *this* package reads it.
+///
+/// The table check is load-bearing. A `package` key that is not a table at all
+/// (`package = "oops"`, a stray `[[package]]`) is a malformed manifest, not a
+/// package that names itself unreadably — it stays a tolerated skip so one
+/// broken file cannot abort discovery for its siblings.
 fn declares_unreadable_identity(text: &str) -> bool {
     let Ok(value) = toml::from_str::<toml::Value>(text) else {
         return false;
     };
-    let Some(package) = value.get("package") else {
+    let Some(package) = value.get("package").filter(|v| v.is_table()) else {
         return false;
     };
-    let bad = |key: &str, check: fn(&str) -> bool| {
-        package.get(key).and_then(|v| v.as_str()).is_some_and(check)
+    let unreadable = |key: &str, accepts: fn(&str) -> bool| {
+        !package
+            .get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(accepts)
     };
-    bad("name", |s| PackageName::new(s).is_err()) || bad("version", |s| Version::parse(s).is_err())
+    unreadable("name", |s| PackageName::new(s).is_ok())
+        || unreadable("version", |s| Version::parse(s).is_ok())
 }
 
 /// Discover per-package pixi workspaces under `package_dir`, parsing each
@@ -493,15 +494,16 @@ fn declares_unreadable_identity(text: &str) -> bool {
 pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<Package>> {
     // Root-package layout: package_dir itself holds the package's pixi.toml
     // (e.g. mise — a single-package repo with pixi.toml at its root). Only take
-    // this branch when the root pixi.toml actually names and versions a
-    // package; a workspace-only (or unreadable, or nameless) root manifest
-    // falls through to the per-subdir scan so it doesn't shadow real packages
-    // under package_dir.
+    // this branch when the root pixi.toml is a readable package; a
+    // workspace-only or unusable root manifest is skipped and falls through to
+    // the per-subdir scan so it doesn't shadow real packages under package_dir.
+    // A root manifest with an unreadable *identity* is the exception: fatal,
+    // because silently skipping it would drop a real package from the release.
     let root_pixi = package_dir.join(PIXI_TOML);
     if root_pixi.exists()
         && let Some(pkg) = Candidate::read(&root_pixi).into_package()?
-        && let Ok(id) = pkg.identity()
     {
+        let id = pkg.identity();
         match filter {
             Some(name) if *name != id.name => {
                 anyhow::bail!("package {name} not found; root package is {}", id.name)
@@ -645,11 +647,10 @@ pub struct ResolvedDep {
     /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
     /// This is the channel artifact name, which is what `ChannelIndex` /
     /// `version_published` / `built_this_job` / the local-build guard key off
-    /// of. It is NOT necessarily the sibling's `package.name` — in package-xml
-    /// mode the sibling manifest may have no `package.name` at all, and even
-    /// when it does, the published artifact is prefixed/transformed relative to
-    /// it. The dep key is guaranteed correct because the consumer's manifest
-    /// can only solve against the real channel name.
+    /// of. It is NOT necessarily the sibling's `package.name`: the published
+    /// artifact name is prefixed/transformed relative to it. The dep key is
+    /// guaranteed correct because the consumer's manifest can only solve
+    /// against the real channel name.
     pub name: PackageName,
     pub version: Version,
     /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
@@ -739,17 +740,16 @@ fn rewrite_path_deps_in(
             )
         })?;
         // Only `package.version` is read from the sibling manifest: the
-        // dependency key (not the sibling's `package.name`, which may not
-        // even exist in package-xml mode) is the channel artifact name.
+        // dependency key, not the sibling's `package.name`, is the channel
+        // artifact name.
         let version = PackageManifest::parse(&sib_text)
-            .with_context(|| format!("parse sibling manifest for {key}"))?
-            .version()
             .with_context(|| {
                 format!(
-                    "path dep {key}: sibling manifest {} has no package.version",
+                    "path dep {key}: parsing sibling manifest {}",
                     sib_manifest.display()
                 )
             })?
+            .version()
             .clone();
         table.insert(&key, toml_edit::value(version.range_pin()));
         resolved.push(ResolvedDep {
