@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
+use crate::manifest::{
+    PackageManifest, ResolvedDep, prepend_channels, resolve_path_deps, set_build_number,
+};
 use crate::types::{Arch, DeepstreamVersion, RecipeName, RunnerSize, TargetPlatform};
 
 #[derive(Subcommand, Debug)]
@@ -408,317 +411,6 @@ fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFil
     Ok(tf)
 }
 
-use serde::Deserialize;
-
-/// Subset of `pixi.toml` consumed by build pixi.
-/// Only the fields we read are listed; serde ignores the rest.
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamPixiToml {
-    pub package: UpstreamPackage,
-    #[serde(default)]
-    pub workspace: Option<UpstreamWorkspace>,
-    #[serde(default)]
-    dependencies: Option<toml::value::Table>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamPackage {
-    pub name: String,
-    pub version: String,
-    #[serde(default)]
-    pub build: Option<UpstreamBuild>,
-    #[serde(default, rename = "run-dependencies")]
-    run_dependencies: Option<toml::value::Table>,
-    #[serde(default, rename = "host-dependencies")]
-    host_dependencies: Option<toml::value::Table>,
-    #[serde(default, rename = "build-dependencies")]
-    build_dependencies: Option<toml::value::Table>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamBuild {
-    #[serde(default)]
-    pub backend: Option<UpstreamBuildBackend>,
-    #[serde(default)]
-    pub config: Option<UpstreamBuildConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamBuildBackend {
-    #[serde(default)]
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamBuildConfig {
-    /// Defaults to 0 when omitted from the upstream pixi.toml.
-    #[serde(default, rename = "build-number")]
-    pub build_number: u64,
-    #[serde(default, rename = "build-type")]
-    pub build_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct UpstreamWorkspace {
-    #[serde(default)]
-    pub platforms: Vec<String>,
-}
-
-impl UpstreamPixiToml {
-    pub fn parse(text: &str) -> anyhow::Result<Self> {
-        toml::from_str(text).context("parse upstream pixi.toml")
-    }
-
-    pub fn build_number(&self) -> u64 {
-        self.package
-            .build
-            .as_ref()
-            .and_then(|b| b.config.as_ref())
-            .map(|c| c.build_number)
-            .unwrap_or(0)
-    }
-
-    /// `true` if this package builds a platform-independent (noarch) artifact:
-    /// the `pixi-build-python` backend, or an `ament_python` ROS package. Those
-    /// produce byte-identical output on every arch, so the buildfarm only builds
-    /// them on linux-64 (see the skip in `check_entry`). Anything else
-    /// (ament_cmake, ament_idl, cmake, unknown) compiles per-arch and is not
-    /// treated as noarch.
-    pub fn is_noarch(&self) -> bool {
-        let Some(build) = &self.package.build else {
-            return false;
-        };
-        if build
-            .backend
-            .as_ref()
-            .is_some_and(|b| b.name == "pixi-build-python")
-        {
-            return true;
-        }
-        build
-            .config
-            .as_ref()
-            .is_some_and(|c| c.build_type == "ament_python")
-    }
-
-    /// `true` if the workspace's `platforms` list is empty or contains `target`.
-    /// Empty list is treated as "no explicit restriction" (build everywhere).
-    pub fn supports_platform(&self, target: TargetPlatform) -> bool {
-        let Some(ws) = &self.workspace else {
-            return true;
-        };
-        if ws.platforms.is_empty() {
-            return true;
-        }
-        let target_str = target.arch().to_string();
-        ws.platforms.iter().any(|p| p == &target_str)
-    }
-
-    /// Relative `path =` values from all dependency tables, excluding the
-    /// self-as-workspace-member idiom (`path = "."`).
-    pub fn path_dep_rel_paths(&self) -> Vec<String> {
-        let tables = [
-            self.dependencies.as_ref(),
-            self.package.run_dependencies.as_ref(),
-            self.package.host_dependencies.as_ref(),
-            self.package.build_dependencies.as_ref(),
-        ];
-        let mut out = Vec::new();
-        for table in tables.into_iter().flatten() {
-            for value in table.values() {
-                if let Some(p) = value.get("path").and_then(|p| p.as_str())
-                    && p != "."
-                {
-                    out.push(p.to_string());
-                }
-            }
-        }
-        out
-    }
-
-    /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string
-    /// across all dep tables. These are committed opt-out pins (a released
-    /// consumer that was decoupled from its sibling), hand-written or legacy.
-    fn exact_pins(&self) -> Vec<(String, String)> {
-        let tables = [
-            self.dependencies.as_ref(),
-            self.package.run_dependencies.as_ref(),
-            self.package.host_dependencies.as_ref(),
-            self.package.build_dependencies.as_ref(),
-        ];
-        let mut out = Vec::new();
-        for table in tables.into_iter().flatten() {
-            for (key, value) in table {
-                if let Some(v) = value.as_str().and_then(exact_pin_version) {
-                    out.push((key.clone(), v.to_string()));
-                }
-            }
-        }
-        out
-    }
-}
-
-/// If `s` is an exact `==X.Y.Z` pin, return the version (`X.Y.Z[-pre]`); else
-/// `None`. Exact means `==` + a single concrete version with three numeric
-/// core components. Ranges (`>=`, `<`), wildcards (`==1.2.*`), and build specs
-/// are not pins.
-fn exact_pin_version(s: &str) -> Option<&str> {
-    let v = s.trim().strip_prefix("==")?;
-    let core = v.split('-').next().unwrap_or(v);
-    let parts: Vec<&str> = core.split('.').collect();
-    if parts.len() == 3
-        && parts
-            .iter()
-            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-    {
-        Some(v)
-    } else {
-        None
-    }
-}
-
-/// A sibling package whose `path =` dep was rewritten to a derived
-/// `>=version,<major+1` pin in the temp checkout. `version` is the exact
-/// floor — availability checks and fallback builds key on it, never on
-/// "anything in range", so a coupled release always builds against the
-/// fresh sibling.
-#[derive(Debug)]
-pub struct ResolvedDep {
-    /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
-    /// This is the channel artifact name, which is what `ChannelIndex` /
-    /// `version_published` / `built_this_job` / the local-build guard key off
-    /// of. It is NOT
-    /// necessarily the sibling's `package.name` — in package-xml mode the
-    /// sibling manifest may have no `package.name` at all, and even when it
-    /// does, the published artifact is prefixed/transformed relative to it.
-    /// The dep key is guaranteed correct because the consumer's manifest can
-    /// only solve against the real channel name.
-    pub name: String,
-    pub version: String,
-    /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
-    pub manifest: PathBuf,
-}
-
-/// Derived pin for a sibling at `version`: `>=<version>,<<major+1>`. The floor
-/// is the sibling's version at the consumer's tagged rev (so a side-by-side
-/// release ratchets it to the fresh version); the major cap is the same trust
-/// model as committed cross-repo internal pins. Prerelease floors are fine:
-/// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
-fn range_pin(version: &str) -> anyhow::Result<String> {
-    let major: u64 = version
-        .split(['.', '-'])
-        .next()
-        .unwrap_or("")
-        .parse()
-        .with_context(|| format!("version {version} does not start with a numeric major"))?;
-    Ok(format!(">={version},<{}", major + 1))
-}
-
-/// Rewrite `path =` deps in a single table-like section (e.g. `[dependencies]`
-/// or `[package.run-dependencies]`) to `">=<version>,<major+1>"`, skipping the
-/// self-as-workspace-member idiom (`path = "."`). Lifted out of
-/// `resolve_path_deps` as a free fn because the closure form fights the
-/// borrow checker across the `doc.get_mut` calls.
-fn visit_table(
-    table: &mut dyn toml_edit::TableLike,
-    manifest_dir: &Path,
-    resolved: &mut Vec<ResolvedDep>,
-) -> anyhow::Result<()> {
-    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
-    for key in keys {
-        let Some(item) = table.get(&key) else {
-            continue;
-        };
-        let Some(path) = item
-            .as_table_like()
-            .and_then(|t| t.get("path"))
-            .and_then(|p| p.as_str())
-        else {
-            continue;
-        };
-        if path == "." {
-            continue;
-        }
-        let sib_manifest = manifest_dir.join(path).join(PIXI_TOML);
-        let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
-            format!(
-                "path dep {key}: no pixi.toml at {} in checkout",
-                sib_manifest.display()
-            )
-        })?;
-        // Only `package.version` is read from the sibling manifest: the
-        // dependency key (not the sibling's `package.name`, which may not
-        // even exist in package-xml mode) is the channel artifact name.
-        let sib_doc: toml::Value = toml::from_str(&sib_text)
-            .with_context(|| format!("parse sibling manifest for {key}"))?;
-        let version = sib_doc
-            .get("package")
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-            .with_context(|| {
-                format!(
-                    "path dep {key}: sibling manifest {} has no package.version",
-                    sib_manifest.display()
-                )
-            })?
-            .to_string();
-        table.insert(&key, toml_edit::value(range_pin(&version)?));
-        resolved.push(ResolvedDep {
-            name: key.clone(),
-            version,
-            manifest: sib_manifest,
-        });
-    }
-    Ok(())
-}
-
-/// Rewrite every non-self `path =` dep in the manifest to
-/// `">=<version>,<major+1>"`, reading the version from the sibling manifest at
-/// the same rev. The derived pin is deterministic: same rev -> same sibling
-/// manifest -> same pin. The range (rather than `==`) lets already-published
-/// consumers accept future sibling releases within the major without a
-/// re-release.
-///
-/// This is only ever called by the farm (via `mise build-recipes`) on
-/// ephemeral temp checkouts; the committed manifest keeps its path deps.
-pub(crate) fn resolve_path_deps(manifest_path: &Path) -> anyhow::Result<Vec<ResolvedDep>> {
-    let manifest_dir = manifest_path.parent().unwrap();
-    let text = fs::read_to_string(manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
-
-    let mut resolved = Vec::new();
-
-    if let Some(table) = doc
-        .get_mut("dependencies")
-        .and_then(toml_edit::Item::as_table_like_mut)
-    {
-        visit_table(table, manifest_dir, &mut resolved)?;
-    }
-    if let Some(pkg) = doc
-        .get_mut("package")
-        .and_then(toml_edit::Item::as_table_like_mut)
-    {
-        for section in [
-            "run-dependencies",
-            "host-dependencies",
-            "build-dependencies",
-        ] {
-            if let Some(table) = pkg
-                .get_mut(section)
-                .and_then(toml_edit::Item::as_table_like_mut)
-            {
-                visit_table(table, manifest_dir, &mut resolved)?;
-            }
-        }
-    }
-
-    fs::write(manifest_path, doc.to_string())?;
-    Ok(resolved)
-}
-
 /// Resolve committed `==X.Y.Z` pins that reference a same-repo sibling, so the
 /// fallback local build can satisfy a coupled cross-bucket dependency the real
 /// channel hasn't drained yet. Unlike `resolve_path_deps` this rewrites
@@ -736,7 +428,7 @@ fn resolve_sibling_pins(
 ) -> anyhow::Result<Vec<ResolvedDep>> {
     let text = fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
-    let upstream = UpstreamPixiToml::parse(&text)
+    let upstream = PackageManifest::parse(&text)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
 
     let mut out = Vec::new();
@@ -751,10 +443,16 @@ fn resolve_sibling_pins(
                 sib_manifest.display()
             )
         })?;
-        let sib_version = UpstreamPixiToml::parse(&sib_text)
+        let sib_version = PackageManifest::parse(&sib_text)
             .with_context(|| format!("parse sibling manifest for {name}"))?
-            .package
-            .version;
+            .version()
+            .with_context(|| {
+                format!(
+                    "pin dep {name}: sibling manifest {} has no package.version",
+                    sib_manifest.display()
+                )
+            })?
+            .to_string();
         if sib_version == pin {
             out.push(ResolvedDep {
                 name,
@@ -786,21 +484,6 @@ fn sibling_subdirs(entry: &PixiNativeEntry, all: &[PixiNativeEntry]) -> BTreeMap
             )
         })
         .collect()
-}
-
-/// Front-insert channels into [workspace].channels of the temp manifest, so
-/// local just-built artifacts win over the real channel during the solve.
-fn prepend_channels(manifest_path: &Path, channels: &[String]) -> anyhow::Result<()> {
-    let text = fs::read_to_string(manifest_path)?;
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let arr = doc["workspace"]["channels"].as_array_mut().ok_or_else(|| {
-        anyhow::anyhow!("{}: no workspace.channels array", manifest_path.display())
-    })?;
-    for (i, ch) in channels.iter().enumerate() {
-        arr.insert(i, ch.as_str());
-    }
-    fs::write(manifest_path, doc.to_string())?;
-    Ok(())
 }
 
 /// Push `s` onto `v` unless it's already present.
@@ -1130,7 +813,7 @@ enum BuildSubdir {
 
 impl BuildSubdir {
     /// Where `upstream` publishes to when built for `target_platform`.
-    fn of(upstream: &UpstreamPixiToml, target_platform: TargetPlatform) -> Self {
+    fn of(upstream: &PackageManifest, target_platform: TargetPlatform) -> Self {
         if upstream.is_noarch() {
             Self::Noarch
         } else {
@@ -1302,7 +985,7 @@ enum CheckOutcome {
         version: String,
         upstream_build: u64,
         effective_build: u64,
-        upstream: Box<UpstreamPixiToml>,
+        upstream: Box<PackageManifest>,
     },
     SkipPlatformUnsupported {
         name: String,
@@ -1328,13 +1011,16 @@ fn check_entry(
     rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
     let pixi_toml_text = fetch_pixi_toml(entry)?;
-    let upstream = UpstreamPixiToml::parse(&pixi_toml_text)
+    let upstream = PackageManifest::parse(&pixi_toml_text)
         .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
+    let id = upstream
+        .identity()
+        .with_context(|| format!("entry {}: upstream pixi.toml", entry.name))?;
 
     if !upstream.supports_platform(target_platform) {
         return Ok(CheckOutcome::SkipPlatformUnsupported {
-            name: upstream.package.name,
-            version: upstream.package.version,
+            name: id.name,
+            version: id.version,
         });
     }
 
@@ -1342,8 +1028,8 @@ fn check_entry(
     // skip every other platform rather than repeating the (identical) build.
     if upstream.is_noarch() && target_platform.arch() != Arch::Linux64 {
         return Ok(CheckOutcome::SkipNoarchNonCanonical {
-            name: upstream.package.name,
-            version: upstream.package.version,
+            name: id.name,
+            version: id.version,
         });
     }
 
@@ -1354,88 +1040,31 @@ fn check_entry(
     // to the default channel — search where they actually land. Skip only
     // when every routed channel has the build (a partially-drained
     // multi-channel publish, e.g. dual-publish rules, should re-run).
-    let published_urls = crate::routing::published_channel_urls(
-        routing_rules,
-        channel_url,
-        &upstream.package.name,
-        &upstream.package.version,
-    );
+    let published_urls =
+        crate::routing::published_channel_urls(routing_rules, channel_url, &id.name, &id.version);
     let subdir = BuildSubdir::of(&upstream, target_platform);
     let mut published_everywhere = true;
     for url in &published_urls {
-        published_everywhere &= channels.get(url)?.has_build(
-            &upstream.package.name,
-            &upstream.package.version,
-            effective_build,
-            subdir,
-        );
+        published_everywhere &=
+            channels
+                .get(url)?
+                .has_build(&id.name, &id.version, effective_build, subdir);
     }
     if published_everywhere {
         return Ok(CheckOutcome::SkipAlreadyPublished {
-            name: upstream.package.name,
-            version: upstream.package.version,
+            name: id.name,
+            version: id.version,
             channels: published_urls,
         });
     }
 
     Ok(CheckOutcome::Build {
-        name: upstream.package.name.clone(),
-        version: upstream.package.version.clone(),
+        name: id.name,
+        version: id.version,
         upstream_build,
         effective_build,
         upstream: Box::new(upstream),
     })
-}
-
-/// Rewrite `[package.build.config].build-number` in the given `pixi.toml`
-/// to `value`, creating the intermediate tables if absent. Preserves
-/// comments and formatting of the rest of the file.
-fn rewrite_build_number(manifest_path: &Path, value: u64) -> anyhow::Result<()> {
-    let text = fs::read_to_string(manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .with_context(|| format!("parse {} as TOML", manifest_path.display()))?;
-
-    let package = doc
-        .get_mut("package")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| anyhow::anyhow!("{}: missing [package] table", manifest_path.display(),))?;
-
-    if !package.contains_key("build") {
-        package.insert("build", toml_edit::table());
-    }
-    let build = package
-        .get_mut("build")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{}: [package.build] exists but is not a table",
-                manifest_path.display(),
-            )
-        })?;
-
-    if !build.contains_key("config") {
-        build.insert("config", toml_edit::table());
-    }
-    let config = build
-        .get_mut("config")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{}: [package.build.config] exists but is not a table",
-                manifest_path.display(),
-            )
-        })?;
-
-    config.insert(
-        "build-number",
-        toml_edit::value(i64::try_from(value).context("build-number exceeds i64")?),
-    );
-
-    fs::write(manifest_path, doc.to_string())
-        .with_context(|| format!("write {}", manifest_path.display()))?;
-    Ok(())
 }
 
 /// Select entries to build: keep those matching `runner_size` (when set) and,
@@ -1544,7 +1173,7 @@ fn pixi(
                 to_build.push(BuildItem {
                     entry,
                     effective_build,
-                    name: upstream.package.name.clone(),
+                    name: name.clone(),
                     rel_path_deps: upstream.path_dep_rel_paths(),
                     // Dep keys of exact `==X.Y.Z` pins. Mirrors `rel_path_deps`
                     // above for the committed-pin farm ordering rule.
@@ -1619,7 +1248,7 @@ fn pixi(
         }
 
         if rebuild_epoch > 0 {
-            rewrite_build_number(&manifest_path, effective_build).with_context(|| {
+            set_build_number(&manifest_path, effective_build).with_context(|| {
                 format!(
                     "entry {}: rewrite build-number to {effective_build}",
                     entry.name

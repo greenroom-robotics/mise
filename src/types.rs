@@ -254,6 +254,30 @@ impl PixiNativeManifest {
             packages,
         })
     }
+
+    /// True if the manifest lists an entry named `name`.
+    ///
+    /// Deliberately parsed through [`PixiNativeNames`] rather than
+    /// [`Self::from_yaml_str`]: this answers "is this package routed
+    /// pixi-native?" for a package we are about to rewrite, and it must not
+    /// fail because some *other* entry in the file is malformed (an unmigrated
+    /// `ref:`, a URL the buildfarm hasn't taught itself to parse). The file's
+    /// own structure still has to be valid YAML.
+    pub fn has_entry(yaml: &str, name: &str) -> anyhow::Result<bool> {
+        let names: PixiNativeNames = serde_yaml_ng::from_str(yaml)?;
+        Ok(names.packages.iter().any(|p| p.name == name))
+    }
+}
+
+/// Entry names only — see [`PixiNativeManifest::has_entry`].
+#[derive(Deserialize)]
+struct PixiNativeNames {
+    packages: Vec<PixiNativeName>,
+}
+
+#[derive(Deserialize)]
+struct PixiNativeName {
+    name: String,
 }
 
 impl FromStr for TargetPlatform {

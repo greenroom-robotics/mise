@@ -150,13 +150,11 @@ fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> 
 
 impl Release {
     pub fn run(self) -> anyhow::Result<()> {
-        use crate::commands::ci::packages;
-
-        let pixis = packages::discover(&self.package_dir, self.package.as_deref())?;
-        if pixis.is_empty() {
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
+        if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
-        let multi = self.package.is_none() && pixis.len() > 1;
+        let multi = self.package.is_none() && pkgs.len() > 1;
 
         // Sibling graph: drives msr's topological release *order* (multi mode)
         // via synthesized package.json files — NOT a cascade (see release_argv:
@@ -164,21 +162,21 @@ impl Release {
         // Path deps are guarded (verify-siblings) and stay committed permanently
         // — the buildfarm derives range pins ephemerally at build time via
         // `mise build-recipes` (resolve_path_deps), not pixi.
-        let graph = crate::commands::ci::siblings::analyze(&pixis)?;
+        let graph = crate::commands::ci::siblings::analyze(&pkgs)?;
 
         // Write a .releaserc (and, in multi mode, a package.json encoding
         // sibling deps) next to each package's pixi.toml.
         let mut workspace_globs: Vec<String> = Vec::new();
-        for pixi in &pixis {
-            let pkg_dir = pixi.parent().unwrap();
-            let releaserc = self.releaserc_json(pixi)?;
+        for pkg in &pkgs {
+            let pkg_dir = &pkg.dir;
+            let id = pkg.identity()?;
+            let releaserc = self.releaserc_json(&pkg.manifest_path, &id.name)?;
             std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
             if multi {
-                let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
-                let deps = msr_ordering_deps(&graph, &pkg.name);
+                let deps = msr_ordering_deps(&graph, &id.name);
                 std::fs::write(
                     pkg_dir.join("package.json"),
-                    package_json_for(&pkg.name, &pkg.version, &deps),
+                    package_json_for(&id.name, &id.version, &deps),
                 )?;
                 let rel_pkg_dir = cwd_relative(pkg_dir);
                 workspace_globs.push(rel_pkg_dir.to_string_lossy().into_owned());
@@ -188,16 +186,19 @@ impl Release {
             ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
         }
 
-        // In single-package mode `pixis` holds exactly the package being
+        // In single-package mode `pkgs` holds exactly the package being
         // released, so its name can be embedded literally in the tag format.
-        let single_pkg = crate::commands::ci::pixi_meta::read(&pixis[0])?;
-        let tag_format = tag_format(multi, &single_pkg.name);
+        let tag_format = tag_format(multi, &pkgs[0].identity()?.name);
 
         let argv = release_argv(multi, &tag_format);
         crate::process::run("npx", &argv)
     }
 
-    fn releaserc_json(&self, pixi: &std::path::Path) -> anyhow::Result<String> {
+    /// `pkg_name` is the resolved `package.name` of the manifest at `pixi`. It
+    /// is passed in rather than re-read: it is embedded literally in both
+    /// callbacks so multi-semantic-release needs no plugin-context env vars at
+    /// runtime.
+    fn releaserc_json(&self, pixi: &std::path::Path, pkg_name: &str) -> anyhow::Result<String> {
         let branches = self
             .release_branches
             .split(',')
@@ -211,11 +212,6 @@ impl Release {
                 }
             })
             .collect::<Vec<_>>();
-
-        // We resolve the package name once now and embed it literally in
-        // both callbacks so multi-semantic-release doesn't need any plugin-
-        // context env vars at runtime.
-        let pkg = crate::commands::ci::pixi_meta::read(pixi)?;
 
         let abs_pixi = absolute(pixi);
         let abs_pkgdir = absolute(&self.package_dir);
@@ -234,7 +230,7 @@ impl Release {
             "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --package={} --sha=${{nextRelease.gitHead}}",
             self.recipes_repo,
             abs_pkgdir.display(),
-            pkg.name,
+            pkg_name,
         );
 
         let mut plugins: Vec<serde_json::Value> = vec![
@@ -264,11 +260,11 @@ impl Release {
         assets.extend(self.extra_git_asset.iter().cloned());
         // Name the package in the release commit subject so `git log` says what
         // was bumped. msr runs each package's own semantic-release with this
-        // per-package .releaserc, so `pkg.name` is exactly the package being
+        // per-package .releaserc, so `pkg_name` is exactly the package being
         // released here. The rest matches @semantic-release/git's default.
         let git_message = format!(
             "chore(release): {name} ${{nextRelease.version}} [skip ci]\n\n${{nextRelease.notes}}",
-            name = pkg.name,
+            name = pkg_name,
         );
         plugins.push(serde_json::json!([
             "@semantic-release/git",

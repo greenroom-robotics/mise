@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::consts::DEFAULT_BRANCH;
 use crate::process;
 use crate::repo::Repo;
-use crate::secret::Secret;
+use crate::secret::{ExposeSecret, Secret};
 use crate::types::Sha40;
 
 /// The GitHub "no parent" sentinel for `push` event's `before` field on initial pushes.
@@ -214,7 +214,10 @@ pub fn ensure_git_auth() -> anyhow::Result<()> {
     }
 
     if let Some(t) = token() {
-        let key = format!("{INSTEAD_OF_PREFIX}{}@github.com/.insteadOf", t.expose());
+        let key = format!(
+            "{INSTEAD_OF_PREFIX}{}@github.com/.insteadOf",
+            t.expose_secret()
+        );
         process::git(&["config", "--global", &key, "https://github.com/"])?;
     }
     Ok(())
@@ -248,7 +251,7 @@ pub fn clone_url(repo: &str) -> String {
     match token() {
         Some(t) => format!(
             "https://x-access-token:{}@github.com/{repo}.git",
-            t.expose()
+            t.expose_secret()
         ),
         None => format!("git@github.com:{repo}.git"),
     }
@@ -260,7 +263,7 @@ pub fn fetch_raw_file(owner: &str, repo: &str, rev: &str, path: &str) -> anyhow:
     let token = token();
     let mut req = ureq::get(&url);
     if let Some(t) = &token {
-        req = req.set("Authorization", &format!("Bearer {}", t.expose()));
+        req = req.set("Authorization", &format!("Bearer {}", t.expose_secret()));
     }
     match req.call() {
         Ok(resp) => resp
@@ -298,7 +301,10 @@ fn last_successful_publish_sha() -> anyhow::Result<Option<Sha40>> {
         api_base()
     );
     let body: serde_json::Value = ureq::get(&url)
-        .set("Authorization", &format!("Bearer {}", token.expose()))
+        .set(
+            "Authorization",
+            &format!("Bearer {}", token.expose_secret()),
+        )
         .set("Accept", "application/vnd.github+json")
         .set("User-Agent", "ros-recipes-mise")
         .call()

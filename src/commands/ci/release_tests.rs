@@ -62,7 +62,7 @@ fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
         "--extra-git-asset",
         "Cargo.lock",
     ]);
-    let rc = cli.release.releaserc_json(&pixi).unwrap();
+    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let plugins = v["plugins"].as_array().unwrap();
 
@@ -97,7 +97,7 @@ fn pixi_toml_is_always_a_release_asset() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--changelog", "false"]);
-    let rc = cli.release.releaserc_json(&pixi).unwrap();
+    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
         .as_array()
@@ -123,7 +123,7 @@ fn git_commit_message_names_the_package() {
     )
     .unwrap();
     let cli = TestCli::parse_from(["x"]);
-    let rc = cli.release.releaserc_json(&pixi).unwrap();
+    let rc = cli.release.releaserc_json(&pixi, "object_tracker").unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
         .as_array()
@@ -151,7 +151,7 @@ fn exec_cmd_paths_are_absolute() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--package-dir", "packages"]);
-    let rc = cli.release.releaserc_json(&pixi).unwrap();
+    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let exec = v["plugins"]
         .as_array()
@@ -177,7 +177,7 @@ fn prepare_cmd_runs_verify_siblings_before_bump() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x"]);
-    let rc = cli.release.releaserc_json(&pixi).unwrap();
+    let rc = cli.release.releaserc_json(&pixi, "mise").unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let prepare = v["plugins"]
         .as_array()

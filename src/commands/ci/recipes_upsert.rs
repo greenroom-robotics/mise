@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use regex::Regex;
 use std::path::{Path, PathBuf};
+
+use super::yaml_block::{self, item_bounds};
 
 /// An entry in `rosdistro_additional_recipes.yaml`. Fields are emitted in this
 /// fixed order: url, tag, version. Matches the existing format in ros-recipes.
@@ -28,9 +29,9 @@ pub fn upsert(recipes_yaml: &Path, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
-fn render(entry: &Entry) -> String {
+fn render(entry: &Entry, nl: &str) -> String {
     format!(
-        "{name}:\n  url: {url}\n  tag: {tag}\n  version: {version}\n",
+        "{name}:{nl}  url: {url}{nl}  tag: {tag}{nl}  version: {version}{nl}",
         name = entry.package,
         url = entry.url,
         tag = entry.tag,
@@ -39,56 +40,31 @@ fn render(entry: &Entry) -> String {
 }
 
 fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
-    // Match the package's top-level key line: `name:` at column 0 (no leading
-    // whitespace), with the trailing colon. The block extends through every
-    // following line that starts with whitespace or is blank, until the next
-    // non-indented non-comment line (or EOF).
-    let key_pattern = format!(r"(?m)^{}:[ \t]*\r?\n", regex::escape(entry.package));
-    let key_re = Regex::new(&key_pattern)?;
+    let nl = yaml_block::line_ending(body);
 
-    if let Some(m) = key_re.find(body) {
-        // Find the end of the block.
-        let start = m.start();
-        let after_key_line = m.end();
-        let tail = &body[after_key_line..];
-        let mut block_end_offset = tail.len();
-        for (line_start, line) in line_offsets(tail) {
-            // The first non-indented, non-blank line ends the block.
-            let is_indented = line.starts_with(' ') || line.starts_with('\t');
-            let is_blank = line.trim().is_empty();
-            if !is_indented && !is_blank {
-                block_end_offset = line_start;
-                break;
-            }
-        }
-        let block_end = after_key_line + block_end_offset;
+    // The package's block is its top-level `<name>:` key line plus everything
+    // indented under it — see `yaml_block::section_bounds`, which is also what
+    // decides whether the entry exists at all.
+    if let Some(block) = yaml_block::section_bounds(body, entry.package) {
         let mut out = String::with_capacity(body.len());
-        out.push_str(&body[..start]);
-        out.push_str(&render(entry));
-        out.push_str(&body[block_end..]);
+        out.push_str(block.before(body));
+        out.push_str(&render(entry, nl));
+        out.push_str(block.after(body));
         return Ok(out);
     }
 
     // Append at EOF, separating with a blank line if the file is non-empty
     // and doesn't already end with one.
     let mut out = body.to_string();
-    if !out.is_empty() && !out.ends_with("\n\n") {
-        if !out.ends_with('\n') {
-            out.push('\n');
+    let blank_tail = format!("{nl}{nl}");
+    if !out.is_empty() && !out.ends_with(&blank_tail) {
+        if !out.ends_with(nl) {
+            out.push_str(nl);
         }
-        out.push('\n');
+        out.push_str(nl);
     }
-    out.push_str(&render(entry));
+    out.push_str(&render(entry, nl));
     Ok(out)
-}
-
-fn line_offsets(s: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut offset = 0usize;
-    s.split_inclusive('\n').map(move |line| {
-        let start = offset;
-        offset += line.len();
-        (start, line.trim_end_matches('\n').trim_end_matches('\r'))
-    })
 }
 
 /// Mutate a hand-authored `vendor_recipes/<pkg>/recipe.yaml` in place. Returns
@@ -103,24 +79,21 @@ fn line_offsets(s: &str) -> impl Iterator<Item = (usize, &str)> {
 ///   `open-pr` stages nothing and exits as a no-op.
 /// - Errors if any of the three fields is missing — never a silent no-op.
 /// - Every other line (comments, deps, formatting) passes through untouched.
+/// - The file is rebuilt line by line, so it comes back with the terminator
+///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
 pub(crate) fn mutate_vendored_recipe(
     text: &str,
     version: &str,
     rev: &str,
 ) -> anyhow::Result<String> {
-    let mut section: Option<&str> = None;
     let mut out: Vec<String> = Vec::new();
     let mut old_version: Option<String> = None;
     let mut old_rev: Option<String> = None;
     let mut number_idx: Option<usize> = None;
 
-    for line in text.lines() {
+    for (section, line) in yaml_block::with_sections(text) {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
-        if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
-            // `package:` → Some("package"); `key: value` → None (no bare-key suffix).
-            section = trimmed.strip_suffix(':');
-        }
         let replacement = match section {
             Some("package") if indent > 0 && trimmed.starts_with("version:") => {
                 old_version = Some(trimmed["version:".len()..].trim().to_string());
@@ -156,9 +129,10 @@ pub(crate) fn mutate_vendored_recipe(
         out[number_idx] = format!("{}number: 0", " ".repeat(indent));
     }
 
-    let mut result = out.join("\n");
+    let nl = yaml_block::line_ending(text);
+    let mut result = out.join(nl);
     if text.ends_with('\n') {
-        result.push('\n');
+        result.push_str(nl);
     }
     Ok(result)
 }
@@ -173,6 +147,8 @@ pub(crate) fn mutate_vendored_recipe(
 ///   optionally `subdir:` (insert if absent), delete `ref:` if present.
 /// - If absent: append a new item at the end of the file with the same
 ///   indentation conventions.
+/// - The file is rebuilt line by line, so it comes back with the terminator
+///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
 pub(crate) fn mutate_pixi_entry(
     text: &str,
     name: &str,
@@ -182,41 +158,17 @@ pub(crate) fn mutate_pixi_entry(
 ) -> anyhow::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
 
-    // Find `- name: <name>` line.
-    let header = format!("- name: {name}");
-    let header_idx = lines.iter().position(|l| l.trim_start() == header);
-
-    let result = if let Some(idx) = header_idx {
-        // Determine the item's column-position. Sub-keys live at the same
-        // start column as `name` (i.e., 2 chars in from the `-`).
-        let item_indent = lines[idx].len() - lines[idx].trim_start().len();
-        let sub_indent = item_indent + 2;
-        // Block spans idx+1 .. block_end where block_end starts at a line
-        // whose indent is <= item_indent and is not blank.
-        let block_end = lines[idx + 1..]
+    let result = if let Some(item) = item_bounds(&lines, name) {
+        let sub_indent = item.sub_indent();
+        let mut out: Vec<String> = item
+            .through_header(&lines)
             .iter()
-            .position(|l| {
-                if l.trim().is_empty() {
-                    return false;
-                }
-                let li = l.len() - l.trim_start().len();
-                li <= item_indent
-            })
-            .map(|p| idx + 1 + p)
-            .unwrap_or(lines.len());
-
-        // Trailing blank lines in the range belong to the gap *between* entries.
-        // Walk back so the mutation doesn't absorb them into this item.
-        let mut block_actual_end = block_end;
-        while block_actual_end > idx + 1 && lines[block_actual_end - 1].trim().is_empty() {
-            block_actual_end -= 1;
-        }
-
-        let mut out: Vec<String> = lines[..=idx].iter().map(|s| s.to_string()).collect();
+            .map(|s| s.to_string())
+            .collect();
         let mut url_seen = false;
         let mut rev_seen = false;
         let mut subdir_seen = false;
-        for line in &lines[idx + 1..block_actual_end] {
+        for line in item.body(&lines) {
             let trimmed = line.trim_start();
             if trimmed.starts_with("ref:") {
                 // drop
@@ -250,11 +202,9 @@ pub(crate) fn mutate_pixi_entry(
         if !subdir_seen && let Some(s) = subdir {
             out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
         }
-        // Preserve original between-entry blank lines.
-        for line in &lines[block_actual_end..block_end] {
-            out.push(line.to_string());
-        }
-        for line in &lines[block_end..] {
+        // The blank lines between this item and the next, then the rest of
+        // the file, pass through untouched.
+        for line in item.trailing(&lines) {
             out.push(line.to_string());
         }
         out
@@ -274,29 +224,18 @@ pub(crate) fn mutate_pixi_entry(
         out
     };
 
-    let has_trailing_newline = text.ends_with('\n');
-    let mut result_str = result.join("\n");
-    if has_trailing_newline {
-        result_str.push('\n');
+    let nl = yaml_block::line_ending(text);
+    let mut result_str = result.join(nl);
+    if text.ends_with('\n') {
+        result_str.push_str(nl);
     }
     Ok(result_str)
 }
 
-/// True if `pixi_native_packages.yaml` text already has a `- name: <package>` item.
-fn pixi_native_has_entry(text: &str, package: &str) -> bool {
-    text.lines().any(|l| {
-        l.trim_start()
-            .strip_prefix("- name:")
-            .map(|v| v.trim() == package)
-            .unwrap_or(false)
-    })
-}
-
-/// True if `rosdistro_additional_recipes.yaml` text has a top-level `<package>:` key.
+/// True if `rosdistro_additional_recipes.yaml` text has a top-level
+/// `<package>:` key — i.e. exactly the block `upsert_text` would replace.
 fn rosdistro_has_entry(text: &str, package: &str) -> bool {
-    let header = format!("{package}:");
-    text.lines()
-        .any(|l| !l.starts_with([' ', '\t']) && l.trim_end() == header)
+    yaml_block::section_bounds(text, package).is_some()
 }
 
 /// The ref a recipe pinned a package to before this release. `Rev` is an
@@ -372,7 +311,9 @@ pub(crate) fn apply_release(
         let vendored_abs = recipes_root.join(&vendored_rel);
         let text = std::fs::read_to_string(&vendored_abs)
             .with_context(|| format!("reading {}", vendored_abs.display()))?;
-        let old_ref = field_in_section(&text, "source", "rev").map(OldRef::Rev);
+        let old_ref = yaml_block::field_of(&text, "source", "rev")
+            .map(str::to_string)
+            .map(OldRef::Rev);
         let updated = mutate_vendored_recipe(&text, version, sha)?;
         std::fs::write(&vendored_abs, updated)
             .with_context(|| format!("writing {}", vendored_abs.display()))?;
@@ -403,9 +344,11 @@ pub(crate) fn apply_release(
     } else {
         None
     };
-    let in_pixi_native = pixi_native_text
-        .as_deref()
-        .is_some_and(|t| pixi_native_has_entry(t, package));
+    let in_pixi_native = match pixi_native_text.as_deref() {
+        Some(t) => crate::types::PixiNativeManifest::has_entry(t, package)
+            .with_context(|| format!("parsing {}", pixi_native_abs.display()))?,
+        None => false,
+    };
     let in_rosdistro = rosdistro_text
         .as_deref()
         .is_some_and(|t| rosdistro_has_entry(t, package));
@@ -414,7 +357,8 @@ pub(crate) fn apply_release(
     if in_rosdistro && !in_pixi_native {
         let old_ref = rosdistro_text
             .as_deref()
-            .and_then(|t| field_in_section(t, package, "tag"))
+            .and_then(|t| yaml_block::field_of(t, package, "tag"))
+            .map(str::to_string)
             .map(OldRef::Tag);
         upsert(
             &rosdistro_abs,
@@ -448,52 +392,20 @@ pub(crate) fn apply_release(
     })
 }
 
-/// Value of the `<key>:` line inside a top-level `<section>:` block, indent-based
-/// (mirrors `mutate_vendored_recipe`'s parsing). Used to read the previously
-/// pinned rev/tag for a diff link. `None` if not found.
-fn field_in_section(text: &str, section: &str, key: &str) -> Option<String> {
-    let prefix = format!("{key}:");
-    let mut cur: Option<&str> = None;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        if indent == 0 && !trimmed.is_empty() && !trimmed.starts_with('#') {
-            cur = trimmed.strip_suffix(':');
-        }
-        if cur == Some(section)
-            && indent > 0
-            && let Some(v) = trimmed.strip_prefix(&prefix)
-        {
-            return Some(v.trim().to_string());
-        }
-    }
-    None
-}
-
 /// The pin a `pixi_native_packages.yaml` entry currently carries: `rev:` as an
 /// immutable [`OldRef::Rev`], `ref:` as a mutable [`OldRef::Tag`]. `None` if the
 /// entry or field is absent.
 fn pixi_entry_rev(text: &str, name: &str) -> Option<OldRef> {
-    let header = format!("- name: {name}");
     let lines: Vec<&str> = text.lines().collect();
-    let idx = lines.iter().position(|l| l.trim_start() == header)?;
-    let item_indent = lines[idx].len() - lines[idx].trim_start().len();
-    for l in &lines[idx + 1..] {
-        if l.trim().is_empty() {
-            continue;
-        }
-        if l.len() - l.trim_start().len() <= item_indent {
-            break;
-        }
+    let item = item_bounds(&lines, name)?;
+    item.body(&lines).iter().find_map(|l| {
         let t = l.trim_start();
         if let Some(v) = t.strip_prefix("rev:") {
             return Some(OldRef::Rev(v.trim().to_string()));
         }
-        if let Some(v) = t.strip_prefix("ref:") {
-            return Some(OldRef::Tag(v.trim().to_string()));
-        }
-    }
-    None
+        t.strip_prefix("ref:")
+            .map(|v| OldRef::Tag(v.trim().to_string()))
+    })
 }
 
 #[cfg(test)]

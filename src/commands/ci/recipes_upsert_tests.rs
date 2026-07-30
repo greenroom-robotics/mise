@@ -104,6 +104,70 @@ bar:
     assert!(out.contains("bar:\n  url: https://example.invalid/bar.git"));
 }
 
+#[test]
+fn upsert_replaces_a_block_whose_body_continues_past_a_column_zero_comment() {
+    // The reader (`field_of`) and the writer (`section_bounds`) must agree
+    // that `# a note` is interior here: if the writer stopped at the comment
+    // it would splice in a fresh block and strand the old `version:` beside
+    // it, and the reader would keep reporting the stale value.
+    let existing = "\
+foo:
+  url: https://example.invalid/foo.git
+  tag: 1.0.0
+# a note
+  version: 1.0.0
+bar:
+  url: https://example.invalid/bar.git
+  tag: 0.1.0
+";
+    assert_eq!(
+        yaml_block::field_of(existing, "foo", "version"),
+        Some("1.0.0")
+    );
+
+    let out = upsert_text(existing, &entry()).unwrap();
+    assert_eq!(
+        out,
+        "\
+foo:
+  url: https://example.invalid/foo.git
+  tag: 1.2.3
+  version: 1.2.3
+bar:
+  url: https://example.invalid/bar.git
+  tag: 0.1.0
+"
+    );
+    assert_eq!(yaml_block::field_of(&out, "foo", "version"), Some("1.2.3"));
+    assert_eq!(out.matches("version:").count(), 1);
+}
+
+#[test]
+fn upsert_keeps_a_comment_that_captions_the_next_block() {
+    let existing = "\
+foo:
+  url: https://example.invalid/foo.git
+  tag: 1.0.0
+# vendored fork — do not bump
+bar:
+  url: https://example.invalid/bar.git
+";
+    let out = upsert_text(existing, &entry()).unwrap();
+    assert!(out.contains("# vendored fork — do not bump\nbar:\n"));
+    assert!(out.contains("  tag: 1.2.3\n"));
+}
+
+#[test]
+fn upsert_reemits_crlf_line_endings() {
+    let existing = "foo:\r\n  url: old\r\n  tag: 0.1.0\r\nbar:\r\n  url: keep\r\n";
+    let out = upsert_text(existing, &entry()).unwrap();
+    assert_eq!(
+        out,
+        "foo:\r\n  url: https://example.invalid/foo.git\r\n  tag: 1.2.3\r\n  \
+         version: 1.2.3\r\nbar:\r\n  url: keep\r\n"
+    );
+}
+
 const VENDORED_FIXTURE: &str = r#"# yaml-language-server: $schema=https://example.com/schema.json
 #
 # Vendor recipe for foo — header comment must survive.
@@ -222,6 +286,28 @@ fn vendored_preserves_trailing_newline() {
     assert!(out.ends_with('\n'));
 }
 
+#[test]
+fn vendored_reemits_crlf_line_endings() {
+    let crlf = VENDORED_FIXTURE.replace('\n', "\r\n");
+    let out =
+        mutate_vendored_recipe(&crlf, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    // Every LF is still part of a CRLF pair — no line was silently converted.
+    assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
+    assert!(out.contains("  version: 1.3.0\r\n"));
+    // A no-op edit is byte-exact.
+    let noop =
+        mutate_vendored_recipe(&out, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    assert_eq!(noop, out);
+}
+
+#[test]
+fn vendored_preserves_a_missing_trailing_newline() {
+    let no_nl = VENDORED_FIXTURE.trim_end_matches('\n');
+    let out =
+        mutate_vendored_recipe(no_nl, "1.3.0", "1111111111111111111111111111111111111111").unwrap();
+    assert!(!out.ends_with('\n'));
+}
+
 const PIXI_FIXTURE: &str = "\
 # Header comment must survive.
 packages:
@@ -301,6 +387,46 @@ fn pixi_appends_without_subdir() {
     .unwrap();
     assert!(out.contains("- name: epsilon"));
     assert!(!out.lines().any(|l| l.trim() == "subdir:"));
+}
+
+#[test]
+fn pixi_reemits_crlf_line_endings() {
+    let crlf = PIXI_FIXTURE.replace('\n', "\r\n");
+    let out = mutate_pixi_entry(
+        &crlf,
+        "alpha",
+        "https://github.com/example/alpha.git",
+        "3333333333333333333333333333333333333333",
+        None,
+    )
+    .unwrap();
+    assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
+    assert!(out.contains("    rev: 3333333333333333333333333333333333333333\r\n"));
+    // Only alpha's lines differ; the rest of the file is byte-identical.
+    assert!(out.ends_with("  - name: gamma\r\n    url: https://github.com/example/gamma\r\n    rev: 2222222222222222222222222222222222222222\r\n"));
+}
+
+#[test]
+fn pixi_preserves_a_missing_trailing_newline() {
+    let no_nl = PIXI_FIXTURE.trim_end_matches('\n');
+    let out = mutate_pixi_entry(
+        no_nl,
+        "alpha",
+        "https://github.com/example/alpha.git",
+        "3333333333333333333333333333333333333333",
+        None,
+    )
+    .unwrap();
+    assert!(!out.ends_with('\n'));
+}
+
+#[test]
+fn pixi_preserves_tab_indented_sub_keys_it_does_not_own() {
+    let text = "packages:\n  - name: alpha\n    url: old\n\tcomment_key: kept\n    rev: aaaa\n";
+    let out = mutate_pixi_entry(text, "alpha", "new-url", "bbbb", None).unwrap();
+    assert!(out.contains("\tcomment_key: kept\n"));
+    assert!(out.contains("    url: new-url\n"));
+    assert!(out.contains("    rev: bbbb\n"));
 }
 
 #[test]

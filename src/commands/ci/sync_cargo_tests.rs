@@ -1,23 +1,6 @@
 use super::*;
 
 #[test]
-fn bumps_only_the_package_version_in_cargo_toml() {
-    let before = r#"[package]
-name = "mise"
-version = "1.0.0"
-edition = "2021"
-
-[dependencies]
-anyhow = "1.0.0"
-"#;
-    let after = bump_cargo_toml(before, "2.3.4").unwrap();
-    let doc: toml_edit::DocumentMut = after.parse().unwrap();
-    assert_eq!(doc["package"]["version"].as_str(), Some("2.3.4"));
-    // The lookalike dependency version line must not move.
-    assert_eq!(doc["dependencies"]["anyhow"].as_str(), Some("1.0.0"));
-}
-
-#[test]
 fn bumps_named_package_in_cargo_lock_only() {
     let before = r#"version = 3
 

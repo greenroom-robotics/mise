@@ -19,7 +19,8 @@ impl BumpPixi {
     pub fn run(self) -> anyhow::Result<()> {
         let body = std::fs::read_to_string(&self.pixi_toml)
             .with_context(|| format!("reading {}", self.pixi_toml.display()))?;
-        let new_body = bump_toml(&body, &self.version)?;
+        let new_body = crate::manifest::set_package_version(&body, &self.version)
+            .with_context(|| format!("bumping {}", self.pixi_toml.display()))?;
         std::fs::write(&self.pixi_toml, new_body)
             .with_context(|| format!("writing {}", self.pixi_toml.display()))?;
         println!(
@@ -30,24 +31,3 @@ impl BumpPixi {
         Ok(())
     }
 }
-
-fn bump_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
-    let mut doc: toml_edit::DocumentMut = body.parse().context("parsing pixi.toml")?;
-
-    let pkg = doc
-        .get_mut("package")
-        .ok_or_else(|| anyhow::anyhow!("no [package] table found"))?
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[package] is not a table"))?;
-
-    if !pkg.contains_key("version") {
-        anyhow::bail!("no version key in [package] table");
-    }
-    pkg["version"] = toml_edit::value(new_version);
-
-    Ok(doc.to_string())
-}
-
-#[cfg(test)]
-#[path = "bump_pixi_tests.rs"]
-mod tests;

@@ -42,7 +42,7 @@ pub struct RecipesPr {
 
 impl RecipesPr {
     pub fn run(self) -> anyhow::Result<()> {
-        use crate::commands::ci::{packages, pixi_meta, recipes_upsert};
+        use crate::commands::ci::recipes_upsert;
 
         if self.ros_distro.is_some() {
             tracing::warn!("--ros-distro is accepted but ignored; remove it from the caller");
@@ -66,8 +66,8 @@ impl RecipesPr {
         let targets: Vec<(String, Option<String>)> = match &mode {
             ReleaseTarget::VendoredByName(name) => vec![(name.clone(), None)],
             ReleaseTarget::Discovered => {
-                let pixis = packages::discover(&self.package_dir, self.package.as_deref())?;
-                if pixis.is_empty() {
+                let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
+                if pkgs.is_empty() {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
                 }
                 let mut out = Vec::new();
@@ -78,28 +78,23 @@ impl RecipesPr {
                 // the package dir, and --package-dir arrives absolute, so
                 // cwd-stripping would leak an absolute subdir.
                 let toplevel = git::toplevel(&cwd)?;
-                for pixi in &pixis {
-                    let pkg = pixi_meta::read(pixi)?;
-                    let parent = pixi
-                        .parent()
-                        .map(|p| {
-                            let abs = if p.is_absolute() {
-                                p.to_owned()
-                            } else {
-                                cwd.join(p)
-                            };
-                            abs.strip_prefix(&toplevel)
-                                .map(|r| r.to_owned())
-                                .unwrap_or(abs)
-                                .to_string_lossy()
-                                .into_owned()
-                        })
-                        .unwrap_or_default();
+                for pkg in &pkgs {
+                    let abs = if pkg.dir.is_absolute() {
+                        pkg.dir.clone()
+                    } else {
+                        cwd.join(&pkg.dir)
+                    };
+                    let parent = abs
+                        .strip_prefix(&toplevel)
+                        .map(|r| r.to_owned())
+                        .unwrap_or(abs)
+                        .to_string_lossy()
+                        .into_owned();
                     let subdir = match parent.as_str() {
                         "" | "." => None,
                         s => Some(s.to_string()),
                     };
-                    out.push((pkg.name, subdir));
+                    out.push((pkg.identity()?.name, subdir));
                 }
                 out
             }
@@ -352,7 +347,10 @@ fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    crate::commands::ci::packages::declares_package(path)
+    Ok(matches!(
+        crate::manifest::Manifest::read(path)?,
+        crate::manifest::Manifest::Package(_)
+    ))
 }
 
 /// Choose the release target. A `--package` with neither a per-package

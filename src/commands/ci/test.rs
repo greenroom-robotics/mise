@@ -63,14 +63,13 @@ fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
 impl Test {
     pub fn run(self) -> anyhow::Result<()> {
         let jobs = parse_jobs(&self.jobs)?;
-        let pkgs =
-            crate::commands::ci::packages::discover(&self.package_dir, self.package.as_deref())?;
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
         let mut failed = Vec::new();
-        for pixi in pkgs {
-            let pkg_dir = pixi.parent().unwrap();
+        for pkg in pkgs {
+            let pkg_dir = &pkg.dir;
             for job in &jobs {
                 println!(
                     "==> mise ci test :: {} [{}:{}]",
@@ -86,7 +85,7 @@ impl Test {
                 }
                 argv.extend([
                     OsStr::new("--manifest-path"),
-                    pixi.as_os_str(),
+                    pkg.manifest_path.as_os_str(),
                     OsStr::new("-e"),
                     OsStr::new(&job.env),
                     OsStr::new(&job.task),

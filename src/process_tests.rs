@@ -1,4 +1,5 @@
 use super::*;
+use crate::secret::ExposeSecret;
 
 /// Typed empty argv; `&[]` alone can't infer the `AsRef<OsStr>` element type.
 const NO_ARGS: [&str; 0] = [];
@@ -121,7 +122,7 @@ fn a_token_embedded_in_an_argument_never_reaches_the_error_message() {
     let token = crate::secret::Secret::new("tok-process-label-case");
     let url = format!(
         "https://x-access-token:{}@github.com/o/r.git",
-        token.expose()
+        token.expose_secret()
     );
     let err = capture_in(Path::new("/"), "false", &[url.as_str()]).unwrap_err();
     let msg = format!("{err:#}");

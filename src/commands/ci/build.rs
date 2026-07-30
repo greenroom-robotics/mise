@@ -18,8 +18,7 @@ pub struct Build {
 
 impl Build {
     pub fn run(self) -> anyhow::Result<()> {
-        let pkgs =
-            crate::commands::ci::packages::discover(&self.package_dir, self.package.as_deref())?;
+        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_deref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
@@ -29,13 +28,13 @@ impl Build {
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("creating {}", out_dir.display()))?;
 
-        for pixi in pkgs {
-            let pkg_dir = pixi.parent().unwrap();
+        for pkg in pkgs {
+            let pkg_dir = &pkg.dir;
             println!("==> mise ci build :: {}", pkg_dir.display());
             let mut argv: Vec<&OsStr> = vec![
                 OsStr::new("build"),
                 OsStr::new("--path"),
-                pixi.as_os_str(),
+                pkg.manifest_path.as_os_str(),
                 OsStr::new("--output-dir"),
                 out_dir.as_os_str(),
             ];

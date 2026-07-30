@@ -119,7 +119,7 @@ fn lookup_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> 
 }
 
 fn token_of(pairs: &[(&str, &str)]) -> Option<String> {
-    token_from(lookup_of(pairs)).map(|t| t.expose().to_string())
+    token_from(lookup_of(pairs)).map(|t| t.expose_secret().to_string())
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn an_empty_token_variable_is_skipped_rather_than_winning() {
 #[test]
 fn a_token_is_wrapped_so_it_cannot_be_formatted_into_a_message() {
     let t = token_from(lookup_of(&[("GH_TOKEN", "tok-gh-fmt-case")])).unwrap();
-    assert!(!format!("{t} {t:?}").contains("tok-gh-fmt-case"));
+    assert!(!format!("{t:?}").contains("tok-gh-fmt-case"));
 }
 
 // --- insteadOf cleanup ------------------------------------------------------

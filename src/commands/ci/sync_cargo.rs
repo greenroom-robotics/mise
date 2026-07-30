@@ -27,7 +27,9 @@ impl SyncCargo {
     pub fn run(self) -> anyhow::Result<()> {
         let toml = std::fs::read_to_string(&self.cargo_toml)
             .with_context(|| format!("reading {}", self.cargo_toml.display()))?;
-        std::fs::write(&self.cargo_toml, bump_cargo_toml(&toml, &self.version)?)
+        let bumped = crate::manifest::set_package_version(&toml, &self.version)
+            .with_context(|| format!("bumping {}", self.cargo_toml.display()))?;
+        std::fs::write(&self.cargo_toml, bumped)
             .with_context(|| format!("writing {}", self.cargo_toml.display()))?;
 
         let lock = std::fs::read_to_string(&self.cargo_lock)
@@ -41,20 +43,6 @@ impl SyncCargo {
         println!("Synced Cargo.toml/Cargo.lock to version {}", self.version);
         Ok(())
     }
-}
-
-fn bump_cargo_toml(body: &str, new_version: &str) -> anyhow::Result<String> {
-    let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.toml")?;
-    let pkg = doc
-        .get_mut("package")
-        .ok_or_else(|| anyhow::anyhow!("no [package] table in Cargo.toml"))?
-        .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[package] is not a table"))?;
-    if !pkg.contains_key("version") {
-        anyhow::bail!("no version key in [package] table");
-    }
-    pkg["version"] = toml_edit::value(new_version);
-    Ok(doc.to_string())
 }
 
 fn bump_cargo_lock(body: &str, package: &str, new_version: &str) -> anyhow::Result<String> {

@@ -19,11 +19,12 @@ pub struct VerifySiblings {
 
 impl VerifySiblings {
     pub fn run(&self) -> Result<()> {
-        use crate::commands::ci::{packages, pixi_meta, siblings};
+        use crate::commands::ci::siblings;
+        use crate::manifest::{self, Package};
 
-        let pixis = packages::discover(&self.package_dir, None)?;
-        let graph = siblings::analyze(&pixis)?;
-        let consumer = pixi_meta::read(&self.pixi_toml)?.name;
+        let pkgs = manifest::discover(&self.package_dir, None)?;
+        let graph = siblings::analyze(&pkgs)?;
+        let consumer = Package::read(&self.pixi_toml)?.identity()?.name;
 
         let Some(targets) = graph.path_deps.get(&consumer) else {
             return Ok(()); // no path deps, nothing to verify

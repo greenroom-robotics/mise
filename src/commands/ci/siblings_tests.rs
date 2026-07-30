@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 use tempfile::TempDir;
 
-fn write_pkg(root: &std::path::Path, name: &str, extra: &str) -> std::path::PathBuf {
+fn write_pkg(root: &std::path::Path, name: &str, extra: &str) -> Package {
     let dir = root.join(name);
     fs::create_dir_all(&dir).unwrap();
     let body = format!(
@@ -10,7 +10,7 @@ fn write_pkg(root: &std::path::Path, name: &str, extra: &str) -> std::path::Path
     );
     let p = dir.join("pixi.toml");
     fs::write(&p, body).unwrap();
-    p
+    Package::read(&p).unwrap()
 }
 
 #[test]
@@ -89,7 +89,7 @@ fn package_xml_mode_manifest_falls_back_to_package_xml_name() {
             "<?xml version=\"1.0\"?>\n<package format=\"3\">\n  <name>geolocation</name>\n  <version>1.0.0</version>\n</package>\n",
         )
         .unwrap();
-    let g = analyze(&[pixi]).unwrap();
+    let g = analyze(&[Package::read(&pixi).unwrap()]).unwrap();
     assert!(g.dirs.contains_key("geolocation"));
 }
 
@@ -104,7 +104,7 @@ fn missing_name_in_both_manifest_and_package_xml_errors_mentioning_both() {
         "[workspace]\nname = \"geolocation\"\n\n[package]\nversion = \"1.0.0\"\n",
     )
     .unwrap();
-    let err = analyze(&[pixi]).unwrap_err();
+    let err = analyze(&[Package::read(&pixi).unwrap()]).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("package.name"));
     assert!(msg.contains("package.xml"));

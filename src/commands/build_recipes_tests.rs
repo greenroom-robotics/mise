@@ -6,10 +6,6 @@ fn recipe(name: &str) -> RecipeName {
     RecipeName::from_str(name).unwrap()
 }
 
-fn is_noarch(toml: &str) -> bool {
-    UpstreamPixiToml::parse(toml).unwrap().is_noarch()
-}
-
 fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
     PixiNativeEntry {
         name: name.into(),
@@ -87,12 +83,12 @@ fn channel_index_does_not_match_a_build_from_another_subdir() {
 
 #[test]
 fn build_subdir_follows_the_manifest_not_the_job_arch() {
-    let noarch = UpstreamPixiToml::parse(
+    let noarch = PackageManifest::parse(
         "[package]\nname=\"p\"\nversion=\"1\"\n\
              [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
     )
     .unwrap();
-    let arch = UpstreamPixiToml::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
+    let arch = PackageManifest::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
     let l64 = TargetPlatform::from_str("linux-64").unwrap();
     let a64 = TargetPlatform::from_str("linux-aarch64").unwrap();
 
@@ -124,20 +120,6 @@ fn channel_index_empty_channel_publishes_nothing() {
     assert!(!idx.has_build("autopilot", "3.5.4", 0, L64));
     assert!(!idx.has_build("autopilot", "3.5.4", 0, NOARCH));
     assert!(!idx.has_version("autopilot", "3.5.4"));
-}
-
-#[test]
-fn path_dep_rel_paths_excludes_self_idiom() {
-    let t = UpstreamPixiToml::parse(
-        "[dependencies]\nnode = { path = \".\" }\n\
-             [package]\nname=\"node\"\nversion=\"1.0.0\"\n\
-             [package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n\
-             [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n",
-    )
-    .unwrap();
-    let mut got = t.path_dep_rel_paths();
-    got.sort();
-    assert_eq!(got, vec!["../lib".to_string(), "../msgs".to_string()]);
 }
 
 #[test]
@@ -217,38 +199,6 @@ fn topo_sort_builds_rejects_cycles() {
             .to_string()
             .contains("cycle")
     );
-}
-
-#[test]
-fn noarch_detects_python_and_ament_python() {
-    // pixi-build-python backend → noarch
-    assert!(is_noarch(
-        "[package]\nname=\"c\"\nversion=\"1\"\n\
-             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
-    ));
-    // ament_python ROS package → noarch
-    assert!(is_noarch(
-        "[package]\nname=\"p\"\nversion=\"1\"\n\
-             [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-             [package.build.config]\nbuild-type=\"ament_python\"",
-    ));
-}
-
-#[test]
-fn noarch_false_for_compiled_and_missing_build() {
-    // ament_cmake / ament_idl compile per-arch → not noarch
-    for bt in ["ament_cmake", "ament_idl", "cmake"] {
-        assert!(
-            !is_noarch(&format!(
-                "[package]\nname=\"x\"\nversion=\"1\"\n\
-                     [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-                     [package.build.config]\nbuild-type=\"{bt}\"",
-            )),
-            "expected {bt} to be arch-specific"
-        );
-    }
-    // no [package.build] at all → conservative: not noarch
-    assert!(!is_noarch("[package]\nname=\"x\"\nversion=\"1\""));
 }
 
 #[test]
@@ -501,156 +451,6 @@ fn version_extracts_from_deepstream_only() {
     );
 }
 
-#[test]
-fn upstream_pixi_toml_parses_minimal() {
-    let text = r#"
-[package]
-name = "foo"
-version = "1.2.3"
-"#;
-    let p = UpstreamPixiToml::parse(text).unwrap();
-    assert_eq!(p.package.name, "foo");
-    assert_eq!(p.package.version, "1.2.3");
-    assert_eq!(p.build_number(), 0);
-}
-
-#[test]
-fn upstream_pixi_toml_parses_build_number() {
-    let text = r#"
-[package]
-name = "foo"
-version = "1.2.3"
-
-[package.build.config]
-build-number = 5
-"#;
-    let p = UpstreamPixiToml::parse(text).unwrap();
-    assert_eq!(p.build_number(), 5);
-}
-
-#[test]
-fn upstream_pixi_toml_supports_platform_when_empty() {
-    let text = r#"
-[package]
-name = "foo"
-version = "1.0"
-"#;
-    let p = UpstreamPixiToml::parse(text).unwrap();
-    assert!(p.supports_platform(TargetPlatform::default()));
-}
-
-#[test]
-fn upstream_pixi_toml_respects_platforms_list() {
-    let text = r#"
-[package]
-name = "foo"
-version = "1.0"
-
-[workspace]
-platforms = ["linux-64"]
-"#;
-    let p = UpstreamPixiToml::parse(text).unwrap();
-    assert!(p.supports_platform(TargetPlatform::default()));
-    let aarch = TargetPlatform::from_str("linux-aarch64").unwrap();
-    assert!(!p.supports_platform(aarch));
-}
-
-#[test]
-fn upstream_pixi_toml_ignores_unknown_keys() {
-    let text = r#"
-[package]
-name = "foo"
-version = "1.0"
-
-[tasks]
-ci = "test"
-
-[dependencies]
-something = "1"
-"#;
-    UpstreamPixiToml::parse(text).unwrap();
-}
-
-fn write_tmp_pixi_toml(text: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("pixi.toml");
-    std::fs::write(&path, text).unwrap();
-    (tmp, path)
-}
-
-#[test]
-fn rewrite_build_number_updates_existing_field() {
-    let original = r#"[package]
-name = "foo"
-version = "1.0"
-
-[package.build.config]
-build-number = 0
-"#;
-    let (_tmp, path) = write_tmp_pixi_toml(original);
-    rewrite_build_number(&path, 5).unwrap();
-    let updated = std::fs::read_to_string(&path).unwrap();
-    let reparsed = UpstreamPixiToml::parse(&updated).unwrap();
-    assert_eq!(reparsed.build_number(), 5);
-}
-
-#[test]
-fn rewrite_build_number_inserts_when_absent() {
-    let original = r#"[package]
-name = "foo"
-version = "1.0"
-"#;
-    let (_tmp, path) = write_tmp_pixi_toml(original);
-    rewrite_build_number(&path, 2).unwrap();
-    let updated = std::fs::read_to_string(&path).unwrap();
-    let reparsed = UpstreamPixiToml::parse(&updated).unwrap();
-    assert_eq!(reparsed.build_number(), 2);
-}
-
-#[test]
-fn rewrite_build_number_is_idempotent() {
-    let original = r#"[package]
-name = "foo"
-version = "1.0"
-
-[package.build.config]
-build-number = 0
-"#;
-    let (_tmp, path) = write_tmp_pixi_toml(original);
-    rewrite_build_number(&path, 4).unwrap();
-    let first = std::fs::read_to_string(&path).unwrap();
-    rewrite_build_number(&path, 4).unwrap();
-    let second = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(first, second);
-}
-
-#[test]
-fn rewrite_build_number_preserves_unrelated_keys_and_comments() {
-    let original = r#"# top-of-file comment
-[package]
-name = "foo"  # inline comment
-version = "1.0"
-
-[tasks]
-ci = "test"
-"#;
-    let (_tmp, path) = write_tmp_pixi_toml(original);
-    rewrite_build_number(&path, 1).unwrap();
-    let updated = std::fs::read_to_string(&path).unwrap();
-    assert!(updated.contains("# top-of-file comment"), "got: {updated}");
-    assert!(updated.contains("# inline comment"), "got: {updated}");
-    assert!(updated.contains("ci = \"test\""), "got: {updated}");
-    assert!(updated.contains("build-number = 1"), "got: {updated}");
-}
-
-#[test]
-fn rewrite_build_number_errors_when_package_missing() {
-    let original = "[tasks]\nci = \"test\"\n";
-    let (_tmp, path) = write_tmp_pixi_toml(original);
-    let err = rewrite_build_number(&path, 1).unwrap_err();
-    assert!(format!("{err:#}").contains("missing [package]"));
-}
-
 fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
     let dir = root.join("packages").join(name);
     std::fs::create_dir_all(&dir).unwrap();
@@ -665,136 +465,6 @@ fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
     )
     .unwrap();
     p
-}
-
-#[test]
-fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    write_checkout_pkg(root, "lib", "");
-    let consumer = write_checkout_pkg(
-        root,
-        "node",
-        "[package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n",
-    );
-    let resolved = resolve_path_deps(&consumer).unwrap();
-    assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].name, "lib");
-    assert_eq!(resolved[0].version, "2.5.0");
-
-    let text = std::fs::read_to_string(&consumer).unwrap();
-    assert!(text.contains("lib = \">=2.5.0,<3\""), "rewritten: {text}");
-    assert!(
-        text.contains("node = { path = \".\" }"),
-        "self idiom untouched: {text}"
-    );
-    assert!(
-        text.contains("ros-kilted-rclpy"),
-        "externals untouched: {text}"
-    );
-}
-
-#[test]
-fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    // Sibling dir/manifest is named "lib" (e.g. package-xml mode: no
-    // stable relationship between package.name and the channel artifact
-    // name), but the consumer depends on it under the artifact-name key
-    // "ros-kilted-lib".
-    write_checkout_pkg(root, "lib", "");
-    let consumer = write_checkout_pkg(
-        root,
-        "node",
-        "[package.run-dependencies]\nros-kilted-lib = { path = \"../lib\" }\n",
-    );
-    let resolved = resolve_path_deps(&consumer).unwrap();
-    assert_eq!(resolved.len(), 1);
-    assert_eq!(resolved[0].name, "ros-kilted-lib");
-    assert_eq!(resolved[0].version, "2.5.0");
-
-    let text = std::fs::read_to_string(&consumer).unwrap();
-    assert!(
-        text.contains("ros-kilted-lib = \">=2.5.0,<3\""),
-        "rewritten under the dep key: {text}"
-    );
-}
-
-#[test]
-fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    let dir = root.join("packages").join("lib");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("pixi.toml"),
-        "[workspace]\nname = \"lib\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
-             [dependencies]\nlib = { path = \".\" }\n\
-             [package]\nname = \"lib\"\n",
-    )
-    .unwrap();
-    let consumer = write_checkout_pkg(
-        root,
-        "node",
-        "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
-    );
-    let err = resolve_path_deps(&consumer).unwrap_err();
-    assert!(
-        format!("{err:#}").contains("package.version"),
-        "got: {err:#}"
-    );
-}
-
-#[test]
-fn range_pin_derives_major_cap() {
-    assert_eq!(range_pin("2.5.0").unwrap(), ">=2.5.0,<3");
-    assert_eq!(range_pin("1.24.0-alpha.2").unwrap(), ">=1.24.0-alpha.2,<2");
-    assert_eq!(range_pin("0.3.1").unwrap(), ">=0.3.1,<1");
-}
-
-#[test]
-fn range_pin_rejects_non_numeric_major() {
-    let err = range_pin("rolling").unwrap_err();
-    assert!(format!("{err:#}").contains("numeric major"), "got: {err:#}");
-}
-
-#[test]
-fn resolved_dep_version_stays_the_bare_floor() {
-    // Fallback/availability machinery keys on the exact floor version, not
-    // the range — a regression here would break cross-bucket builds.
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    write_checkout_pkg(root, "lib", "");
-    let consumer = write_checkout_pkg(
-        root,
-        "node",
-        "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
-    );
-    let resolved = resolve_path_deps(&consumer).unwrap();
-    assert_eq!(resolved[0].version, "2.5.0");
-}
-
-#[test]
-fn exact_pin_version_parses_only_concrete_triples() {
-    assert_eq!(exact_pin_version("==2.5.0"), Some("2.5.0"));
-    assert_eq!(exact_pin_version("==2.5.0-alpha.1"), Some("2.5.0-alpha.1"));
-    assert_eq!(exact_pin_version(">=2.5.0"), None);
-    assert_eq!(exact_pin_version("==2.5.*"), None);
-    assert_eq!(exact_pin_version("*"), None);
-    assert_eq!(exact_pin_version("==2.5"), None); // not three components
-}
-
-#[test]
-fn exact_pins_lists_pin_keys_across_tables() {
-    let t = UpstreamPixiToml::parse(
-        "[package]\nname=\"node\"\nversion=\"1.0.0\"\n\
-             [package.run-dependencies]\nlib = \"==2.5.0\"\nros-kilted-rclpy = \"*\"\n\
-             [package.host-dependencies]\nmsgs = \"==1.2.3\"\n",
-    )
-    .unwrap();
-    let mut got: Vec<String> = t.exact_pins().into_iter().map(|(k, _)| k).collect();
-    got.sort();
-    assert_eq!(got, vec!["lib".to_string(), "msgs".to_string()]);
 }
 
 /// dep-name -> subdir map for `resolve_sibling_pins`, matching how the main
@@ -871,34 +541,6 @@ fn check_local_build_guard_skips_already_built() {
     assert!(!check_local_build_guard("lib", &visiting, &local_built).unwrap());
     // Not yet built and not visiting: proceed.
     assert!(check_local_build_guard("other", &visiting, &local_built).unwrap());
-}
-
-#[test]
-fn prepend_channels_front_inserts() {
-    let tmp = TempDir::new().unwrap();
-    let p = tmp.path().join("pixi.toml");
-    std::fs::write(
-        &p,
-        "[workspace]\nname = \"x\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
-             [package]\nname = \"x\"\nversion = \"1.0.0\"\n",
-    )
-    .unwrap();
-    prepend_channels(&p, &["file:///out".into(), "file:///local-deps".into()]).unwrap();
-    let doc: toml::Value = toml::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
-    let ch: Vec<&str> = doc["workspace"]["channels"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert_eq!(
-        ch,
-        vec![
-            "file:///out",
-            "file:///local-deps",
-            "https://prefix.dev/conda-forge"
-        ]
-    );
 }
 
 #[test]
