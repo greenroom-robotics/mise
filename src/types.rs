@@ -203,7 +203,7 @@ impl<'de> Deserialize<'de> for PackageName {
 /// Refusing it beats either silently dropping it or ordering against the spec.
 ///
 /// Versions arriving from a channel are not parsed into this type at all — see
-/// `build_recipes::ChannelIndex`.
+/// `build_recipes::channel::ChannelIndex`.
 #[derive(Debug, Clone)]
 pub struct Version {
     /// As written by whoever produced it. Never re-derived, so a round trip
