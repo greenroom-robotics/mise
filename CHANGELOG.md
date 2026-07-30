@@ -1,3 +1,10 @@
+## [8.4.4](https://github.com/greenroom-robotics/mise/compare/mise@8.4.3...mise@8.4.4) (2026-07-30)
+
+
+### Bug Fixes
+
+* **recipes-pr:** resolve latest tag without a head pipe to avoid SIGPIPE ([#75](https://github.com/greenroom-robotics/mise/issues/75)) ([39d8c5e](https://github.com/greenroom-robotics/mise/commit/39d8c5ea13a0c54a123bc5f09d7df7b18244ec04))
+
 ## [8.4.3](https://github.com/greenroom-robotics/mise/compare/mise@8.4.2...mise@8.4.3) (2026-07-29)
 
 
