@@ -71,7 +71,6 @@ impl RecipesPr {
                 if pkgs.is_empty() {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
                 }
-                let mut out = Vec::new();
                 // Path from the source-repo root to the dir holding each
                 // package's pixi.toml. "" or "." means the package sits at
                 // the repo root. Anchor on the git toplevel, not cwd:
@@ -79,25 +78,26 @@ impl RecipesPr {
                 // the package dir, and --package-dir arrives absolute, so
                 // cwd-stripping would leak an absolute subdir.
                 let toplevel = git::toplevel(&cwd)?;
-                for pkg in &pkgs {
-                    let abs = if pkg.dir.is_absolute() {
-                        pkg.dir.clone()
-                    } else {
-                        cwd.join(&pkg.dir)
-                    };
-                    let parent = abs
-                        .strip_prefix(&toplevel)
-                        .map(|r| r.to_owned())
-                        .unwrap_or(abs)
-                        .to_string_lossy()
-                        .into_owned();
-                    let subdir = match parent.as_str() {
-                        "" | "." => None,
-                        s => Some(s.to_string()),
-                    };
-                    out.push((pkg.identity().name, subdir));
-                }
-                out
+                pkgs.iter()
+                    .map(|pkg| {
+                        let abs = if pkg.dir.is_absolute() {
+                            pkg.dir.clone()
+                        } else {
+                            cwd.join(&pkg.dir)
+                        };
+                        let parent = abs
+                            .strip_prefix(&toplevel)
+                            .map(|r| r.to_owned())
+                            .unwrap_or(abs)
+                            .to_string_lossy()
+                            .into_owned();
+                        let subdir = match parent.as_str() {
+                            "" | "." => None,
+                            s => Some(s.to_string()),
+                        };
+                        (pkg.identity().name, subdir)
+                    })
+                    .collect()
             }
         };
 

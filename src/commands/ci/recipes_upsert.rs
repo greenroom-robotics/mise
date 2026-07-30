@@ -222,7 +222,7 @@ pub(crate) fn mutate_pixi_entry(
         // Append a new entry at end of file.
         let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
         // Ensure separation from previous content.
-        if out.last().map(|s| !s.is_empty()).unwrap_or(false) {
+        if out.last().is_some_and(|s| !s.is_empty()) {
             out.push(String::new());
         }
         out.push(format!("  - name: {name}"));

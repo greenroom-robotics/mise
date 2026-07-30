@@ -1,3 +1,4 @@
+use crate::manifest::Package;
 use anyhow::Context;
 use clap::Args;
 use std::ffi::OsStr;
@@ -67,55 +68,58 @@ impl Test {
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
-        let mut failed = Vec::new();
-        for pkg in pkgs {
-            let pkg_dir = &pkg.dir;
-            for job in &jobs {
-                println!(
-                    "==> mise ci test :: {} [{}:{}]",
-                    pkg_dir.display(),
-                    job.env,
-                    job.task
-                );
-                // Lockfile satisfaction is strict by default; --no-locked
-                // opts out and re-resolves from the manifest instead.
-                let mut argv: Vec<&OsStr> = vec![OsStr::new("run")];
-                if self.locked {
-                    argv.push(OsStr::new("--locked"));
-                }
-                argv.extend([
-                    OsStr::new("--manifest-path"),
-                    pkg.manifest_path.as_os_str(),
-                    OsStr::new("-e"),
-                    OsStr::new(&job.env),
-                    OsStr::new(&job.task),
-                ]);
-                // The exit code is the test result, not an error: a failing
-                // job (including one killed by a signal, which ROS tests do
-                // manage) is collected and reported alongside the others
-                // below rather than abandoning the remaining packages.
-                let code = crate::process::status_code("pixi", &argv)?;
-                // Collect reports after each job, namespaced by env, so variants
-                // that share the same colcon `build/` (e.g. standalone vs Boost
-                // Asio) don't overwrite each other's JUnit XML. Collect
-                // regardless of pass/fail so failing-test XML is captured too.
-                match collect_reports(pkg_dir, &self.report_dir, &job.env) {
-                    Ok(0) => eprintln!("    no JUnit XML found under {}/build", pkg_dir.display()),
-                    Ok(n) => println!(
-                        "    collected {n} report(s) into {}",
-                        self.report_dir.display()
-                    ),
-                    Err(e) => eprintln!("    failed to collect reports: {e:#}"),
-                }
-                if code != Some(0) {
-                    failed.push(format!("{} [{}:{}]", pkg_dir.display(), job.env, job.task));
-                }
-            }
-        }
+        let failed: Vec<String> = pkgs
+            .iter()
+            .flat_map(|pkg| jobs.iter().map(move |job| (pkg, job)))
+            .map(|(pkg, job)| self.run_job(pkg, job))
+            .filter_map(Result::transpose)
+            .collect::<anyhow::Result<_>>()?;
         if !failed.is_empty() {
             anyhow::bail!("tests failed for: {}", failed.join(", "));
         }
         Ok(())
+    }
+
+    /// Run one `<env>:<task>` against one package and collect its JUnit XML.
+    /// Returns the failure label when the job did not exit 0 — the exit code is
+    /// the test result, not an error, so a failing job (including one killed by
+    /// a signal, which ROS tests do manage) is reported alongside the others by
+    /// the caller rather than abandoning the remaining packages.
+    fn run_job(&self, pkg: &Package, job: &Job) -> anyhow::Result<Option<String>> {
+        let pkg_dir = &pkg.dir;
+        println!(
+            "==> mise ci test :: {} [{}:{}]",
+            pkg_dir.display(),
+            job.env,
+            job.task
+        );
+        // Lockfile satisfaction is strict by default; --no-locked opts out and
+        // re-resolves from the manifest instead.
+        let mut argv: Vec<&OsStr> = vec![OsStr::new("run")];
+        if self.locked {
+            argv.push(OsStr::new("--locked"));
+        }
+        argv.extend([
+            OsStr::new("--manifest-path"),
+            pkg.manifest_path.as_os_str(),
+            OsStr::new("-e"),
+            OsStr::new(&job.env),
+            OsStr::new(&job.task),
+        ]);
+        let code = crate::process::status_code("pixi", &argv)?;
+        // Collect reports after each job, namespaced by env, so variants that
+        // share the same colcon `build/` (e.g. standalone vs Boost Asio) don't
+        // overwrite each other's JUnit XML. Collect regardless of pass/fail so
+        // failing-test XML is captured too.
+        match collect_reports(pkg_dir, &self.report_dir, &job.env) {
+            Ok(0) => eprintln!("    no JUnit XML found under {}/build", pkg_dir.display()),
+            Ok(n) => println!(
+                "    collected {n} report(s) into {}",
+                self.report_dir.display()
+            ),
+            Err(e) => eprintln!("    failed to collect reports: {e:#}"),
+        }
+        Ok((code != Some(0)).then(|| format!("{} [{}:{}]", pkg_dir.display(), job.env, job.task)))
     }
 }
 
@@ -138,9 +142,7 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
         .unwrap_or_else(|| "package".into());
     let dest_root = report_dir.join(&pkg_name).join(env);
 
-    let mut xml = Vec::new();
-    find_xml(&build, &mut xml)?;
-
+    let xml = find_xml(&build)?;
     for src in &xml {
         let rel = src.strip_prefix(pkg_dir).unwrap_or(src);
         let dest = dest_root.join(rel);
@@ -154,8 +156,9 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
     Ok(xml.len())
 }
 
-/// Recursively collect `*.xml` files under `dir` into `out`.
-fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+/// Recursively collect `*.xml` files under `dir`.
+fn find_xml(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();
         if path.is_dir() {
@@ -164,7 +167,7 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
             if path.file_name().is_some_and(|n| n == "Testing") {
                 continue;
             }
-            find_xml(&path, out)?;
+            out.extend(find_xml(&path)?);
         } else if path.extension().is_some_and(|e| e == "xml")
             && path.file_name().is_some_and(|n| n != "package.xml")
         {
@@ -174,7 +177,7 @@ fn find_xml(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
             out.push(path);
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 #[cfg(test)]

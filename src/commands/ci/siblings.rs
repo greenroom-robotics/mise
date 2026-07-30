@@ -18,21 +18,21 @@ pub struct SiblingGraph {
 /// Build the sibling graph from packages already parsed by discovery. Every
 /// dependency table in [`crate::manifest::DEP_TABLES`] is scanned.
 pub fn analyze(packages: &[Package]) -> SiblingGraph {
-    let mut g = SiblingGraph::default();
-    let mut named: Vec<(PackageName, PathBuf, &Package)> = Vec::new();
-
-    for pkg in packages {
-        let dir = normalize(&pkg.dir);
-        let name = pkg.manifest.name().clone();
-        g.dirs.insert(name.clone(), dir.clone());
-        named.push((name, dir, pkg));
-    }
+    let mut g = SiblingGraph {
+        dirs: packages
+            .iter()
+            .map(|pkg| (pkg.manifest.name().clone(), normalize(&pkg.dir)))
+            .collect(),
+        ..Default::default()
+    };
 
     // dir -> name, for resolving path deps to sibling packages.
     let dir_to_name: BTreeMap<PathBuf, PackageName> =
         g.dirs.iter().map(|(n, d)| (d.clone(), n.clone())).collect();
 
-    for (name, dir, pkg) in &named {
+    for pkg in packages {
+        let name = pkg.manifest.name();
+        let dir = &normalize(&pkg.dir);
         for dep in pkg.manifest.deps() {
             if let Some(path) = dep.path() {
                 let target = normalize(&dir.join(path));

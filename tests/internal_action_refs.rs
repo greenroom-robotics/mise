@@ -31,25 +31,18 @@ fn internal_action_refs_match_pixi_major() {
 
     let ref_re = Regex::new(r#"greenroom-robotics/mise/[^@\s"'#]+@v(\d+)"#).unwrap();
 
-    let mut mismatches = Vec::new();
-    for path in walk(&manifest_dir.join(".github")) {
-        let contents = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => continue, // skip non-utf8/binary files
-        };
-        for line in contents.lines() {
-            for caps in ref_re.captures_iter(line) {
-                let pinned_major: u32 = caps[1].parse().unwrap();
-                if pinned_major != major {
-                    mismatches.push(format!(
-                        "{}: {} (expected v{major})",
-                        path.display(),
-                        caps.get(0).unwrap().as_str()
-                    ));
-                }
-            }
-        }
-    }
+    let mismatches: Vec<String> = walk(&manifest_dir.join(".github"))
+        .into_iter()
+        // skip non-utf8/binary files
+        .filter_map(|path| fs::read_to_string(&path).ok().map(|c| (path, c)))
+        .flat_map(|(path, contents)| {
+            ref_re
+                .captures_iter(&contents)
+                .filter(|caps| caps[1].parse::<u32>().unwrap() != major)
+                .map(|caps| format!("{}: {} (expected v{major})", path.display(), &caps[0]))
+                .collect::<Vec<_>>()
+        })
+        .collect();
 
     assert!(
         mismatches.is_empty(),
