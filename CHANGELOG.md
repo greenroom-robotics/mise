@@ -1,3 +1,10 @@
+## [8.5.0](https://github.com/greenroom-robotics/mise/compare/mise@8.4.4...mise@8.5.0) (2026-07-31)
+
+
+### Features
+
+* refactor: parse, don't validate — types, plumbing and module structure ([#76](https://github.com/greenroom-robotics/mise/issues/76)) ([e728fe4](https://github.com/greenroom-robotics/mise/commit/e728fe4ef7e8efb667c03390e1bf961f86385584))
+
 ## [8.4.4](https://github.com/greenroom-robotics/mise/compare/mise@8.4.3...mise@8.4.4) (2026-07-30)
 
 
