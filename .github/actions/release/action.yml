@@ -18,6 +18,12 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
+  auth-channels:
+    description: >-
+      Newline-separated az:// channel URLs needing authenticated reads. Forwarded to
+      actions/setup, which turns each into a per-container pixi credential grant.
+    required: false
+    default: ""
   package:
     description: Single package to release (default - all packages under package-dir).
     required: false
@@ -60,13 +66,14 @@ runs:
   steps:
     - id: setup
       if: inputs.skip-setup != 'true'
-      uses: greenroom-robotics/mise/.github/actions/setup@v8
+      uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        auth-channels: ${{ inputs.auth-channels }}
 
     - uses: actions/setup-node@v4
       with:
