@@ -18,6 +18,12 @@ inputs:
   azure-subscription-id:
     description: AZURE_SUBSCRIPTION_ID for the channel storage account.
     required: true
+  auth-channels:
+    description: >-
+      Newline-separated az:// channel URLs needing authenticated reads. Forwarded to
+      actions/setup, which turns each into a per-container pixi credential grant.
+    required: false
+    default: ""
   dispatch-sha:
     description: 'SHA the run was dispatched on. Tags that are NOT ancestors of this SHA were created by the deb release this run; pre-existing tags are skipped.'
     required: true
@@ -42,13 +48,14 @@ runs:
   using: composite
   steps:
     - id: setup
-      uses: greenroom-robotics/mise/.github/actions/setup@v8
+      uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        auth-channels: ${{ inputs.auth-channels }}
 
     - name: Fetch tags created by the deb release
       shell: bash
