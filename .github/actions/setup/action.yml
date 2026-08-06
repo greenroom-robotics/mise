@@ -21,18 +21,7 @@ inputs:
   pixi-version:
     description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: "0.75.2"
-  auth-channels:
-    description: >-
-      Newline-separated az:// channel URLs that require authenticated reads, one per
-      container (e.g. `az://<account>.blob.core.windows.net/general`). Each becomes a
-      per-container credential grant in the pixi user config. From pixi 0.75 a request
-      to an ungranted container is sent UNSIGNED and a private container answers 401,
-      so a repo reading an az:// channel MUST list it here — the ambient azure/login
-      is not sufficient on its own. Anonymous-read containers must NOT be listed:
-      granting one attaches a bearer token, and an identity with no role on it gets 403.
-    required: false
-    default: ""
+    default: "0.73.0"
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
     required: false
@@ -94,24 +83,11 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-    # Per-container credential grants for the az:// channels this repo reads. Must
-    # precede every step that touches a channel — the mise install below is
-    # already one. Runs even under skip-pixi: the config is inert without pixi,
-    # and a container build that installs its own pixi still wants it on the host.
-    - name: Install Azure channel grants
-      if: inputs.auth-channels != ''
-      shell: bash
-      env:
-        AUTH_CHANNELS: ${{ inputs.auth-channels }}
-      run: python3 "${{ github.action_path }}/azure_grants.py"
-
     # Install the Greenroom pixi fork (native az:// Azure Blob channel support;
     # upstream pixi cannot read our az:// channels). Only the binary — we do not
     # install a consumer environment for the CI orchestration tools (pixi/mise).
-    # Reads of an az:// channel need BOTH the ambient azure/login above (the SAS
-    # is minted from it) and a per-container grant from auth-channels; a grant
-    # without a login cannot sign, and a login without a grant is never asked to.
-    # Explicit SAS is only required for writes (reindex).
+    # Reading az:// channels only needs the ambient azure/login above (SAS is
+    # minted from it); explicit SAS is only required for writes (reindex).
     - name: Install pixi (Greenroom fork)
       if: inputs.skip-pixi != 'true'
       shell: bash
