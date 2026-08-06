@@ -10,13 +10,11 @@
 #
 #   jobs:
 #     test:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v9
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v8
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
 #         changed-only: true        # PRs test only changed packages
-#         auth-channels: |          # every az:// channel the manifests read
-#           az://<account>.blob.core.windows.net/general
 #         jobs: |
 #           default:test
 #       secrets:
@@ -49,16 +47,6 @@ on:
         required: false
         type: string
         default: packages
-      auth-channels:
-        description: >-
-          Newline-separated az:// channel URLs needing authenticated reads. Forwarded to
-          actions/test -> actions/setup, which turns each into a per-container pixi
-          credential grant. Required for any repo whose manifests name an az:// channel:
-          from pixi 0.75 an ungranted request is sent unsigned and a private container
-          answers 401.
-        required: false
-        type: string
-        default: ""
       report-dir:
         description: Directory to collect JUnit XML test reports into.
         required: false
@@ -141,7 +129,7 @@ jobs:
       # whose committed pixi.lock transitively pins it. Single root-[package]
       # repos use the test composite directly, not this workflow.
       - id: all
-        uses: greenroom-robotics/mise/.github/actions/discover@v9
+        uses: greenroom-robotics/mise/.github/actions/discover@v8
         with:
           package: ${{ inputs.package }}
           package-dir: ${{ inputs.package-dir }}
@@ -250,14 +238,13 @@ jobs:
         if: inputs.host-setup != ''
         shell: bash
         run: ${{ inputs.host-setup }}
-      - uses: greenroom-robotics/mise/.github/actions/test@v9
+      - uses: greenroom-robotics/mise/.github/actions/test@v8
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-subscription-id: ${{ secrets.azure-subscription-id }}
-          auth-channels: ${{ inputs.auth-channels }}
           package: ${{ matrix.package }}
           package-dir: ${{ inputs.package-dir }}
           report-dir: ${{ inputs.report-dir }}

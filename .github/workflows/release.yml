@@ -104,12 +104,6 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # mise installs itself from the private channel, so it needs a grant like
-          # any other consumer — but this repo is PUBLIC and its workflow files and
-          # logs are world-readable. A secret keeps the container names out of both:
-          # GitHub masks secret values in log output, plain `vars` are not masked.
-          # Consumers are private repos and list their channels literally.
-          auth-channels: ${{ secrets.AZURE_AUTH_CHANNELS }}
 
       # mise releases itself through its own action (the path it provides to
       # other pixi-native repos), not the deprecated recipes-release.yml.

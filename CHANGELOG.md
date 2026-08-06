@@ -1,13 +1,9 @@
-## [9.0.0](https://github.com/greenroom-robotics/mise/compare/mise@8.5.0...mise@9.0.0) (2026-08-06)
+## [8.6.0](https://github.com/greenroom-robotics/mise/compare/mise@8.5.0...mise@8.6.0) (2026-08-07)
 
 
-### ⚠ BREAKING CHANGES
+### Reverts
 
-* pixi 0.75.2 default and per-container azure grants (#77)
-
-### Features
-
-* pixi 0.75.2 default and per-container azure grants ([#77](https://github.com/greenroom-robotics/mise/issues/77)) ([3ab7ce1](https://github.com/greenroom-robotics/mise/commit/3ab7ce1a6d4c6bd5b93c346848f4c5a0c9db395f))
+* pixi 0.75.2 default and per-container azure grants ([#77](https://github.com/greenroom-robotics/mise/issues/77)), released as 9.0.0. Reverted to keep the action line on v8: the 0.75 migration is a per-repo opt-in, not something every consumer should have to bump a major to skip. The 9.0.0 tag and release are removed; this version is tagged by hand so semantic-release resumes on 8.x.
 
 ## [8.5.0](https://github.com/greenroom-robotics/mise/compare/mise@8.4.4...mise@8.5.0) (2026-07-31)
 

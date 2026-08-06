@@ -33,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0
       - id: all
-        uses: greenroom-robotics/mise/.github/actions/discover@v9
+        uses: greenroom-robotics/mise/.github/actions/discover@v8
         with:
           package: ${{ inputs.package }}       # empty = discover every package
           package-dir: ${{ inputs.package-dir }} # default: packages
