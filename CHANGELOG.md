@@ -1,3 +1,14 @@
+## [9.0.0](https://github.com/greenroom-robotics/mise/compare/mise@8.5.0...mise@9.0.0) (2026-08-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* pixi 0.75.2 default and per-container azure grants (#77)
+
+### Features
+
+* pixi 0.75.2 default and per-container azure grants ([#77](https://github.com/greenroom-robotics/mise/issues/77)) ([3ab7ce1](https://github.com/greenroom-robotics/mise/commit/3ab7ce1a6d4c6bd5b93c346848f4c5a0c9db395f))
+
 ## [8.5.0](https://github.com/greenroom-robotics/mise/compare/mise@8.4.4...mise@8.5.0) (2026-07-31)
 
 
