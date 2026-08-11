@@ -32,10 +32,10 @@ impl Build {
             let pkg_dir = &pkg.dir;
             println!("==> mise ci build :: {}", pkg_dir.display());
             let mut argv: Vec<&OsStr> = vec![
-                OsStr::new("build"),
+                OsStr::new("publish"),
                 OsStr::new("--path"),
                 pkg.manifest_path.as_os_str(),
-                OsStr::new("--output-dir"),
+                OsStr::new("--target-dir"),
                 out_dir.as_os_str(),
             ];
             if let Some(plat) = &self.target_platform {
