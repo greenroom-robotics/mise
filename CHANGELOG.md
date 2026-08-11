@@ -1,3 +1,10 @@
+## [8.6.1](https://github.com/greenroom-robotics/mise/compare/mise@8.6.0...mise@8.6.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* move from deprecated pixi build to pixi publish ([#79](https://github.com/greenroom-robotics/mise/issues/79)) ([4424be7](https://github.com/greenroom-robotics/mise/commit/4424be74af9f00bec9cad0a066ba002a439bdc92))
+
 ## [8.6.0](https://github.com/greenroom-robotics/mise/compare/mise@8.5.0...mise@8.6.0) (2026-08-07)
 
 
