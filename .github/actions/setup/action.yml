@@ -21,7 +21,7 @@ inputs:
   pixi-version:
     description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: "0.73.0"
+    default: "0.73.1"
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
     required: false
