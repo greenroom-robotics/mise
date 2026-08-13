@@ -60,7 +60,7 @@ runs:
   steps:
     - id: setup
       if: inputs.skip-setup != 'true'
-      uses: greenroom-robotics/mise/.github/actions/setup@v8
+      uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
@@ -123,5 +123,5 @@ runs:
         if [ -n "$EXTRA_PREPARE_CMD" ]; then
           args+=(--extra-prepare-cmd "$EXTRA_PREPARE_CMD")
         fi
-        pixi run --manifest-path "$MISE_MANIFEST" mise ci release "${args[@]}"
+        mise ci release "${args[@]}"
 

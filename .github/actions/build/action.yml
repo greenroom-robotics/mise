@@ -34,7 +34,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: greenroom-robotics/mise/.github/actions/setup@v8
+    - uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
@@ -52,5 +52,5 @@ runs:
         if [ -n "${{ inputs.target-platform }}" ]; then
           args+=(--target-platform "${{ inputs.target-platform }}")
         fi
-        pixi run --manifest-path "$MISE_MANIFEST" mise ci build "${args[@]}"
+        mise ci build "${args[@]}"
 

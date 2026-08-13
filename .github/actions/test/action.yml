@@ -52,7 +52,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: greenroom-robotics/mise/.github/actions/setup@v8
+    - uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
@@ -74,7 +74,7 @@ runs:
         while IFS= read -r job; do
           [ -n "$job" ] && args+=(--job "$job")
         done <<< "${{ inputs.jobs }}"
-        pixi run --manifest-path "$MISE_MANIFEST" mise ci test "${args[@]}"
+        mise ci test "${args[@]}"
 
     - name: Upload test reports
       if: always()

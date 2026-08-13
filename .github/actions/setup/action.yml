@@ -1,5 +1,5 @@
 name: Set up mise CI environment
-description: 'Provision a GitHub App token, Azure credentials, the Greenroom pixi fork (native az:// channel support), and (unless skip-pixi is set) the mise CLI pinned to this action version. Public action — callable directly from custom workflows.'
+description: 'Provision a GitHub App token, Azure credentials, the mise CLI binary pinned to this action version, and (unless skip-pixi is set) the Greenroom pixi fork (native az:// channel support). Public action — callable directly from custom workflows.'
 author: Greenroom Robotics
 
 inputs:
@@ -24,6 +24,10 @@ inputs:
     default: "0.73.1"
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
+    required: false
+    default: "false"
+  skip-mise:
+    description: Skip the mise install step. Only for mise's own release workflow, which builds the binary it is about to publish from source instead of downloading an older one.
     required: false
     default: "false"
 
@@ -100,21 +104,18 @@ runs:
         sh "$installer"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    # Write a dedicated pixi manifest that depends solely on mise, pinned to the
-    # exact version this action ships, then install it. Downstream actions run
-    # mise via `pixi run --manifest-path "$MISE_MANIFEST"` (exported below)
+    # Install the mise binary from this repo's GitHub release. The repo is
+    # public and the binary is statically linked (musl), so this needs no auth,
+    # no pixi and no Azure session — just a download.
     #
     # The version is read from THIS repo's root pixi.toml [package].version —
     # bumped on every release, with the major tag (v<MAJOR>) slid onto that
-    # commit. The spec is `<=version` (a ceiling, not `==`): between the bump
-    # commit landing (tag moves, version reads as new) and the new mise being
-    # published to the channel, `==` can't resolve and every action fails.
-    # `<=` falls back to the latest *published* version during that gap while
-    # never installing something newer than the action ships. The channel is
-    # the org's `general` az:// Azure Blob channel, where mise is published;
-    # the pixi fork reads it directly using the ambient azure/login session.
+    # commit. Between the bump commit landing (version reads as new) and the
+    # binaries job attaching assets to the new release, that tag's asset does
+    # not exist yet; the fallback to `latest` covers that gap the same way the
+    # old `<=version` conda spec did.
     - name: Install mise
-      if: inputs.skip-pixi != 'true'
+      if: inputs.skip-mise != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -123,18 +124,12 @@ runs:
           echo "::error::could not read [package].version from the action's pixi.toml" >&2
           exit 1
         fi
-        manifest_dir="${RUNNER_TEMP}/mise-tool"
-        mkdir -p "$manifest_dir"
-        cat > "${manifest_dir}/pixi.toml" <<EOF
-        [workspace]
-        name = "mise-tool"
-        channels = ["az://stgrcondachannel.blob.core.windows.net/general", "https://prefix.dev/conda-forge"]
-        platforms = ["linux-64", "linux-aarch64"]
-
-        [dependencies]
-        mise = "<=${version}"
-        EOF
-        echo "Installing mise<=${version} (latest published, ceiling ${version}) from a dedicated tool manifest"
-        pixi install --manifest-path "${manifest_dir}/pixi.toml"
-        # Export the manifest path so downstream actions invoke mise from it.
-        echo "MISE_MANIFEST=${manifest_dir}/pixi.toml" >> "$GITHUB_ENV"
+        asset="mise-$(uname -m)-unknown-linux-musl.tar.gz"
+        base="https://github.com/greenroom-robotics/mise/releases/download"
+        mkdir -p "$HOME/.local/bin"
+        if ! curl -fsSL "${base}/mise@${version}/${asset}" | tar -xz -C "$HOME/.local/bin"; then
+          echo "::notice::no ${asset} on mise@${version} yet; falling back to the latest release"
+          curl -fsSL "https://github.com/greenroom-robotics/mise/releases/latest/download/${asset}" \
+            | tar -xz -C "$HOME/.local/bin"
+        fi
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
