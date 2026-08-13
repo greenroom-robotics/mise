@@ -4,15 +4,15 @@ Provisions everything a pixi-based ROS package workflow needs to run mise CLI co
 
 1. GitHub App token (so private deps clone)
 2. Azure federated login (so the pixi fork can mint read SAS for the `az://` channels)
-3. the Greenroom pixi fork binary (native `az://` Azure Blob channel support; upstream pixi cannot read our `az://` channels)
-4. a dedicated pixi tool manifest depending solely on `mise`, pinned to this action's version (read from this repo's root `pixi.toml`) and installed — so the calling repo does **not** need a root `pixi.toml` carrying `mise` as a dependency. The manifest path is exported as `$MISE_MANIFEST`; run mise with `pixi run --manifest-path "$MISE_MANIFEST" mise …`
+3. the `mise` binary, pinned to this action's version (read from this repo's root `pixi.toml`), downloaded from this repo's GitHub release and put on `$PATH` — so the calling repo does **not** need a root `pixi.toml` carrying `mise` as a dependency. It is statically linked and the repo is public, so this step needs no auth, no pixi and no Azure session. Just run `mise …`.
+4. the Greenroom pixi fork binary (native `az://` Azure Blob channel support; upstream pixi cannot read our `az://` channels)
 
 Public action — call it directly from any workflow.
 
 ## Usage
 
 ```yaml
-- uses: greenroom-robotics/mise/.github/actions/setup@v8
+- uses: greenroom-robotics/mise/.github/actions/setup@v9
   with:
     gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
     gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -20,7 +20,7 @@ Public action — call it directly from any workflow.
     azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
     azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-# Do your work here, e.g. `pixi run --manifest-path "$MISE_MANIFEST" mise ci test`
+# Do your work here, e.g. `mise ci test`
 ```
 
 ## Outputs

@@ -42,7 +42,7 @@ runs:
   using: composite
   steps:
     - id: setup
-      uses: greenroom-robotics/mise/.github/actions/setup@v8
+      uses: greenroom-robotics/mise/.github/actions/setup@v9
       with:
         gh-app-client-id: ${{ inputs.gh-app-client-id }}
         gh-app-private-key: ${{ inputs.gh-app-private-key }}
@@ -88,7 +88,7 @@ runs:
           ver="${tag#*@}"
           sha="$(git rev-list -n1 "$tag")"
           echo "::group::conda recipe PR for ${label}@${ver} (${sha})"
-          pixi run --manifest-path "$MISE_MANIFEST" mise ci recipes-pr \
+          mise ci recipes-pr \
             --version="$ver" \
             --recipes-repo="$RECIPES_REPO" \
             --package="$pkg_arg" \

@@ -104,6 +104,17 @@ jobs:
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # Build the binary below instead of downloading one. setup installs
+          # the mise release named by pixi.toml, which during *this* job is
+          # still the previous version — and on the very first run of this
+          # workflow shape, that release has no binary assets at all. Building
+          # from source also means the release is cut by the code it publishes.
+          skip-mise: "true"
+
+      - name: Build the mise being released
+        run: |
+          cargo build --release
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
 
       # mise releases itself through its own action (the path it provides to
       # other pixi-native repos), not the deprecated recipes-release.yml.
@@ -128,6 +139,49 @@ jobs:
           extra-git-assets: "Cargo.toml Cargo.lock"
           extra-prepare-cmd: "mise ci sync-cargo --version=${nextRelease.version}"
 
+  # Attaches statically linked binaries to the GitHub release the job above
+  # created (@semantic-release/github), one per platform in pixi.toml. This is
+  # what `setup` downloads, so it must land before update-major-tag slides
+  # v<MAJOR> onto this commit — a consumer pinned at v<MAJOR> reads the bumped
+  # version out of pixi.toml and asks for that release's asset by name.
+  #
+  # Native runners per arch rather than `cross`: no Docker pull, no
+  # `cargo install cross`. The musl targets ship their own libc for
+  # self-contained linking, so there's no musl-tools step either.
+  binaries:
+    needs: release
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write # uploading release assets
+    steps:
+      # fetch-depth 0 for the tags: the release job pushed mise@X.Y.Z to this
+      # branch tip, and the tag is how the upload finds its release.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - id: tag
+        run: echo "ref=refs/tags/$(git tag -l 'mise@*' | sort -V | tail -1)" >> "$GITHUB_OUTPUT"
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: mise
+          target: ${{ matrix.target }}
+          # The workflow runs on push, not on the tag, so GITHUB_REF points at
+          # main and the action needs the tag spelled out.
+          ref: ${{ steps.tag.outputs.ref }}
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   # Slides the bare `v<MAJOR>` tag (e.g. `v1`, `v2`) forward whenever the
   # release job above cuts a new exact `mise@X.Y.Z` tag. Consumers pin
   # `uses: greenroom-robotics/mise/.github/actions/<name>@v<MAJOR>` and
@@ -143,7 +197,7 @@ jobs:
   # which the tripwire test cannot catch — it validates the working tree, not
   # whatever commit the tag ends up on.)
   update-major-tag:
-    needs: release
+    needs: [release, binaries]
     runs-on: ubuntu-latest
     permissions:
       contents: write
