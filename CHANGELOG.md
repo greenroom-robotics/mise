@@ -1,3 +1,10 @@
+## [8.7.0](https://github.com/greenroom-robotics/mise/compare/mise@8.6.2...mise@8.7.0) (2026-08-17)
+
+
+### Features
+
+* add lfs support to release ([838b5e4](https://github.com/greenroom-robotics/mise/commit/838b5e4525c9fb9b55f936f64b81a9ed844c84c9))
+
 ## [8.6.2](https://github.com/greenroom-robotics/mise/compare/mise@8.6.1...mise@8.6.2) (2026-08-12)
 
 
