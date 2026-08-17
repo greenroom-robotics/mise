@@ -654,6 +654,10 @@ pub struct PixiNativeEntry {
     pub rev: Sha40,
     pub subdir: Option<PathBuf>,
     pub runner_size: RunnerSize,
+    /// Pull the entry's Git LFS objects after checkout. Off by default:
+    /// `fetch_rev` leaves pointers in place, which is what a package with no
+    /// LFS-tracked build inputs wants.
+    pub lfs: bool,
 }
 
 impl PixiNativeEntry {
@@ -677,6 +681,8 @@ struct PixiNativeEntryRaw {
     subdir: Option<PathBuf>,
     #[serde(default, rename = "runner-size")]
     runner_size: Option<RunnerSize>,
+    #[serde(default)]
+    lfs: bool,
 }
 
 impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
@@ -701,6 +707,7 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
             rev,
             subdir: raw.subdir,
             runner_size: raw.runner_size.unwrap_or_default(),
+            lfs: raw.lfs,
         })
     }
 }

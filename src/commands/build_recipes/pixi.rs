@@ -18,8 +18,8 @@ use crate::manifest::{PackageManifest, prepend_channels, resolve_path_deps, set_
 use crate::process;
 use crate::repo::Repo;
 use crate::types::{
-    Arch, ChannelUrl, GithubRepoUrl, LocalChannel, PackageName, PixiNativeEntry, RemoteChannel,
-    RunnerSize, Sha40, Version,
+    Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry, RemoteChannel, RunnerSize,
+    Version,
 };
 
 use super::channel::{BuildSubdir, ChannelIndexCache, publish_argv, version_published};
@@ -51,9 +51,18 @@ fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
     .with_context(|| format!("entry {}", entry.name))
 }
 
-/// Materialize one commit of an entry's repo in `dest`.
-fn fetch_at_rev(url: &GithubRepoUrl, rev: &Sha40, dest: &Path) -> anyhow::Result<()> {
-    git::fetch_rev(dest, &url.https_url(), rev)
+/// Materialize one commit of an entry's repo in `dest`, pulling the LFS
+/// objects under its subdir when the entry opts in.
+fn fetch_at_rev(entry: &PixiNativeEntry, dest: &Path) -> anyhow::Result<()> {
+    git::fetch_rev(dest, &entry.url.https_url(), &entry.rev)?;
+    if entry.lfs {
+        let include = match &entry.subdir {
+            Some(s) => format!("{}/**", s.display()),
+            None => "**".to_string(),
+        };
+        git::lfs_pull(dest, &include)?;
+    }
+    Ok(())
 }
 
 enum CheckOutcome {
@@ -319,7 +328,7 @@ pub(super) fn pixi(
             .context("create temp workdir")?;
         let workdir = tmp.path().join("src");
         fs::create_dir(&workdir)?;
-        fetch_at_rev(&entry.url, &entry.rev, &workdir)?;
+        fetch_at_rev(entry, &workdir)?;
 
         let subdir = entry.subdir_or_root();
         let manifest_dir = workdir.join(subdir);

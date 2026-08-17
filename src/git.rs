@@ -43,6 +43,18 @@ pub fn fetch_rev(dest: &Path, url: &str, rev: &Sha40) -> anyhow::Result<()> {
     process::run_in(dest, "git", &["checkout", "--quiet", "FETCH_HEAD"])
 }
 
+/// Pull the LFS objects under `include` into an existing checkout.
+///
+/// `--exclude=` is unconditional here, unlike the CI-test LFS pull where a
+/// repo's `.lfsconfig` `fetchexclude` is a deliberate cost control. This
+/// checkout is a throwaway build workdir scoped to one entry's `include`, so
+/// the source repo's `fetchexclude = *` (set to stop local auto-fetch) would
+/// only mean fetching nothing at all.
+pub fn lfs_pull(dest: &Path, include: &str) -> anyhow::Result<()> {
+    let include = format!("--include={include}");
+    process::run_in(dest, "git", &["lfs", "pull", &include, "--exclude="])
+}
+
 /// `git fetch --depth=1 origin <branch>`, leaving the result in `FETCH_HEAD`
 /// for a subsequent `checkout -b <branch> FETCH_HEAD`.
 pub fn fetch_branch(dest: &Path, branch: &str) -> anyhow::Result<()> {

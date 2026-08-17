@@ -37,6 +37,15 @@ inputs:
     description: owner/repo of the conda recipes repository to open the PR against.
     required: false
     default: greenroom-robotics/ros-recipes
+  lfs-packages:
+    description: >-
+      Newline- or comma-separated package names whose recipes entry gets
+      `lfs: true`, so the ros-recipes build pulls their Git LFS objects (scoped
+      to the package's subdir) before building. For packages with LFS-tracked
+      build inputs. Authoritative per release: a package released without being
+      listed here has any existing `lfs: true` removed from its entry.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -65,9 +74,18 @@ runs:
         PACKAGE_DIR: ${{ inputs.package-dir }}
         ROS_DISTRO: ${{ inputs.ros-distro }}
         RECIPES_REPO: ${{ inputs.recipes-repo }}
+        LFS_PACKAGES: ${{ inputs.lfs-packages }}
       run: |
         set -euo pipefail
         published=0
+
+        # One --lfs-package per listed name, applied to every package this run
+        # publishes; the CLI matches by name, so unrelated packages are
+        # unaffected.
+        lfs_args=()
+        while IFS= read -r name; do
+          if [ -n "$name" ]; then lfs_args+=(--lfs-package="$name"); fi
+        done < <(printf '%s\n' "$LFS_PACKAGES" | tr ',' '\n' | tr -d '[:blank:]')
 
         # Open/update the recipe PR for one package at its latest release tag.
         # $1=display label  $2=tag  $3=--package value (may be empty -> CLI derives it)
@@ -95,6 +113,7 @@ runs:
             --package-dir="$PACKAGE_DIR" \
             --ros-distro="$ROS_DISTRO" \
             --sha="$sha" \
+            "${lfs_args[@]+"${lfs_args[@]}"}" \
             ${EXTRA_RECIPES_PR_ARGS:-}
           echo "::endgroup::"
           published=$((published+1))

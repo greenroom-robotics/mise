@@ -215,6 +215,7 @@ fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
             rev: sha.clone(),
             subdir: None,
             runner_size: *size,
+            lfs: false,
         })
         .collect();
     PixiNativeManifest {

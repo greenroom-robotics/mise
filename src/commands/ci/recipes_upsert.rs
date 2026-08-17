@@ -147,8 +147,8 @@ pub(crate) fn mutate_vendored_recipe(
 ///
 /// Behavior:
 /// - If an item with the given `name` exists: update `url:` and `rev:`, set
-///   `subdir:` to match the argument (inserting or removing the line as
-///   needed), and delete `ref:` if present.
+///   `subdir:` and `lfs:` to match the arguments (inserting or removing the
+///   lines as needed), and delete `ref:` if present.
 /// - If absent: append a new item at the end of the file with the same
 ///   indentation conventions.
 /// - The file is rebuilt line by line, so it comes back with the terminator
@@ -163,6 +163,10 @@ pub(crate) fn mutate_pixi_entry(
     // directory relative to the git toplevel, so an absent value is a fact
     // about the package, and the entry's `subdir:` line is removed to match.
     subdir: Option<&str>,
+    // Authoritative, like `subdir`: the releasing repo's `--lfs-package` list
+    // is the source of truth, so `false` removes an existing `lfs: true` line
+    // rather than leaving it alone.
+    lfs: bool,
 ) -> anyhow::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
     let url = url.git_url();
@@ -178,6 +182,7 @@ pub(crate) fn mutate_pixi_entry(
         let mut url_seen = false;
         let mut rev_seen = false;
         let mut subdir_seen = false;
+        let mut lfs_seen = false;
         for line in item.body(&lines) {
             let trimmed = line.trim_start();
             if trimmed.starts_with("ref:") {
@@ -201,6 +206,13 @@ pub(crate) fn mutate_pixi_entry(
                 } // else: no subdir means no subdir line — see the note on `subdir`
                 continue;
             }
+            if trimmed.starts_with("lfs:") {
+                if lfs {
+                    lfs_seen = true;
+                    out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
+                }
+                continue;
+            }
             out.push(line.to_string());
         }
         if !url_seen {
@@ -211,6 +223,9 @@ pub(crate) fn mutate_pixi_entry(
         }
         if !subdir_seen && let Some(s) = subdir {
             out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+        }
+        if !lfs_seen && lfs {
+            out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
         }
         // The blank lines between this item and the next, then the rest of
         // the file, pass through untouched.
@@ -230,6 +245,9 @@ pub(crate) fn mutate_pixi_entry(
         out.push(format!("    rev: {rev}"));
         if let Some(s) = subdir {
             out.push(format!("    subdir: {s}"));
+        }
+        if lfs {
+            out.push("    lfs: true".to_string());
         }
         out
     };
@@ -319,6 +337,7 @@ pub(crate) enum ReleaseTarget {
         url: GithubRepoUrl,
         sha: Sha40,
         subdir: Option<String>,
+        lfs: bool,
     },
 }
 
@@ -332,6 +351,15 @@ impl ReleaseTarget {
             Self::PixiNative { .. } => PathBuf::from(crate::consts::PIXI_NATIVE_PACKAGES_YAML),
         }
     }
+}
+
+/// The facts only a `pixi_native_packages.yaml` entry records. Grouped so the
+/// arms that have nowhere to put them (vendored recipes, rosdistro) drop them
+/// at one boundary instead of carrying two more unused parameters.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PixiEntryOpts<'a> {
+    pub subdir: Option<&'a str>,
+    pub lfs: bool,
 }
 
 /// Decide where a release for `package` lands, reading the cloned recipes repo.
@@ -352,7 +380,7 @@ pub(crate) fn route(
     tag: &str,
     version: &Version,
     sha: &Sha40,
-    subdir: Option<&str>,
+    pixi: PixiEntryOpts<'_>,
 ) -> anyhow::Result<ReleaseTarget> {
     // 1. Vendored (name-convention tolerant: `_` ROS name -> `-` recipe dir).
     if let Some(recipe_rel) = vendored_recipe_path(recipes_root, package) {
@@ -399,7 +427,8 @@ pub(crate) fn route(
         package: package.clone(),
         url: url.clone(),
         sha: sha.clone(),
-        subdir: subdir.map(str::to_string),
+        subdir: pixi.subdir.map(str::to_string),
+        lfs: pixi.lfs,
     })
 }
 
@@ -463,11 +492,12 @@ pub(crate) fn apply(recipes_root: &Path, target: &ReleaseTarget) -> anyhow::Resu
             url,
             sha,
             subdir,
+            lfs,
         } => {
             let text = std::fs::read_to_string(&abs)
                 .with_context(|| format!("reading {}", abs.display()))?;
             let old_ref = pixi_entry_rev(&text, package);
-            let updated = mutate_pixi_entry(&text, package, url, sha, subdir.as_deref())?;
+            let updated = mutate_pixi_entry(&text, package, url, sha, subdir.as_deref(), *lfs)?;
             std::fs::write(&abs, updated).with_context(|| format!("writing {}", abs.display()))?;
             Ok(old_ref)
         }

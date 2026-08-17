@@ -39,6 +39,12 @@ pub struct RecipesPr {
     /// Omitted for explicit single-package releases so a typo still fails loudly.
     #[arg(long)]
     pub allow_missing_recipe: bool,
+    /// Repeatable. Packages whose pixi-native entry gets `lfs: true`, so
+    /// `mise build-recipes pixi` pulls their LFS objects before building.
+    /// Authoritative: a package released without being listed has any existing
+    /// `lfs: true` removed.
+    #[arg(long = "lfs-package")]
+    pub lfs_packages: Vec<PackageName>,
 }
 
 impl RecipesPr {
@@ -176,7 +182,10 @@ impl RecipesPr {
                 &tag,
                 &self.version,
                 &self.sha,
-                subdir.as_deref(),
+                recipes_upsert::PixiEntryOpts {
+                    subdir: subdir.as_deref(),
+                    lfs: self.lfs_packages.contains(name),
+                },
             )?;
             changed.insert(target.rel_path());
             old_refs.extend(recipes_upsert::apply(&recipes_root, &target)?);

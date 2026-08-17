@@ -382,6 +382,7 @@ fn pixi_replaces_ref_with_rev_on_existing_entry() {
         &url("https://github.com/example/alpha.git"),
         &sha("3333333333333333333333333333333333333333"),
         None,
+        false,
     )
     .unwrap();
     assert!(!out.contains("ref: main"));
@@ -400,11 +401,49 @@ fn pixi_updates_subdir_when_passed() {
         &url("https://github.com/example/beta.git"),
         &sha("4444444444444444444444444444444444444444"),
         Some("packages/beta-new"),
+        false,
     )
     .unwrap();
     assert!(out.contains("subdir: packages/beta-new"));
     assert!(!out.contains("subdir: packages/beta\n"));
     assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
+}
+
+#[test]
+fn pixi_lfs_is_authoritative_on_existing_and_new_entries() {
+    let on = mutate_pixi_entry(
+        PIXI_FIXTURE,
+        &pkg("beta"),
+        &url("https://github.com/example/beta.git"),
+        &sha("4444444444444444444444444444444444444444"),
+        Some("packages/beta"),
+        true,
+    )
+    .unwrap();
+    assert!(on.contains("    lfs: true"));
+
+    let off = mutate_pixi_entry(
+        &on,
+        &pkg("beta"),
+        &url("https://github.com/example/beta.git"),
+        &sha("4444444444444444444444444444444444444444"),
+        Some("packages/beta"),
+        false,
+    )
+    .unwrap();
+    assert!(!off.contains("lfs:"));
+
+    let appended = mutate_pixi_entry(
+        PIXI_FIXTURE,
+        &pkg("delta"),
+        &url("https://github.com/example/delta.git"),
+        &sha("5555555555555555555555555555555555555555"),
+        None,
+        true,
+    )
+    .unwrap();
+    assert!(appended.contains("- name: delta"));
+    assert!(appended.contains("    lfs: true"));
 }
 
 #[test]
@@ -415,6 +454,7 @@ fn pixi_appends_new_entry_when_absent() {
         &url("https://github.com/example/delta.git"),
         &sha("5555555555555555555555555555555555555555"),
         Some("packages/delta"),
+        false,
     )
     .unwrap();
     assert!(out.contains("- name: alpha"));
@@ -432,6 +472,7 @@ fn pixi_appends_without_subdir() {
         &url("https://github.com/example/epsilon"),
         &sha("6666666666666666666666666666666666666666"),
         None,
+        false,
     )
     .unwrap();
     assert!(out.contains("- name: epsilon"));
@@ -447,6 +488,7 @@ fn pixi_reemits_crlf_line_endings() {
         &url("https://github.com/example/alpha.git"),
         &sha("3333333333333333333333333333333333333333"),
         None,
+        false,
     )
     .unwrap();
     assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
@@ -464,6 +506,7 @@ fn pixi_preserves_a_missing_trailing_newline() {
         &url("https://github.com/example/alpha.git"),
         &sha("3333333333333333333333333333333333333333"),
         None,
+        false,
     )
     .unwrap();
     assert!(!out.ends_with('\n'));
@@ -478,6 +521,7 @@ fn pixi_preserves_tab_indented_sub_keys_it_does_not_own() {
         &url("https://github.com/example/alpha.git"),
         &sha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
         None,
+        false,
     )
     .unwrap();
     assert!(out.contains("\tcomment_key: kept\n"));
@@ -496,6 +540,7 @@ fn pixi_preserves_blank_line_between_items() {
         &url("https://github.com/example/alpha.git"),
         &sha("7777777777777777777777777777777777777777"),
         None,
+        false,
     )
     .unwrap();
     let lines: Vec<&str> = out.lines().collect();
@@ -545,7 +590,15 @@ fn route_and_apply(
     sha: &Sha40,
     subdir: Option<&str>,
 ) -> anyhow::Result<(std::path::PathBuf, Option<OldRef>)> {
-    let target = route(root, package, url, tag, version, sha, subdir)?;
+    let target = route(
+        root,
+        package,
+        url,
+        tag,
+        version,
+        sha,
+        PixiEntryOpts { subdir, lfs: false },
+    )?;
     let path = target.rel_path();
     Ok((path, apply(root, &target)?))
 }
@@ -756,7 +809,10 @@ fn route_picks_pixi_native_over_rosdistro_when_both_list_the_package() {
         "v0.2.0",
         &ver("0.2.0"),
         &sha("1111111111111111111111111111111111111111"),
-        None,
+        PixiEntryOpts {
+            subdir: None,
+            lfs: false,
+        },
     )
     .unwrap();
     assert!(matches!(target, ReleaseTarget::PixiNative { .. }));
@@ -790,7 +846,10 @@ fn route_carries_only_the_facts_its_arm_records() {
         "v1.1.0",
         &ver("1.1.0"),
         &sha("1111111111111111111111111111111111111111"),
-        Some("packages/vend"),
+        PixiEntryOpts {
+            subdir: Some("packages/vend"),
+            lfs: false,
+        },
     )
     .unwrap();
     assert_eq!(
