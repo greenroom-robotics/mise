@@ -1,3 +1,10 @@
+## [8.7.1](https://github.com/greenroom-robotics/mise/compare/mise@8.7.0...mise@8.7.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* write .releaserc at cwd for single-package releases ([800ee40](https://github.com/greenroom-robotics/mise/commit/800ee403216651aceac45b90a3f3f72d1e725d58))
+
 ## [8.7.0](https://github.com/greenroom-robotics/mise/compare/mise@8.6.2...mise@8.7.0) (2026-08-17)
 
 
