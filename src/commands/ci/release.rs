@@ -187,6 +187,16 @@ impl Release {
         if multi {
             ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
         }
+        // Single mode runs plain semantic-release from cwd, and semantic-release
+        // resolves its config from cwd — a .releaserc down in the package dir is
+        // invisible to it (only msr, which runs per-package, reads those). With no
+        // config at cwd it falls back to its own defaults, whose branch list has no
+        // `main`, and dies with ERELEASEBRANCHES.
+        if !multi {
+            let pkg = &pkgs[0];
+            let releaserc = self.releaserc_json(&pkg.manifest_path, &pkg.identity().name)?;
+            std::fs::write(".releaserc", releaserc)?;
+        }
 
         // In single-package mode `pkgs` holds exactly the package being
         // released, so its name can be embedded literally in the tag format.

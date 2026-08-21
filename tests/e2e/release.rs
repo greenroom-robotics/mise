@@ -43,6 +43,26 @@ fn single_package_release_writes_releaserc_and_runs_semantic_release() {
 }
 
 #[test]
+fn single_package_release_writes_releaserc_at_cwd_not_just_the_package_dir() {
+    let e2e = E2e::new();
+    e2e.respond(Shim::Npx, &[], "");
+    let src = e2e.path().join("source");
+    fs::create_dir_all(&src).unwrap();
+    write_file(&src, "tools/solo/pixi.toml", &package_pixi_toml("solo", ""));
+
+    e2e.mise()
+        .current_dir(&src)
+        .args(["ci", "release", "--package-dir", "tools"])
+        .assert()
+        .success();
+
+    // semantic-release runs from cwd and reads its config from there, so the
+    // package-dir copy alone is not enough.
+    assert!(src.join(".releaserc").exists());
+    assert!(src.join("tools/solo/.releaserc").exists());
+}
+
+#[test]
 fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
     let e2e = E2e::new();
     e2e.respond(Shim::Npx, &[], "");
