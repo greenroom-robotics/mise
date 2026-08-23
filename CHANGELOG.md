@@ -1,3 +1,10 @@
+## [8.8.0](https://github.com/greenroom-robotics/mise/compare/mise@8.7.1...mise@8.8.0) (2026-08-23)
+
+
+### Features
+
+* bump-pixi action for releases at an external version ([#82](https://github.com/greenroom-robotics/mise/issues/82)) ([12b0199](https://github.com/greenroom-robotics/mise/commit/12b0199b1bf851e0ceb254c1a375be3721fd17a2))
+
 ## [8.7.1](https://github.com/greenroom-robotics/mise/compare/mise@8.7.0...mise@8.7.1) (2026-08-21)
 
 
