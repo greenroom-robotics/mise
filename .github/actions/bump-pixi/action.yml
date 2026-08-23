@@ -1,0 +1,74 @@
+name: Bump a pixi.toml and tag the release
+description: >-
+  Release a package at an externally-chosen version: write it into the
+  package's pixi.toml via `mise ci bump-pixi`, commit, tag `<pkg>@<version>`
+  at the bump commit and push both. For versions owned by something other
+  than the package's own commits (e.g. a product image release) — the farm
+  builds from pixi.toml at the tagged rev, so tagging without the bump would
+  republish the old version. Pair with the recipes-pr action, which discovers
+  the tag and opens the recipe PR. Requires a checkout of the branch to bump
+  with enough history to commit (fetch-depth 0 is simplest).
+author: Greenroom Robotics
+
+inputs:
+  version:
+    description: Version to release, no leading 'v'.
+    required: true
+  pixi-toml:
+    description: Repo-relative path to the package's pixi.toml.
+    required: true
+  branch:
+    description: Branch the bump commit is pushed to. Must be checked out.
+    required: false
+    default: main
+  gh-app-client-id:
+    description: GitHub App client id used to mint the push token.
+    required: true
+  gh-app-private-key:
+    description: GitHub App private key (PEM).
+    required: true
+  azure-client-id:
+    description: AZURE_CLIENT_ID — federated identity bound to the calling repo.
+    required: true
+  azure-tenant-id:
+    description: AZURE_TENANT_ID for the channel storage account.
+    required: true
+  azure-subscription-id:
+    description: AZURE_SUBSCRIPTION_ID for the channel storage account.
+    required: true
+
+outputs:
+  tag:
+    description: The `<pkg>@<version>` tag that was created and pushed.
+    value: ${{ steps.bump.outputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - uses: greenroom-robotics/mise/.github/actions/setup@v8
+      with:
+        gh-app-client-id: ${{ inputs.gh-app-client-id }}
+        gh-app-private-key: ${{ inputs.gh-app-private-key }}
+        azure-client-id: ${{ inputs.azure-client-id }}
+        azure-tenant-id: ${{ inputs.azure-tenant-id }}
+        azure-subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Bump, commit, tag and push
+      id: bump
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PIXI_TOML: ${{ inputs.pixi-toml }}
+        BRANCH: ${{ inputs.branch }}
+      run: |
+        set -euo pipefail
+        pixi run --manifest-path "$MISE_MANIFEST" mise ci bump-pixi \
+          --version="$VERSION" --pixi-toml="$PIXI_TOML"
+        name="$(python3 -c 'import tomllib, os; print(tomllib.load(open(os.environ["PIXI_TOML"], "rb"))["package"]["name"])')"
+        tag="${name}@${VERSION}"
+        git commit -am "chore(release): ${name} ${VERSION} [skip ci]"
+        # -f/--force so a job re-run after a partial release doesn't die here
+        git tag -f "$tag"
+        git push origin "HEAD:${BRANCH}"
+        git push -f origin "$tag"
+        echo "tag=${tag}" >> "$GITHUB_OUTPUT"
