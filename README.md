@@ -24,6 +24,7 @@ Each is a composite action under `.github/actions/`, versioned with the repo (`@
 | `build` | `mise ci build`, emitting `.conda` artifacts under `$RUNNER_TEMP/conda-bld` |
 | `release` | `mise ci release` (semantic-release) |
 | `recipes-pr` | open/update the conda recipe PR for the `<pkg>@<version>` tags a deb release just cut |
+| `bump-pixi` | release a package at an externally-chosen version: bump its pixi.toml, commit, tag `<pkg>@<version>`, push — then pair with `recipes-pr` |
 | `discover` | find per-package pixi workspaces and emit a `paths-filter` map keyed by package |
 
 ## Development
