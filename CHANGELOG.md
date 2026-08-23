@@ -1,3 +1,10 @@
+## [8.9.0](https://github.com/greenroom-robotics/mise/compare/mise@8.8.1...mise@8.9.0) (2026-08-23)
+
+
+### Features
+
+* add exact pinning opt in ([#84](https://github.com/greenroom-robotics/mise/issues/84)) ([c3a04b6](https://github.com/greenroom-robotics/mise/commit/c3a04b67f94442e7560cddf62ae7e22ec547e13b))
+
 ## [8.8.1](https://github.com/greenroom-robotics/mise/compare/mise@8.8.0...mise@8.8.1) (2026-08-23)
 
 
