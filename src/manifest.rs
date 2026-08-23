@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
-use crate::types::{Arch, ChannelUrl, PackageName, Version};
+use crate::types::{Arch, ChannelUrl, PackageName, SiblingPinStyle, Version};
 
 /// The dependency tables a pixi package can declare, in scan order.
 ///
@@ -657,16 +657,16 @@ pub struct ResolvedDep {
     pub manifest: PathBuf,
 }
 
-/// Rewrite every non-self `path =` dep in the manifest to
-/// `">=<version>,<major+1>"`, reading the version from the sibling manifest at
-/// the same rev. The derived pin is deterministic: same rev -> same sibling
-/// manifest -> same pin. The range (rather than `==`) lets already-published
+/// Rewrite every non-self `path =` dep in the manifest to a version pin in
+/// `style`, reading the version from the sibling manifest at the same rev. The
+/// derived pin is deterministic: same rev -> same sibling manifest -> same
+/// pin. The default [`SiblingPinStyle::Range`] lets already-published
 /// consumers accept future sibling releases within the major without a
-/// re-release.
+/// re-release; [`SiblingPinStyle::Exact`] is the lockstep opt-in.
 ///
 /// This is only ever called by the farm (via `mise build-recipes`) on
 /// ephemeral temp checkouts; the committed manifest keeps its path deps.
-pub fn resolve_path_deps(manifest_path: &Path) -> Result<Vec<ResolvedDep>> {
+pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result<Vec<ResolvedDep>> {
     let manifest_dir = manifest_path.parent().unwrap_or(Path::new(""));
     let text = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
@@ -676,7 +676,7 @@ pub fn resolve_path_deps(manifest_path: &Path) -> Result<Vec<ResolvedDep>> {
 
     let mut resolved = Vec::new();
     for_each_dep_table_mut(&mut doc, &mut |table| {
-        rewrite_path_deps_in(table, manifest_dir, &mut resolved)
+        rewrite_path_deps_in(table, manifest_dir, style, &mut resolved)
     })?;
 
     std::fs::write(manifest_path, doc.to_string())?;
@@ -709,12 +709,13 @@ fn table_at_mut<'a>(
     }
 }
 
-/// Rewrite the sibling `path =` deps of one table to `">=<version>,<major+1>"`.
+/// Rewrite the sibling `path =` deps of one table to a `style` version pin.
 /// A free fn rather than a closure because the closure form fights the borrow
 /// checker across the `get_mut` walk.
 fn rewrite_path_deps_in(
     table: &mut dyn toml_edit::TableLike,
     manifest_dir: &Path,
+    style: SiblingPinStyle,
     resolved: &mut Vec<ResolvedDep>,
 ) -> Result<()> {
     let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
@@ -751,7 +752,7 @@ fn rewrite_path_deps_in(
             })?
             .version()
             .clone();
-        table.insert(&key, toml_edit::value(version.range_pin()));
+        table.insert(&key, toml_edit::value(style.pin(&version)));
         resolved.push(ResolvedDep {
             name: PackageName::new(key)?,
             version,

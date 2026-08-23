@@ -15,7 +15,7 @@ use anyhow::Context;
 use crate::consts::PIXI_TOML;
 use crate::manifest::{PackageManifest, ResolvedDep, prepend_channels, resolve_path_deps};
 use crate::process;
-use crate::types::{Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry};
+use crate::types::{Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry, SiblingPinStyle};
 
 use super::channel::ChannelIndex;
 use super::channel::publish_argv;
@@ -162,7 +162,9 @@ pub(super) fn build_local_dep(
     visiting.push(dep.name.clone());
     // Same read-before-rewrite ordering as the main build loop in `super::pixi`.
     let sibling_pins = resolve_sibling_pins(&dep.manifest, ctx.workdir, ctx.sibling_subdirs)?;
-    let mut nested = resolve_path_deps(&dep.manifest)?;
+    // Pin style is irrelevant here: local fallback artifacts satisfy this
+    // job's solve only and are never drained to a real channel.
+    let mut nested = resolve_path_deps(&dep.manifest, SiblingPinStyle::Range)?;
     nested.extend(sibling_pins);
     let mut built_any_nested = false;
     for n in &nested {

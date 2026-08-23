@@ -216,6 +216,7 @@ fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
             subdir: None,
             runner_size: *size,
             lfs: false,
+            pin_style: crate::types::SiblingPinStyle::Range,
         })
         .collect();
     PixiNativeManifest {

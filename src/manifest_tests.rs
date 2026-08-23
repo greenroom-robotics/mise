@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{Arch, ChannelUrl, PackageName, Version};
+use crate::types::{Arch, ChannelUrl, PackageName, SiblingPinStyle, Version};
 
 fn pn(s: &str) -> PackageName {
     PackageName::new(s).unwrap()
@@ -681,7 +681,7 @@ fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
         "node",
         "[package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n",
     );
-    let resolved = resolve_path_deps(&consumer).unwrap();
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].name, pn("lib"));
     assert_eq!(resolved[0].version, ver("2.5.0"));
@@ -711,7 +711,7 @@ fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
         "node",
         "[package.run-dependencies]\nros-kilted-lib = { path = \"../lib\" }\n",
     );
-    let resolved = resolve_path_deps(&consumer).unwrap();
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].name, pn("ros-kilted-lib"));
     assert_eq!(resolved[0].version, ver("2.5.0"));
@@ -741,7 +741,7 @@ fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
         "node",
         "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
     );
-    let err = resolve_path_deps(&consumer).unwrap_err();
+    let err = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("path dep lib"), "got: {msg}");
     assert!(msg.contains("missing field `version`"), "got: {msg}");
@@ -759,7 +759,7 @@ fn resolved_dep_version_stays_the_bare_floor() {
         "node",
         "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
     );
-    let resolved = resolve_path_deps(&consumer).unwrap();
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
     assert_eq!(resolved[0].version, ver("2.5.0"));
 }
 
@@ -768,4 +768,25 @@ fn range_pin_derives_major_cap() {
     assert_eq!(ver("2.5.0").range_pin(), ">=2.5.0,<3");
     assert_eq!(ver("1.24.0-alpha.2").range_pin(), ">=1.24.0-alpha.2,<2");
     assert_eq!(ver("0.3.1").range_pin(), ">=0.3.1,<1");
+}
+
+#[test]
+fn resolve_path_deps_exact_style_writes_lockstep_pins() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "lib", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Exact).unwrap();
+    assert_eq!(resolved[0].version, ver("2.5.0"));
+
+    let text = fs::read_to_string(&consumer).unwrap();
+    assert!(text.contains("lib = \"==2.5.0\""), "rewritten: {text}");
+    assert!(
+        text.contains("node = { path = \".\" }"),
+        "self idiom untouched: {text}"
+    );
 }
