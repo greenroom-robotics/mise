@@ -1,3 +1,10 @@
+## [8.8.1](https://github.com/greenroom-robotics/mise/compare/mise@8.8.0...mise@8.8.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* push bump-pixi as the app, not the shadowing workflow token ([#83](https://github.com/greenroom-robotics/mise/issues/83)) ([50f9cd9](https://github.com/greenroom-robotics/mise/commit/50f9cd9a4c9df719b0861bd164808b90edc4e32a))
+
 ## [8.8.0](https://github.com/greenroom-robotics/mise/compare/mise@8.7.1...mise@8.8.0) (2026-08-23)
 
 
