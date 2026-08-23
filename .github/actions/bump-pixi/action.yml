@@ -62,6 +62,11 @@ runs:
         BRANCH: ${{ inputs.branch }}
       run: |
         set -euo pipefail
+        # actions/checkout persists GITHUB_TOKEN in the remote's auth
+        # extraheader, and that Authorization header shadows the rewritten
+        # URL's App token. Drop it so the pushes below go out as the App —
+        # only the App has the branch-ruleset bypass.
+        git config --local --unset-all "http.https://github.com/.extraheader" || true
         pixi run --manifest-path "$MISE_MANIFEST" mise ci bump-pixi \
           --version="$VERSION" --pixi-toml="$PIXI_TOML"
         name="$(python3 -c 'import tomllib, os; print(tomllib.load(open(os.environ["PIXI_TOML"], "rb"))["package"]["name"])')"
