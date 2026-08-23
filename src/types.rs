@@ -282,6 +282,35 @@ impl Version {
     pub fn range_pin(&self) -> String {
         format!(">={self},<{}", self.major() + 1)
     }
+
+    /// The exact pin `==<self>`, for lockstep-coupled siblings.
+    pub fn exact_pin(&self) -> String {
+        format!("=={self}")
+    }
+}
+
+/// How the farm pins a rewritten sibling `path =` dep in the published
+/// artifact. Per consumer entry (`exact-pins:` in `pixi_native_packages.yaml`),
+/// never per dep: a consumer either rides sibling releases within the major or
+/// is version-locked to its siblings wholesale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SiblingPinStyle {
+    /// `>=<version>,<major+1>` — published consumers accept future sibling
+    /// releases within the major without a re-release.
+    #[default]
+    Range,
+    /// `==<version>` — lockstep coupling: the consumer only ever runs against
+    /// the sibling version it was built with.
+    Exact,
+}
+
+impl SiblingPinStyle {
+    pub fn pin(self, version: &Version) -> String {
+        match self {
+            Self::Range => version.range_pin(),
+            Self::Exact => version.exact_pin(),
+        }
+    }
 }
 
 /// Identity and ordering are the padded semver triple, never the source text:
@@ -658,6 +687,9 @@ pub struct PixiNativeEntry {
     /// `fetch_rev` leaves pointers in place, which is what a package with no
     /// LFS-tracked build inputs wants.
     pub lfs: bool,
+    /// How this entry's sibling `path =` deps are pinned in the published
+    /// artifact. `exact-pins: true` in the yaml opts into lockstep `==` pins.
+    pub pin_style: SiblingPinStyle,
 }
 
 impl PixiNativeEntry {
@@ -683,6 +715,8 @@ struct PixiNativeEntryRaw {
     runner_size: Option<RunnerSize>,
     #[serde(default)]
     lfs: bool,
+    #[serde(default, rename = "exact-pins")]
+    exact_pins: bool,
 }
 
 impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
@@ -708,6 +742,11 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
             subdir: raw.subdir,
             runner_size: raw.runner_size.unwrap_or_default(),
             lfs: raw.lfs,
+            pin_style: if raw.exact_pins {
+                SiblingPinStyle::Exact
+            } else {
+                SiblingPinStyle::Range
+            },
         })
     }
 }

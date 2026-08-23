@@ -138,6 +138,23 @@ packages:
 }
 
 #[test]
+fn entry_pin_style_defaults_to_range_and_parses_exact_pins() {
+    let yaml = r#"
+packages:
+  - name: plain
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+  - name: lockstep
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+    exact-pins: true
+"#;
+    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
+    assert_eq!(m.packages[0].pin_style, SiblingPinStyle::Range);
+    assert_eq!(m.packages[1].pin_style, SiblingPinStyle::Exact);
+}
+
+#[test]
 fn rebuild_epoch_defaults_to_zero() {
     let yaml = r#"
 packages:

@@ -1,7 +1,7 @@
 use super::*;
 use std::path::PathBuf;
 
-use crate::types::{GithubRepoUrl, RunnerSize, Sha40};
+use crate::types::{GithubRepoUrl, RunnerSize, Sha40, SiblingPinStyle};
 
 fn pkg(name: &str) -> PackageName {
     PackageName::new(name).unwrap()
@@ -15,6 +15,7 @@ fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
         subdir: Some(PathBuf::from(subdir)),
         runner_size: RunnerSize::default(),
         lfs: false,
+        pin_style: SiblingPinStyle::Range,
     }
 }
 

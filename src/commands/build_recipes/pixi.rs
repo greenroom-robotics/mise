@@ -358,7 +358,7 @@ pub(super) fn pixi(
         // Read committed `==` pins before resolve_path_deps rewrites path deps
         // into pins (else those freshly-written pins would be re-detected here).
         let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
-        let mut resolved = resolve_path_deps(&manifest_path)?;
+        let mut resolved = resolve_path_deps(&manifest_path, entry.pin_style)?;
         resolved.extend(sibling_pins);
         let mut extra_channels: Vec<ChannelUrl> = Vec::new();
         let mut local_built: BTreeSet<PackageName> = BTreeSet::new();
