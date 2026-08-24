@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 use crate::types::{
-    Arch, ChannelUrl, DeepstreamVersion, PackageName, RecipeName, RemoteChannel, RunnerSize,
+    Arch, ChannelUrl, DeepstreamVersion, PackageName, RecipeName, RemoteChannel, RunnerSpec,
 };
 
 mod channel;
@@ -62,9 +62,10 @@ pub enum BuildRecipes {
         output_dir: PathBuf,
         #[arg(long, default_value = "linux-64")]
         target_platform: Arch,
-        /// Optional filter: only build entries with this runner-size.
+        /// Optional filter: only build entries in this runner bucket, e.g.
+        /// `16cpu` or `16cpu-himem`.
         #[arg(long)]
-        runner_size: Option<RunnerSize>,
+        runner_size: Option<RunnerSpec>,
         /// Build only the listed package(s) by name. Empty = build all.
         #[arg(long = "only")]
         only: Vec<PackageName>,

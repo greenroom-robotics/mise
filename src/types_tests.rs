@@ -33,6 +33,23 @@ fn runner_size_serde() {
 }
 
 #[test]
+fn runner_spec_string_roundtrip() {
+    for s in ["4cpu", "16cpu", "16cpu-himem", "4cpu-himem"] {
+        let spec: RunnerSpec = s.parse().unwrap();
+        assert_eq!(spec.to_string(), s);
+    }
+    assert_eq!(
+        "16cpu-himem".parse::<RunnerSpec>().unwrap(),
+        RunnerSpec {
+            size: RunnerSize::Cpu16,
+            himem: true
+        }
+    );
+    assert!("himem".parse::<RunnerSpec>().is_err());
+    assert!("2cpu-himem".parse::<RunnerSpec>().is_err());
+}
+
+#[test]
 fn deepstream_version_ord_is_ascending() {
     assert!(DeepstreamVersion::V7_1 < DeepstreamVersion::V8_0);
 }

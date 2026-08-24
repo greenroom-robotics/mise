@@ -9,7 +9,7 @@ use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML, ROSDISTRO_RECIPES_YAML
 use crate::gh::{self, ChangedFiles};
 use crate::repo::{DeepstreamCfg, Repo};
 use crate::types::{
-    Arch, DeepstreamVersion, PackageName, PixiNativeEntry, PixiNativeManifest, RunnerSize,
+    Arch, DeepstreamVersion, PackageName, PixiNativeEntry, PixiNativeManifest, RunnerSpec,
 };
 
 const GLOBAL_VINCA: &[&str] = &[
@@ -37,6 +37,15 @@ fn ds_runner_family(arch: Arch) -> &'static str {
     match arch {
         Arch::Linux64 => "c6id.xlarge",
         Arch::LinuxAarch64 => "c7gd.xlarge",
+    }
+}
+
+/// m-family (4GB/cpu) override for himem buckets; the named runners default
+/// to the c-family's 2GB/cpu.
+fn himem_family(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Linux64 => "m7a+m7i",
+        Arch::LinuxAarch64 => "m8g+m7g",
     }
 }
 
@@ -139,8 +148,8 @@ enum Pipeline {
 enum RowKind {
     /// A plain vinca/rattler build of `recipes/`.
     Vinca,
-    /// A pixi-native build job, which handles every entry of one runner size.
-    PixiNative { runner: RunnerSize },
+    /// A pixi-native build job, which handles every entry of one runner spec.
+    PixiNative { runner: RunnerSpec },
     /// A vinca build of the DeepStream recipes against one DS version. The
     /// container image is a function of the version ([`ds_image_for`]) and so
     /// is derived rather than stored — the two cannot disagree.
@@ -185,12 +194,18 @@ impl MatrixRow {
         }
     }
 
-    fn pixi_native(arch: Arch, runner: RunnerSize, run_id: &str) -> Self {
+    fn pixi_native(arch: Arch, runner: RunnerSpec, run_id: &str) -> Self {
         let tag = ds_arch_tag(arch);
+        let size = runner.size;
+        let family = if runner.himem {
+            format!("/family={}", himem_family(arch))
+        } else {
+            String::new()
+        };
         Self {
             kind: RowKind::PixiNative { runner },
             target_platform: arch,
-            runner: format!("runs-on={run_id}/runner={runner}-linux-{tag}"),
+            runner: format!("runs-on={run_id}/runner={size}-linux-{tag}{family}"),
             artifact_name: format!("build-pixi-native-{arch}-{runner}"),
         }
     }
@@ -319,7 +334,7 @@ fn diff_changed_packages(
                 if b.url != e.url
                     || b.rev.as_str() != e.rev.as_str()
                     || b.subdir != e.subdir
-                    || b.runner_size != e.runner_size
+                    || b.runner_spec() != e.runner_spec()
                 {
                     changed.insert(e.name.clone());
                 }
@@ -441,15 +456,15 @@ fn build_matrix(plan: &MatrixPlan, manifest: &PixiNativeManifest, run_id: &str) 
         }
     }
 
-    // One job per distinct runner size, not per package: each job builds every
-    // entry of its size.
-    let pixi_sizes: BTreeSet<RunnerSize> = match &plan.pixi_native {
-        PixiScope::All => manifest.packages.iter().map(|e| e.runner_size).collect(),
+    // One job per distinct runner spec, not per package: each job builds every
+    // entry of its spec.
+    let pixi_sizes: BTreeSet<RunnerSpec> = match &plan.pixi_native {
+        PixiScope::All => manifest.packages.iter().map(|e| e.runner_spec()).collect(),
         PixiScope::Only(names) => manifest
             .packages
             .iter()
             .filter(|e| names.contains(&e.name))
-            .map(|e| e.runner_size)
+            .map(|e| e.runner_spec())
             .collect(),
         PixiScope::None => BTreeSet::new(),
     };

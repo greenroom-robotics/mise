@@ -18,7 +18,7 @@ use crate::manifest::{PackageManifest, prepend_channels, resolve_path_deps, set_
 use crate::process;
 use crate::repo::Repo;
 use crate::types::{
-    Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry, RemoteChannel, RunnerSize,
+    Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry, RemoteChannel, RunnerSpec,
     Version,
 };
 
@@ -155,12 +155,12 @@ fn check_entry(
 /// when `only` is non-empty, only those whose name is listed.
 fn select_entries<'a>(
     packages: &'a [PixiNativeEntry],
-    runner_size: Option<RunnerSize>,
+    runner_size: Option<RunnerSpec>,
     only: &[PackageName],
 ) -> Vec<&'a PixiNativeEntry> {
     packages
         .iter()
-        .filter(|e| runner_size.is_none_or(|s| e.runner_size == s))
+        .filter(|e| runner_size.is_none_or(|s| e.runner_spec() == s))
         .filter(|e| only.is_empty() || only.iter().any(|n| n == &e.name))
         .collect()
 }
@@ -170,7 +170,7 @@ pub(super) fn pixi(
     channel: RemoteChannel,
     output_dir: PathBuf,
     target_platform: Arch,
-    runner_size: Option<RunnerSize>,
+    runner_size: Option<RunnerSpec>,
     only: &[PackageName],
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
