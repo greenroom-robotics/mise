@@ -1,3 +1,10 @@
+## [8.10.0](https://github.com/greenroom-robotics/mise/compare/mise@8.9.0...mise@8.10.0) (2026-08-24)
+
+
+### Features
+
+* add himem opt-in for pixi-native runner buckets ([#85](https://github.com/greenroom-robotics/mise/issues/85)) ([75a3e00](https://github.com/greenroom-robotics/mise/commit/75a3e004dea2e4a5a45af431dbfe532659c2a3b5))
+
 ## [8.9.0](https://github.com/greenroom-robotics/mise/compare/mise@8.8.1...mise@8.9.0) (2026-08-23)
 
 
