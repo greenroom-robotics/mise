@@ -1,13 +1,11 @@
 //! `mise matrix compute` characterization: fixture event payloads + fixture
 //! repo trees, golden-asserting the full `$GITHUB_OUTPUT` contents.
 
-use crate::harness::{E2e, FixtureServer, assert_golden, write_file};
-use std::collections::BTreeMap;
+use crate::harness::{E2e, assert_golden, write_file};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// A synthetic head SHA for push events (never resolved — the publish-SHA
-/// rebase degrades before any git use of it).
+/// A SHA that exists in no fixture repo, for the unreachable-`before` path.
 const FAKE_SHA: &str = "1111111111111111111111111111111111111111";
 
 /// Lay down the fixture ros-recipes-like tree `matrix compute` reads:
@@ -54,17 +52,6 @@ struct MatrixRun {
 /// Run `matrix compute` against `root` with the given event, capturing the
 /// full `$GITHUB_OUTPUT` file.
 fn run_matrix(e2e: &E2e, root: &Path, event_name: &str, event_json: Option<&str>) -> MatrixRun {
-    run_matrix_with(e2e, root, event_name, event_json, &[])
-}
-
-/// As [`run_matrix`], plus extra environment variables.
-fn run_matrix_with(
-    e2e: &E2e,
-    root: &Path,
-    event_name: &str,
-    event_json: Option<&str>,
-    extra_env: &[(&str, &str)],
-) -> MatrixRun {
     let out_file = e2e.path().join("github_output");
     fs::write(&out_file, "").unwrap();
     let event_path = e2e.path().join("event.json");
@@ -80,9 +67,6 @@ fn run_matrix_with(
         .arg(root);
     if event_json.is_some() {
         cmd.env("GITHUB_EVENT_PATH", &event_path);
-    }
-    for (k, v) in extra_env {
-        cmd.env(k, v);
     }
     let assert = cmd.assert().success();
     let out = assert.get_output();
@@ -128,17 +112,23 @@ fn schedule_event_builds_everything() {
 }
 
 #[test]
-fn push_without_publish_lookup_env_degrades_to_full_rebuild() {
-    // Push events rebase `before` onto the last successful publish run, which
-    // needs GITHUB_REPOSITORY + a token. Without them the lookup fails and
-    // change detection degrades to a full rebuild — the event's own `before`
-    // SHA is discarded either way.
+fn push_diffs_its_own_before_after_range() {
+    // A push scopes change detection to its own `before..after` range: bumping
+    // alpha's rev builds alpha only.
     let e2e = E2e::new();
-    let root = matrix_repo(&e2e);
+    let (root, base, head) = pr_repo(&e2e, |root| {
+        let manifest = root.join("pixi_native_packages.yaml");
+        let text = fs::read_to_string(&manifest).unwrap().replace(
+            "2222222222222222222222222222222222222222",
+            "4444444444444444444444444444444444444444",
+        );
+        fs::write(&manifest, text).unwrap();
+    });
 
-    let event = format!(r#"{{"before":"{FAKE_SHA}","after":"{FAKE_SHA}"}}"#);
+    let event = format!(r#"{{"before":"{base}","after":"{head}"}}"#);
     let run = run_matrix(&e2e, &root, "push", Some(&event));
-    assert_golden(&run.output, "matrix/push_no_token.github_output.txt");
+    assert_golden(&run.output, "matrix/push_scoped.github_output.txt");
+    assert!(run.output.contains("pixi-only=alpha"), "{}", run.output);
 }
 
 #[test]
@@ -204,73 +194,19 @@ fn pr_comment_only_manifest_change_yields_no_pixi_work() {
 }
 
 #[test]
-fn push_rebases_change_detection_onto_the_last_successful_publish() {
-    // The success path of the publish-SHA lookup, reachable only through the
-    // MISE_GITHUB_API_URL seam. The event's own `before` is a dead SHA that
-    // git could not diff from; the API answer (the real base commit) is what
-    // change detection must use, scoping the run to the one entry that moved.
-    let e2e = E2e::new();
-    let (root, base, head) = pr_repo(&e2e, |root| {
-        let manifest = root.join("pixi_native_packages.yaml");
-        let text = fs::read_to_string(&manifest).unwrap().replace(
-            "2222222222222222222222222222222222222222",
-            "4444444444444444444444444444444444444444",
-        );
-        fs::write(&manifest, text).unwrap();
-    });
-
-    let api = FixtureServer::start(BTreeMap::from([(
-        "/repos/example/recipes/actions/workflows/publish.yml/runs".to_string(),
-        format!(r#"{{"workflow_runs":[{{"head_sha":"{base}"}}]}}"#),
-    )]));
-
-    let event = format!(r#"{{"before":"{FAKE_SHA}","after":"{head}"}}"#);
-    let run = run_matrix_with(
-        &e2e,
-        &root,
-        "push",
-        Some(&event),
-        &[
-            ("GITHUB_REPOSITORY", "example/recipes"),
-            ("GITHUB_TOKEN", "test-token"),
-            ("MISE_GITHUB_API_URL", api.base_url()),
-        ],
-    );
-
-    assert_golden(
-        &run.output,
-        "matrix/push_rebased_to_publish.github_output.txt",
-    );
-    assert!(run.output.contains("pixi-only=alpha"), "{}", run.output);
-}
-
-#[test]
-fn push_with_no_prior_publish_run_degrades_to_full_rebuild() {
-    // An empty `workflow_runs` list means the channel has never been
-    // published: there is no base to diff from, so everything rebuilds.
+fn push_with_unreachable_before_degrades_to_full_rebuild() {
+    // A `before` that no longer exists locally (force-push rewrote it away)
+    // cannot be diffed from, so everything rebuilds.
     let e2e = E2e::new();
     let (root, _base, head) = pr_repo(&e2e, |root| {
         write_file(root, "README.md", "docs only\n");
     });
 
-    let api = FixtureServer::start(BTreeMap::from([(
-        "/repos/example/recipes/actions/workflows/publish.yml/runs".to_string(),
-        r#"{"workflow_runs":[]}"#.to_string(),
-    )]));
-
     let event = format!(r#"{{"before":"{FAKE_SHA}","after":"{head}"}}"#);
-    let run = run_matrix_with(
-        &e2e,
-        &root,
-        "push",
-        Some(&event),
-        &[
-            ("GITHUB_REPOSITORY", "example/recipes"),
-            ("GITHUB_TOKEN", "test-token"),
-            ("MISE_GITHUB_API_URL", api.base_url()),
-        ],
+    let run = run_matrix(&e2e, &root, "push", Some(&event));
+    assert_golden(
+        &run.output,
+        "matrix/push_unreachable_before.github_output.txt",
     );
-
-    // Identical to the no-token degradation path: full rebuild.
-    assert_golden(&run.output, "matrix/push_no_token.github_output.txt");
+    assert!(run.output.contains("has-work=true"));
 }

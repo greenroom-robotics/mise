@@ -43,19 +43,6 @@ fn parses_push_event_rejects_short_zero_before() {
 }
 
 #[test]
-fn rebase_passes_through_non_push_events() {
-    let pr = Event::PullRequest {
-        base: Sha40::new("1111111111111111111111111111111111111111").unwrap(),
-        head: Sha40::new("2222222222222222222222222222222222222222").unwrap(),
-    };
-    assert_eq!(rebase_push_to_last_publish(pr.clone()).unwrap(), pr);
-    assert_eq!(
-        rebase_push_to_last_publish(Event::WorkflowDispatch).unwrap(),
-        Event::WorkflowDispatch
-    );
-}
-
-#[test]
 fn parses_workflow_dispatch() {
     assert_eq!(
         Event::from_str_with_kind("workflow_dispatch", "{}").unwrap(),
