@@ -232,12 +232,6 @@ fn base_url(var: &str, default: &str) -> String {
     raw.trim_end_matches('/').to_string()
 }
 
-/// Base URL for GitHub's REST API. `MISE_GITHUB_API_URL` overrides it so the
-/// e2e suite can point the publish-SHA lookup at a local fixture server.
-fn api_base() -> String {
-    base_url("MISE_GITHUB_API_URL", "https://api.github.com")
-}
-
 /// Base URL for raw file content. `MISE_GITHUB_RAW_URL` overrides it so the
 /// e2e suite can serve fixture manifests locally.
 fn raw_base() -> String {
@@ -281,67 +275,16 @@ pub fn fetch_raw_file(owner: &str, repo: &str, rev: &str, path: &str) -> anyhow:
     }
 }
 
-/// Workflow whose last green run marks how far the channel has been published.
-const PUBLISH_WORKFLOW: &str = "publish.yml";
-
-/// `head_sha` of the most recent **successful** publish run on `main`, or
-/// `None` if there has never been one. This — not the push's own `before` — is
-/// the correct base for change detection: `publish.yml` runs with
-/// `cancel-in-progress: false`, so a run that is superseded while queued never
-/// builds its range. Diffing from `before` would drop those changes
-/// permanently; diffing from the last green publish folds them into the next
-/// run. Querying for `status=success` cannot match the current run (still
-/// in-progress), so there is no self-exclusion to worry about.
-fn last_successful_publish_sha() -> anyhow::Result<Option<Sha40>> {
-    let repo = env::var("GITHUB_REPOSITORY").context("GITHUB_REPOSITORY must be set")?;
-    let token = token().context("a GitHub token must be set to query workflow runs")?;
-    let url = format!(
-        "{}/repos/{repo}/actions/workflows/{PUBLISH_WORKFLOW}/runs\
-         ?branch={DEFAULT_BRANCH}&status=success&per_page=1",
-        api_base()
-    );
-    let body: serde_json::Value = ureq::get(&url)
-        .set(
-            "Authorization",
-            &format!("Bearer {}", token.expose_secret()),
-        )
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", "ros-recipes-mise")
-        .call()
-        .context("query publish workflow runs")?
-        .into_json()
-        .context("parse workflow runs response")?;
-    let Some(sha) = body["workflow_runs"]
-        .get(0)
-        .and_then(|r| r["head_sha"].as_str())
-    else {
-        return Ok(None);
-    };
-    Ok(Some(Sha40::new(sha)?))
-}
-
-/// Replace a push event's `before` with the last green publish SHA so change
-/// detection diffs from the real channel high-water mark (see
-/// [`last_successful_publish_sha`]). `None` base — no prior success, or the API
-/// lookup failed — degrades to a full rebuild downstream, matching the existing
-/// "no base ref → build everything" fail-safe. Non-push events pass through.
-pub fn rebase_push_to_last_publish(event: Event) -> anyhow::Result<Event> {
-    let Event::Push { after, .. } = event else {
-        return Ok(event);
-    };
-    let before = match last_successful_publish_sha() {
-        Ok(sha) => sha,
-        Err(e) => {
-            tracing::warn!("could not resolve last successful publish run ({e:#}); rebuilding all");
-            None
-        }
-    };
-    Ok(Event::Push { before, after })
-}
-
 /// Paths the event touched, or [`ChangedFiles::All`] when it carries no base
-/// ref to diff against.
+/// ref to diff against — or a base that is not present locally (a force-push
+/// rewrote it away), where a full rebuild is the fail-safe.
 pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles> {
+    if let Some(base) = event.base_sha()
+        && !crate::git::rev_exists(repo.root(), base)?
+    {
+        tracing::warn!("base {base} not present locally; rebuilding all");
+        return Ok(ChangedFiles::All);
+    }
     match event.diff_range() {
         None => Ok(ChangedFiles::All),
         Some(range) => Ok(ChangedFiles::Paths(crate::git::changed_files(

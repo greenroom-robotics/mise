@@ -15,8 +15,7 @@
 //!   `file://` remotes.
 //!
 //! mise's in-process HTTP calls can't be shimmed on PATH, so they get a
-//! [`FixtureServer`] on 127.0.0.1 plus the `MISE_GITHUB_API_URL` /
-//! `MISE_GITHUB_RAW_URL` overrides. The git `http.proxy` setting above does
+//! [`FixtureServer`] on 127.0.0.1 plus the `MISE_GITHUB_RAW_URL` override. The git `http.proxy` setting above does
 //! not affect those — it is git config, not an environment proxy, and the
 //! cleared environment means `ureq` has no proxy configured either.
 //!
@@ -302,9 +301,9 @@ impl E2e {
 
 /// A throwaway HTTP server on 127.0.0.1 serving a fixed path → body map.
 ///
-/// mise reaches GitHub's REST API and raw-content host with in-process `ureq`
-/// calls, which no PATH shim can intercept. Pointing `MISE_GITHUB_API_URL` /
-/// `MISE_GITHUB_RAW_URL` at one of these is what makes those paths testable.
+/// mise reaches GitHub's raw-content host with in-process `ureq` calls, which
+/// no PATH shim can intercept. Pointing `MISE_GITHUB_RAW_URL` at one of these
+/// is what makes those paths testable.
 /// Written on `std::net` rather than a dev-dependency: the whole contract is
 /// "answer GET with a canned body".
 pub struct FixtureServer {
@@ -380,7 +379,7 @@ impl FixtureServer {
         }
     }
 
-    /// Value for `MISE_GITHUB_RAW_URL` / `MISE_GITHUB_API_URL`.
+    /// Value for `MISE_GITHUB_RAW_URL`.
     pub fn base_url(&self) -> &str {
         &self.base
     }
