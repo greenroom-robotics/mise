@@ -1,3 +1,10 @@
+## [8.11.0](https://github.com/greenroom-robotics/mise/compare/mise@8.10.0...mise@8.11.0) (2026-08-24)
+
+
+### Features
+
+* scope push change detection to the push's own range ([#86](https://github.com/greenroom-robotics/mise/issues/86)) ([0a34338](https://github.com/greenroom-robotics/mise/commit/0a343388e7d71e08b9d9c243ce993d2547d67138))
+
 ## [8.10.0](https://github.com/greenroom-robotics/mise/compare/mise@8.9.0...mise@8.10.0) (2026-08-24)
 
 
