@@ -47,6 +47,19 @@ pub enum RunnerSize {
     Cpu32,
 }
 
+/// A pixi-native build bucket: a runner size plus an optional high-memory
+/// flavor. Renders as `16cpu` / `16cpu-himem` — the string that rides the
+/// matrix `runner-size` field, artifact names, and `--runner-size`.
+///
+/// `himem` swaps the RunsOn instance family from the default c-family
+/// (2GB/cpu) to the m-family (4GB/cpu) for packages whose template-heavy
+/// builds OOM at the default ratio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RunnerSpec {
+    pub size: RunnerSize,
+    pub himem: bool,
+}
+
 impl fmt::Display for Arch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -683,6 +696,9 @@ pub struct PixiNativeEntry {
     pub rev: Sha40,
     pub subdir: Option<PathBuf>,
     pub runner_size: RunnerSize,
+    /// Run this entry's bucket on m-family (4GB/cpu) instances instead of the
+    /// default c-family (2GB/cpu). See [`RunnerSpec`].
+    pub himem: bool,
     /// Pull the entry's Git LFS objects after checkout. Off by default:
     /// `fetch_rev` leaves pointers in place, which is what a package with no
     /// LFS-tracked build inputs wants.
@@ -697,6 +713,14 @@ impl PixiNativeEntry {
     /// checkout root when it has none.
     pub fn subdir_or_root(&self) -> &Path {
         self.subdir.as_deref().unwrap_or(Path::new("."))
+    }
+
+    /// The build bucket this entry belongs to.
+    pub fn runner_spec(&self) -> RunnerSpec {
+        RunnerSpec {
+            size: self.runner_size,
+            himem: self.himem,
+        }
     }
 }
 
@@ -713,6 +737,8 @@ struct PixiNativeEntryRaw {
     subdir: Option<PathBuf>,
     #[serde(default, rename = "runner-size")]
     runner_size: Option<RunnerSize>,
+    #[serde(default)]
+    himem: bool,
     #[serde(default)]
     lfs: bool,
     #[serde(default, rename = "exact-pins")]
@@ -741,6 +767,7 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
             rev,
             subdir: raw.subdir,
             runner_size: raw.runner_size.unwrap_or_default(),
+            himem: raw.himem,
             lfs: raw.lfs,
             pin_style: if raw.exact_pins {
                 SiblingPinStyle::Exact
@@ -837,6 +864,30 @@ impl FromStr for RunnerSize {
                 "unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"
             ),
         }
+    }
+}
+
+impl fmt::Display for RunnerSpec {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.size)?;
+        if self.himem {
+            f.write_str("-himem")?;
+        }
+        Ok(())
+    }
+}
+
+impl FromStr for RunnerSpec {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (size, himem) = match s.strip_suffix("-himem") {
+            Some(base) => (base, true),
+            None => (s, false),
+        };
+        Ok(Self {
+            size: size.parse()?,
+            himem,
+        })
     }
 }
 

@@ -14,6 +14,7 @@ fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
         rev: Sha40::new("a".repeat(40)).unwrap(),
         subdir: Some(PathBuf::from(subdir)),
         runner_size: RunnerSize::default(),
+        himem: false,
         lfs: false,
         pin_style: SiblingPinStyle::Range,
     }

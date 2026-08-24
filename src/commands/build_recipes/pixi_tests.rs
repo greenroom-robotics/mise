@@ -31,14 +31,14 @@ packages:
     // --only alpha,beta + runner-size 4cpu → alpha only
     let sel = select_entries(
         &m.packages,
-        Some(crate::types::RunnerSize::Cpu4),
+        Some("4cpu".parse().unwrap()),
         &[pkg("alpha"), pkg("beta")],
     );
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha"]);
 
     // empty --only → size filter only (all 4cpu)
-    let sel = select_entries(&m.packages, Some(crate::types::RunnerSize::Cpu4), &[]);
+    let sel = select_entries(&m.packages, Some("4cpu".parse().unwrap()), &[]);
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "gamma"]);
 }

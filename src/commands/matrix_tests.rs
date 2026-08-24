@@ -1,12 +1,16 @@
 use super::*;
-use crate::types::PackageName;
+use crate::types::{PackageName, RunnerSize};
 
 fn pkg(s: &str) -> PackageName {
     PackageName::new(s).unwrap()
 }
 
-/// The runner size of a row that must be a pixi-native one.
-fn runner_size(row: &MatrixRow) -> RunnerSize {
+fn spec(size: RunnerSize) -> RunnerSpec {
+    RunnerSpec { size, himem: false }
+}
+
+/// The runner spec of a row that must be a pixi-native one.
+fn runner_size(row: &MatrixRow) -> RunnerSpec {
     match row.kind {
         RowKind::PixiNative { runner } => runner,
         ref other => panic!("expected a pixi-native row, got {other:?}"),
@@ -49,11 +53,28 @@ fn matrix_row_serializes_with_kebab_case_keys() {
 
 #[test]
 fn pixi_native_row_fills_runner_size_and_leaves_ds_empty() {
-    let row = MatrixRow::pixi_native(Arch::LinuxAarch64, RunnerSize::Cpu16, "7");
+    let row = MatrixRow::pixi_native(Arch::LinuxAarch64, spec(RunnerSize::Cpu16), "7");
     let json = serde_json::to_string(&row).unwrap();
     assert_eq!(
         json,
         r#"{"pipeline":"pixi-native","target-platform":"linux-aarch64","ds-version":"","ds-image":"","runner":"runs-on=7/runner=16cpu-linux-arm64","runner-size":"16cpu","artifact-name":"build-pixi-native-linux-aarch64-16cpu"}"#
+    );
+}
+
+#[test]
+fn pixi_native_himem_row_overrides_family_and_suffixes_names() {
+    let row = MatrixRow::pixi_native(
+        Arch::Linux64,
+        RunnerSpec {
+            size: RunnerSize::Cpu16,
+            himem: true,
+        },
+        "7",
+    );
+    let json = serde_json::to_string(&row).unwrap();
+    assert_eq!(
+        json,
+        r#"{"pipeline":"pixi-native","target-platform":"linux-64","ds-version":"","ds-image":"","runner":"runs-on=7/runner=16cpu-linux-x64/family=m7a+m7i","runner-size":"16cpu-himem","artifact-name":"build-pixi-native-linux-64-16cpu-himem"}"#
     );
 }
 
@@ -215,6 +236,7 @@ fn manifest_with_sizes(sizes: &[RunnerSize]) -> PixiNativeManifest {
             rev: sha.clone(),
             subdir: None,
             runner_size: *size,
+            himem: false,
             lfs: false,
             pin_style: crate::types::SiblingPinStyle::Range,
         })
@@ -256,10 +278,10 @@ fn build_matrix_pixi_native_groups_by_size() {
     let out = build_matrix(&plan, &manifest, "RUN");
     // Two unique sizes (4, 8) × 2 arches = 4 rows
     assert_eq!(out.len(), 4);
-    let mut sizes: Vec<RunnerSize> = out.iter().map(runner_size).collect();
+    let mut sizes: Vec<RunnerSpec> = out.iter().map(runner_size).collect();
     sizes.sort();
     sizes.dedup();
-    assert_eq!(sizes, vec![RunnerSize::Cpu4, RunnerSize::Cpu8]);
+    assert_eq!(sizes, vec![spec(RunnerSize::Cpu4), spec(RunnerSize::Cpu8)]);
 }
 
 #[test]
@@ -386,6 +408,27 @@ packages:
 }
 
 #[test]
+fn diff_detects_himem_change() {
+    let base = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+    runner-size: 16cpu
+"#;
+    let head = r#"
+packages:
+  - name: alpha
+    url: https://github.com/org/alpha
+    rev: 1111111111111111111111111111111111111111
+    runner-size: 16cpu
+    himem: true
+"#;
+    let changed = diff_changed_packages(Some(base), head).unwrap();
+    assert_eq!(changed, ["alpha"].into_iter().map(pkg).collect());
+}
+
+#[test]
 fn diff_none_base_means_all_head_packages() {
     let head = r#"
 packages:
@@ -433,5 +476,5 @@ fn build_matrix_only_prunes_to_changed_sizes() {
     let out = build_matrix(&plan, &manifest, "RUN");
     // pkg0 is 4cpu only → 1 size × 2 arches = 2 rows, no 16cpu row.
     assert_eq!(out.len(), 2);
-    assert!(out.iter().all(|e| runner_size(e) == RunnerSize::Cpu4));
+    assert!(out.iter().all(|e| runner_size(e) == spec(RunnerSize::Cpu4)));
 }
