@@ -29,6 +29,12 @@ pub struct Test {
     /// (conda-forge style) — useful when a lock predates a backend change.
     #[arg(long = "no-locked", action = clap::ArgAction::SetFalse, default_value_t = true)]
     pub locked: bool,
+    /// Skip running the job's task; still install the pixi environment
+    /// (respecting `--locked`) to verify the lock is satisfiable and the
+    /// package builds. For workspaces with no tests to run (e.g. a
+    /// docker-build variant) that still want lock/build verification in CI.
+    #[arg(long)]
+    pub build_only: bool,
 }
 
 /// A single `<env>:<task>` unit of work run against a package.
@@ -88,14 +94,16 @@ impl Test {
     fn run_job(&self, pkg: &Package, job: &Job) -> anyhow::Result<Option<String>> {
         let pkg_dir = &pkg.dir;
         println!(
-            "==> mise ci test :: {} [{}:{}]",
+            "==> mise ci test :: {} [{}:{}]{}",
             pkg_dir.display(),
             job.env,
-            job.task
+            job.task,
+            if self.build_only { " (build-only)" } else { "" }
         );
         // Lockfile satisfaction is strict by default; --no-locked opts out and
         // re-resolves from the manifest instead.
-        let mut argv: Vec<&OsStr> = vec![OsStr::new("run")];
+        let mut argv: Vec<&OsStr> =
+            vec![OsStr::new(if self.build_only { "install" } else { "run" })];
         if self.locked {
             argv.push(OsStr::new("--locked"));
         }
@@ -104,8 +112,12 @@ impl Test {
             pkg.manifest_path.as_os_str(),
             OsStr::new("-e"),
             OsStr::new(&job.env),
-            OsStr::new(&job.task),
         ]);
+        // `pixi install` only sets up the environment; the task is what
+        // `--build-only` skips running.
+        if !self.build_only {
+            argv.push(OsStr::new(&job.task));
+        }
         let code = crate::process::status_code("pixi", &argv)?;
         // Collect reports after each job, namespaced by env, so variants that
         // share the same colcon `build/` (e.g. standalone vs Boost Asio) don't

@@ -43,7 +43,7 @@ on:
         type: string
         default: ""
       package-dir:
-        description: Directory containing per-package pixi workspaces.
+        description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`. Packages are discovered and unioned across every dir given; a package name found under more than one dir is an error.'
         required: false
         type: string
         default: packages
@@ -62,6 +62,11 @@ on:
         required: false
         type: boolean
         default: true
+      build-only:
+        description: Skip running tests; still verify the lock (per `locked`) and that each package's pixi environment installs/builds. For workspaces with no tests (e.g. a docker-build variant) that still want lock/build verification in CI.
+        required: false
+        type: boolean
+        default: false
       changed-only:
         description: On pull_request, test only packages whose files changed (push/dispatch always test all).
         required: false
@@ -141,6 +146,27 @@ jobs:
           filters: ${{ steps.all.outputs.map }}
           list-files: none
 
+      # `package-dir` can list more than one dir (whitespace-separated); build
+      # the exclude-list dynamically so a change under ANY of them is still
+      # attributed to a package, not treated as "outside".
+      - id: outside-filters
+        if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          PACKAGE_DIR: ${{ inputs.package-dir }}
+        run: |
+          set -euo pipefail
+          {
+            echo "filters<<__EOF__"
+            echo "other:"
+            echo "  - '**'"
+            echo "  - '!docs/**'"
+            for dir in $PACKAGE_DIR; do
+              echo "  - '!$dir/**'"
+            done
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       # A change outside package-dir and docs/ — a workflow, a root config, a shared
       # test fixture — can affect any package, and there is no reliable way to
       # attribute it to one. Run everything instead of silently testing nothing.
@@ -155,16 +181,13 @@ jobs:
         with:
           predicate-quantifier: every
           list-files: none
-          filters: |
-            other:
-              - '**'
-              - '!${{ inputs.package-dir }}/**'
-              - '!docs/**'
+          filters: ${{ steps.outside-filters.outputs.filters }}
 
       - id: assemble
         shell: bash
         env:
           ALL: ${{ steps.all.outputs.all }}
+          DIRS: ${{ steps.all.outputs.dirs }}
           CHANGED: ${{ steps.filter.outputs.changes }}
           FILTER_RAN: ${{ steps.filter.outcome }}
           OUTSIDE: ${{ steps.outside.outputs.other }}
@@ -184,6 +207,11 @@ jobs:
           fi
           # Drop excluded packages from the whole run.
           packages=$(jq -cn --argjson p "$packages" --argjson x "$EXCLUDE_PACKAGES" '$p - $x')
+          # Pair each package name with the package-dir it was discovered
+          # under (package-dir can list more than one dir) so the test matrix
+          # below can address each package's manifest directly.
+          packages=$(jq -cn --argjson names "$packages" --argjson dirs "$DIRS" \
+            '[$names[] | {name: ., dir: $dirs[.]}]')
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "Packages: $packages"
 
@@ -208,12 +236,12 @@ jobs:
       # actually use. `lfs: true` on checkout would drag the repo's ENTIRE LFS
       # store onto every matrix leg, including legs whose package has no LFS
       # files at all. Fixtures shared across packages go in `lfs-include`.
-      - name: Fetch LFS objects for ${{ matrix.package }}
+      - name: Fetch LFS objects for ${{ matrix.package.name }}
         if: inputs.lfs
         shell: bash
         env:
-          PACKAGE: ${{ matrix.package }}
-          PACKAGE_DIR: ${{ inputs.package-dir }}
+          PACKAGE: ${{ matrix.package.name }}
+          PACKAGE_DIR: ${{ matrix.package.dir }}
           EXTRA: ${{ inputs.lfs-include }}
           IGNORE_CONFIG_EXCLUDE: ${{ inputs.lfs-ignore-config-exclude }}
         run: |
@@ -245,12 +273,13 @@ jobs:
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-subscription-id: ${{ secrets.azure-subscription-id }}
-          package: ${{ matrix.package }}
-          package-dir: ${{ inputs.package-dir }}
+          package: ${{ matrix.package.name }}
+          package-dir: ${{ matrix.package.dir }}
           report-dir: ${{ inputs.report-dir }}
-          check-name: 'Test Report (pixi): ${{ matrix.package }}'
+          check-name: 'Test Report (pixi): ${{ matrix.package.name }}'
           jobs: ${{ inputs.jobs }}
           locked: ${{ inputs.locked }}
+          build-only: ${{ inputs.build-only }}
 
   # Single stable status to require in branch protection. Matrix legs have
   # per-package names that can't be required directly; this collapses them into

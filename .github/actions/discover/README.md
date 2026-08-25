@@ -13,11 +13,20 @@ doesn't publish (e.g. a package built from a hand-authored recipe in
 ros-recipes) — so it has no matrix leg and nothing to release. `mise ci`'s own
 discovery skips it the same way.
 
+`package-dir` accepts one or more directories, whitespace-separated (space or
+newline both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`.
+Packages are unioned across every dir given; a name found under more than one
+dir is an error. A path-dep (`path = "../sibling"`) is only followed within
+the dir the package itself was found in — it never crosses dirs.
+
 `all` is a compact JSON array of package dir-names. `map` is a
 `dorny/paths-filter` YAML map where each package's filter is its own dir glob
 plus the dir globs of every sibling it TRANSITIVELY path-depends on (via
 `path = "../sibling"` in its `pixi.toml`), so a change to a leaf retriggers
-every consumer whose committed `pixi.lock` transitively pins it.
+every consumer whose committed `pixi.lock` transitively pins it. `dirs` is a
+compact JSON object mapping each package name to the single package-dir it
+was found under — useful for a caller (like `ci-test.yml`'s test matrix) that
+needs to address one package's manifest without re-running discovery.
 
 Requires a full-history checkout beforehand (`fetch-depth: 0`) when the
 caller's workflow diffs against a base ref (e.g. `paths-filter` on a PR).
