@@ -172,6 +172,23 @@ packages:
 }
 
 #[test]
+fn entry_submodules_defaults_to_false_and_parses_when_set() {
+    let yaml = r#"
+packages:
+  - name: plain
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+  - name: with_submodules
+    url: https://github.com/example/repo.git
+    rev: 4110a9a40736b555c7419119ef6c607951563745
+    submodules: true
+"#;
+    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
+    assert!(!m.packages[0].submodules);
+    assert!(m.packages[1].submodules);
+}
+
+#[test]
 fn rebuild_epoch_defaults_to_zero() {
     let yaml = r#"
 packages:

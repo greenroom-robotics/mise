@@ -51,10 +51,13 @@ fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
     .with_context(|| format!("entry {}", entry.name))
 }
 
-/// Materialize one commit of an entry's repo in `dest`, pulling the LFS
-/// objects under its subdir when the entry opts in.
+/// Materialize one commit of an entry's repo in `dest`, initing submodules
+/// and pulling the LFS objects under its subdir when the entry opts in.
 fn fetch_at_rev(entry: &PixiNativeEntry, dest: &Path) -> anyhow::Result<()> {
     git::fetch_rev(dest, &entry.url.https_url(), &entry.rev)?;
+    if entry.submodules {
+        git::submodule_update(dest)?;
+    }
     if entry.lfs {
         let include = match &entry.subdir {
             Some(s) => format!("{}/**", s.display()),

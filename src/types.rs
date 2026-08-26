@@ -703,6 +703,10 @@ pub struct PixiNativeEntry {
     /// `fetch_rev` leaves pointers in place, which is what a package with no
     /// LFS-tracked build inputs wants.
     pub lfs: bool,
+    /// Init the repo's git submodules after checkout. Off by default:
+    /// `fetch_rev` leaves submodule dirs empty, which is what a package with
+    /// no submodule-sourced build inputs wants.
+    pub submodules: bool,
     /// How this entry's sibling `path =` deps are pinned in the published
     /// artifact. `exact-pins: true` in the yaml opts into lockstep `==` pins.
     pub pin_style: SiblingPinStyle,
@@ -741,6 +745,8 @@ struct PixiNativeEntryRaw {
     himem: bool,
     #[serde(default)]
     lfs: bool,
+    #[serde(default)]
+    submodules: bool,
     #[serde(default, rename = "exact-pins")]
     exact_pins: bool,
 }
@@ -769,6 +775,7 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
             runner_size: raw.runner_size.unwrap_or_default(),
             himem: raw.himem,
             lfs: raw.lfs,
+            submodules: raw.submodules,
             pin_style: if raw.exact_pins {
                 SiblingPinStyle::Exact
             } else {
