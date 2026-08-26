@@ -1,3 +1,10 @@
+## [8.12.0](https://github.com/greenroom-robotics/mise/compare/mise@8.11.0...mise@8.12.0) (2026-08-26)
+
+
+### Features
+
+* only spawn deepstream runners for files that affect DS builds ([#87](https://github.com/greenroom-robotics/mise/issues/87)) ([59f352a](https://github.com/greenroom-robotics/mise/commit/59f352ab4d8402c9a5afbc316c202a58456489ab))
+
 ## [8.11.0](https://github.com/greenroom-robotics/mise/compare/mise@8.10.0...mise@8.11.0) (2026-08-24)
 
 
