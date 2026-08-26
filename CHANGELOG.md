@@ -1,3 +1,10 @@
+## [8.15.1](https://github.com/greenroom-robotics/mise/compare/mise@8.15.0...mise@8.15.1) (2026-08-26)
+
+
+### Bug Fixes
+
+* use global git config for ci-test submodule auth ([#92](https://github.com/greenroom-robotics/mise/issues/92)) ([8777111](https://github.com/greenroom-robotics/mise/commit/8777111c501adbc26749f5de0d2d2e4f2a194324))
+
 ## [8.15.0](https://github.com/greenroom-robotics/mise/compare/mise@8.14.0...mise@8.15.0) (2026-08-26)
 
 
