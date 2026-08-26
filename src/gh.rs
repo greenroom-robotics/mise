@@ -219,6 +219,11 @@ pub fn ensure_git_auth() -> anyhow::Result<()> {
             t.expose_secret()
         );
         process::git(&["config", "--global", &key, "https://github.com/"])?;
+        // Also claim the SSH remote form, for `.gitmodules` entries that pin
+        // submodules by `git@github.com:` URL. It must map straight to the
+        // token URL: git applies insteadOf rewrites once (no chaining), so an
+        // ssh→https rewrite would NOT then pick up the rule above.
+        process::git(&["config", "--global", "--add", &key, "git@github.com:"])?;
     }
     Ok(())
 }

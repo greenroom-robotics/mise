@@ -16,6 +16,7 @@ fn test_entry(name: &str, subdir: &str) -> PixiNativeEntry {
         runner_size: RunnerSize::default(),
         himem: false,
         lfs: false,
+        submodules: false,
         pin_style: SiblingPinStyle::Range,
     }
 }

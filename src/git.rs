@@ -43,6 +43,21 @@ pub fn fetch_rev(dest: &Path, url: &str, rev: &Sha40) -> anyhow::Result<()> {
     process::run_in(dest, "git", &["checkout", "--quiet", "FETCH_HEAD"])
 }
 
+/// Init and check out the repo's git submodules, recursively, in an existing
+/// checkout.
+///
+/// Relies on the `insteadOf` rules `gh::ensure_git_auth` installs: they cover
+/// both the https and `git@github.com:` remote forms, so private submodules
+/// pinned by SSH URL in `.gitmodules` fetch with the same token. `--depth=1`
+/// works for arbitrary pinned SHAs on GitHub (it allows direct SHA fetches).
+pub fn submodule_update(dest: &Path) -> anyhow::Result<()> {
+    process::run_in(
+        dest,
+        "git",
+        &["submodule", "update", "--init", "--recursive", "--depth=1"],
+    )
+}
+
 /// Pull the LFS objects under `include` into an existing checkout.
 ///
 /// `--exclude=` is unconditional here, unlike the CI-test LFS pull where a

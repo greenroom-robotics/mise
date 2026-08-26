@@ -77,6 +77,11 @@ on:
         required: false
         type: boolean
         default: false
+      submodules:
+        description: 'Init the repo''s git submodules (recursively) on each test leg, authenticated with the GH App token so private org submodules work regardless of the URL form in .gitmodules. For repos whose packages build from submodule-sourced inputs (e.g. a path dep into a vendored proto contract).'
+        required: false
+        type: boolean
+        default: false
       lfs:
         description: Fetch Git LFS objects for the package under test (for repos with LFS test fixtures). Scoped to the package's own directory — a leg testing a package with no LFS files downloads nothing. A repo .lfsconfig `fetchexclude` still applies unless `lfs-ignore-config-exclude` is set.
         required: false
@@ -237,6 +242,32 @@ jobs:
         package: ${{ fromJSON(needs.discover.outputs.packages) }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # checkout's own `submodules:` input authenticates with GITHUB_TOKEN,
+      # which is scoped to the calling repo — a private org submodule 404s.
+      # Mint the GH App installation token (org-wide) and fetch them ourselves.
+      - name: Generate GitHub App token
+        if: inputs.submodules
+        id: submodule-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.gh-app-client-id }}
+          private-key: ${{ secrets.gh-app-private-key }}
+          owner: ${{ github.repository_owner }}
+      - name: Fetch submodules
+        if: inputs.submodules
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.submodule-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Map both remote forms straight to the token URL — git applies
+          # insteadOf once (no chaining), so ssh→https would miss a second rule.
+          key="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          git config "$key" "https://github.com/"
+          git config --add "$key" "git@github.com:"
+          git submodule update --init --recursive --depth=1
+          git config --unset-all "$key"
 
       # Checkout leaves LFS pointers alone; pull only the objects this leg can
       # actually use. `lfs: true` on checkout would drag the repo's ENTIRE LFS
