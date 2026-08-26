@@ -48,6 +48,10 @@ inputs:
     description: Require the committed pixi.lock to satisfy the manifest and fail on drift. On by default; set to "false" to re-resolve from the manifest instead (conda-forge style), which passes `--no-locked` to `mise ci test`.
     required: false
     default: "true"
+  build-only:
+    description: Skip running each job's task; still install the pixi environment (respecting `locked`) to verify the lock is satisfiable and the package builds. Passes `--build-only` to `mise ci test`. For workspaces with no tests (e.g. a docker-build variant) that still want lock/build verification.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -69,6 +73,9 @@ runs:
         fi
         if [ "${{ inputs.locked }}" = "false" ]; then
           args+=(--no-locked)
+        fi
+        if [ "${{ inputs.build-only }}" = "true" ]; then
+          args+=(--build-only)
         fi
         # Each non-empty line of `jobs` becomes a --job <env>:<task>.
         while IFS= read -r job; do
