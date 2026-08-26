@@ -143,13 +143,14 @@ fn pr_touching_only_docs_yields_no_work() {
 }
 
 #[test]
-fn pr_touching_vinca_yaml_triggers_vinca_and_deepstream() {
+fn pr_touching_vinca_yaml_triggers_vinca_only() {
     let e2e = E2e::new();
     let (root, base, head) = pr_repo(&e2e, |root| {
         write_file(root, "vinca.yaml", "packages: []\n");
     });
     let run = run_matrix(&e2e, &root, "pull_request", Some(&pr_event(&base, &head)));
     assert_golden(&run.output, "matrix/pr_vinca_global.github_output.txt");
+    assert!(!run.output.contains("build-deepstream"), "{}", run.output);
 }
 
 #[test]

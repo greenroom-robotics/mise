@@ -118,10 +118,30 @@ fn classify_all_means_everything() {
 }
 
 #[test]
-fn classify_global_vinca_triggers_vinca_and_ds() {
+fn classify_global_vinca_triggers_vinca_only() {
     let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
-    let s = classify(&paths(&["vinca.yaml"]), &ds);
+    for f in ["vinca.yaml", "rosdistro_snapshot.yaml"] {
+        let s = classify(&paths(&[f]), &ds);
+        assert!(s.vinca);
+        assert_eq!(s.pixi_native, RawScope::None);
+        assert!(s.ds_versions.is_empty(), "{f} must not spawn DS runners");
+    }
+}
+
+#[test]
+fn classify_conda_build_config_triggers_vinca_and_ds() {
+    let ds = cfg(&["foo"], &[DeepstreamVersion::V7_1]);
+    let s = classify(&paths(&["conda_build_config.yaml"]), &ds);
     assert!(s.vinca);
+    assert_eq!(s.pixi_native, RawScope::None);
+    assert!(s.ds_versions.contains(&DeepstreamVersion::V7_1));
+}
+
+#[test]
+fn classify_docker_compose_triggers_only_ds() {
+    let ds = cfg(&[], &[DeepstreamVersion::V7_1]);
+    let s = classify(&paths(&["docker-compose.yml"]), &ds);
+    assert!(!s.vinca);
     assert_eq!(s.pixi_native, RawScope::None);
     assert!(s.ds_versions.contains(&DeepstreamVersion::V7_1));
 }

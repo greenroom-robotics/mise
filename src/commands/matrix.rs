@@ -12,13 +12,21 @@ use crate::types::{
     Arch, DeepstreamVersion, PackageName, PixiNativeEntry, PixiNativeManifest, RunnerSpec,
 };
 
+/// Vinca-only: these shape the vinca-generated `recipes/`, which the DS build
+/// deletes (it keeps only `vendor_recipes/` DS recipes), so they cannot change
+/// a DS build's output.
 const GLOBAL_VINCA: &[&str] = &[
     "vinca.yaml",
-    "conda_build_config.yaml",
     "robostack.yaml",
     "packages-ignore.yaml",
     "rosdistro_snapshot.yaml",
 ];
+
+/// Vinca + DeepStream: variant pins feed both pipelines' build hashes.
+const GLOBAL_VINCA_DS: &[&str] = &["conda_build_config.yaml"];
+
+/// DeepStream-only: the DS container entry point.
+const DEEPSTREAM_ONLY: &[&str] = &["docker-compose.yml", "variants/deepstream.yaml"];
 
 const GLOBAL_BOTH: &[&str] = &[PIXI_TOML, "pixi.lock"];
 
@@ -396,6 +404,14 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
 
         if GLOBAL_VINCA.contains(&p) {
             state.vinca = true;
+            continue;
+        }
+        if GLOBAL_VINCA_DS.contains(&p) {
+            state.vinca = true;
+            state.ds_versions.extend(ds.versions.iter().copied());
+            continue;
+        }
+        if DEEPSTREAM_ONLY.contains(&p) {
             state.ds_versions.extend(ds.versions.iter().copied());
             continue;
         }
@@ -411,10 +427,6 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
         }
         if p == ".github/deepstream-recipes.yaml" {
             state.vinca = true;
-            state.ds_versions.extend(ds.versions.iter().copied());
-            continue;
-        }
-        if p == "variants/deepstream.yaml" {
             state.ds_versions.extend(ds.versions.iter().copied());
             continue;
         }
