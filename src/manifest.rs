@@ -547,6 +547,80 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
     Ok(out)
 }
 
+/// A pixi manifest `mise ci test` can run pixi commands against — either a
+/// releasable [`Package`] or a workspace-only manifest with no `[package]`
+/// table (e.g. a docker-build variant workspace that has no publishable
+/// package but still has pixi environments/tasks to install and test).
+/// Running tests never reads package identity, only the manifest path and
+/// the directory pixi commands run in.
+#[derive(Debug)]
+pub struct TestTarget {
+    pub manifest_path: PathBuf,
+    pub dir: PathBuf,
+}
+
+impl TestTarget {
+    fn new(manifest_path: &Path) -> Self {
+        Self {
+            manifest_path: manifest_path.to_path_buf(),
+            dir: manifest_path
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_path_buf(),
+        }
+    }
+}
+
+/// Discover pixi manifests to test under `package_dir` — like [`discover`],
+/// but also includes workspace-only manifests alongside releasable packages,
+/// since `mise ci test` runs `pixi install`/`pixi run` against any pixi
+/// manifest and has no use for package identity. Same root-package-layout
+/// fallback and filter semantics as [`discover`] otherwise.
+pub fn discover_test_targets(
+    package_dir: &Path,
+    filter: Option<&PackageName>,
+) -> Result<Vec<TestTarget>> {
+    let root_pixi = package_dir.join(PIXI_TOML);
+
+    if let Some(name) = filter {
+        let pixi = package_dir.join(name.as_str()).join(PIXI_TOML);
+        if pixi.exists() {
+            Manifest::read(&pixi)?; // fail loudly here, not inside pixi
+            return Ok(vec![TestTarget::new(&pixi)]);
+        }
+        // Root-package layout fallback: package_dir itself is the manifest
+        // (e.g. a single-package repo run with `--package-dir .`).
+        if root_pixi.exists()
+            && let Manifest::Package(m) = Manifest::read(&root_pixi)?
+            && m.identity().name == *name
+        {
+            return Ok(vec![TestTarget::new(&root_pixi)]);
+        }
+        anyhow::bail!("package {name} not found at {}", pixi.display());
+    }
+
+    if root_pixi.exists() && Manifest::read(&root_pixi).is_ok() {
+        return Ok(vec![TestTarget::new(&root_pixi)]);
+    }
+
+    let mut out = Vec::new();
+    let entries = std::fs::read_dir(package_dir)
+        .with_context(|| format!("reading {}", package_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let pixi = entry.path().join(PIXI_TOML);
+        if !pixi.exists() {
+            continue;
+        }
+        match Manifest::read(&pixi) {
+            Ok(_) => out.push(TestTarget::new(&pixi)),
+            Err(error) => tracing::warn!("skipping {}: {error:#}", pixi.display()),
+        }
+    }
+    out.sort_by(|a, b| a.manifest_path.cmp(&b.manifest_path));
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Edit view (format-preserving)
 // ---------------------------------------------------------------------------

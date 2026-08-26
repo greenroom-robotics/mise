@@ -11,6 +11,10 @@ inputs:
     description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`. Packages are unioned across every dir; a package name found under more than one dir is an error.'
     required: false
     default: packages
+  include-workspaces:
+    description: 'Also discover workspace-only manifests (`[workspace]`, no `[package]`) that have a committed pixi.lock, alongside regular packages — e.g. a docker-build variant workspace with no publishable package but still pixi environments/tasks to test. A workspace''s discovered name is its dir basename (same convention as a package). Off by default.'
+    required: false
+    default: "false"
 
 outputs:
   all:
@@ -31,4 +35,5 @@ runs:
       env:
         PACKAGE: ${{ inputs.package }}
         PACKAGE_DIR: ${{ inputs.package-dir }}
+        INCLUDE_WORKSPACES: ${{ inputs.include-workspaces }}
       run: python3 "$GITHUB_ACTION_PATH/discover_packages.py"

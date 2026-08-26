@@ -7,11 +7,25 @@ checkout, so it ships its own script (`discover_packages.py`, resolved via
 path — reusable-workflow steps execute in the caller's checkout, not this
 repo's, and a path into this repo would 404 for every external caller.
 
-A subdir whose `pixi.toml` has no `[package]` table is skipped: that's a
-workspace-only manifest — a dev/test environment for something this repo
-doesn't publish (e.g. a package built from a hand-authored recipe in
+A subdir whose `pixi.toml` has no `[package]` table is skipped by default:
+that's a workspace-only manifest — a dev/test environment for something this
+repo doesn't publish (e.g. a package built from a hand-authored recipe in
 ros-recipes) — so it has no matrix leg and nothing to release. `mise ci`'s own
 discovery skips it the same way.
+
+Set `include-workspaces: true` to discover those workspace-only manifests too
+(alongside regular packages), as long as they have a committed `pixi.lock` —
+e.g. gama's docker-build variant workspaces, which have no publishable
+package but still have pixi environments/tasks `mise ci test` can install and
+run (paired with `ci-test.yml`'s `build-only` input when there's nothing to
+test, only a lock/build to verify). A workspace's discovered name is its dir
+basename, the same convention a package uses, so it round-trips through
+`<package-dir>/<name>/pixi.toml` either way. A workspace's path deps
+(`[dependencies]` / `[feature.*.dependencies]`) are resolved generically,
+unlike a package's flat single-level sibling convention — they may point
+anywhere in the repo, not just siblings within the same `package-dir` (e.g.
+gama's `gama_bringup = { path = "../../gama_vessel/src/gama_bringup" }`), and
+the `map` fanout for that workspace covers those resolved dirs too.
 
 `package-dir` accepts one or more directories, whitespace-separated (space or
 newline both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`.
