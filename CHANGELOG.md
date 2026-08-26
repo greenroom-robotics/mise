@@ -1,3 +1,10 @@
+## [8.17.0](https://github.com/greenroom-robotics/mise/compare/mise@8.16.0...mise@8.17.0) (2026-08-26)
+
+
+### Features
+
+* multi-package support for bump-pixi ([#95](https://github.com/greenroom-robotics/mise/issues/95)) ([2e623d4](https://github.com/greenroom-robotics/mise/commit/2e623d473afa0affff5e29e0d0f47d18e20da47d))
+
 ## [8.16.0](https://github.com/greenroom-robotics/mise/compare/mise@8.15.1...mise@8.16.0) (2026-08-26)
 
 
