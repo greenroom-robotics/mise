@@ -67,6 +67,11 @@ on:
         required: false
         type: boolean
         default: false
+      include-workspaces:
+        description: 'Also discover workspace-only manifests (`[workspace]`, no `[package]`) under package-dir that have a committed pixi.lock, alongside regular packages — e.g. a docker-build variant workspace with no publishable package but still pixi environments/tasks to test. A workspace gets its own matrix leg exactly like a package (a workspace''s dir basename is its discovered name); pair with `build-only` when it has nothing to test, only a lock/build to verify. Off by default.'
+        required: false
+        type: boolean
+        default: false
       changed-only:
         description: On pull_request, test only packages whose files changed (push/dispatch always test all).
         required: false
@@ -138,6 +143,7 @@ jobs:
         with:
           package: ${{ inputs.package }}
           package-dir: ${{ inputs.package-dir }}
+          include-workspaces: ${{ inputs.include-workspaces }}
 
       - id: filter
         if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}

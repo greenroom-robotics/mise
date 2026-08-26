@@ -486,6 +486,74 @@ fn discover_skips_directories_without_pixi_toml() {
 }
 
 // ---------------------------------------------------------------------------
+// discover_test_targets — unlike discover(), includes workspace-only
+// manifests, since `mise ci test` runs pixi against any pixi manifest.
+// ---------------------------------------------------------------------------
+
+fn test_target_paths(targets: &[TestTarget]) -> Vec<PathBuf> {
+    targets.iter().map(|t| t.manifest_path.clone()).collect()
+}
+
+#[test]
+fn discover_test_targets_includes_workspace_only_manifests() {
+    let tmp = TempDir::new().unwrap();
+    make_pkg(tmp.path(), "alpha");
+    make_workspace_only(tmp.path(), "gama_vessel_variant");
+    let result = test_target_paths(&discover_test_targets(tmp.path(), None).unwrap());
+    assert_eq!(result.len(), 2);
+    assert!(result.iter().any(|p| p.ends_with("alpha/pixi.toml")));
+    assert!(
+        result
+            .iter()
+            .any(|p| p.ends_with("gama_vessel_variant/pixi.toml"))
+    );
+}
+
+#[test]
+fn discover_test_targets_filter_returns_workspace_only_manifest() {
+    let tmp = TempDir::new().unwrap();
+    make_workspace_only(tmp.path(), "gama_vessel_variant");
+    let result = discover_test_targets(tmp.path(), Some(&pn("gama_vessel_variant"))).unwrap();
+    assert_eq!(result.len(), 1);
+    assert!(
+        result[0]
+            .manifest_path
+            .ends_with("gama_vessel_variant/pixi.toml")
+    );
+    assert_eq!(result[0].dir, tmp.path().join("gama_vessel_variant"));
+}
+
+#[test]
+fn discover_test_targets_filter_unknown_name_errors() {
+    let tmp = TempDir::new().unwrap();
+    make_workspace_only(tmp.path(), "gama_vessel_variant");
+    let err = discover_test_targets(tmp.path(), Some(&pn("ghost"))).unwrap_err();
+    assert!(err.to_string().contains("ghost"));
+}
+
+#[test]
+fn discover_test_targets_filter_still_reports_a_malformed_manifest() {
+    let tmp = TempDir::new().unwrap();
+    let pkg = tmp.path().join("broken");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("pixi.toml"), "[workspace\nname = ").unwrap();
+    let err = discover_test_targets(tmp.path(), Some(&pn("broken"))).unwrap_err();
+    assert!(format!("{err:#}").contains("parsing"));
+}
+
+#[test]
+fn discover_test_targets_skips_broken_manifest_without_filter() {
+    let tmp = TempDir::new().unwrap();
+    make_workspace_only(tmp.path(), "ok");
+    let pkg = tmp.path().join("broken");
+    fs::create_dir_all(&pkg).unwrap();
+    fs::write(pkg.join("pixi.toml"), "[workspace\nname = ").unwrap();
+    let result = test_target_paths(&discover_test_targets(tmp.path(), None).unwrap());
+    assert_eq!(result.len(), 1);
+    assert!(result[0].ends_with("ok/pixi.toml"));
+}
+
+// ---------------------------------------------------------------------------
 // Edit view
 // ---------------------------------------------------------------------------
 

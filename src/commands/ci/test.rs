@@ -1,4 +1,4 @@
-use crate::manifest::Package;
+use crate::manifest::TestTarget;
 use anyhow::Context;
 use clap::Args;
 use std::ffi::OsStr;
@@ -70,7 +70,8 @@ fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
 impl Test {
     pub fn run(self) -> anyhow::Result<()> {
         let jobs = parse_jobs(&self.jobs)?;
-        let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
+        let pkgs =
+            crate::manifest::discover_test_targets(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
@@ -91,7 +92,7 @@ impl Test {
     /// the test result, not an error, so a failing job (including one killed by
     /// a signal, which ROS tests do manage) is reported alongside the others by
     /// the caller rather than abandoning the remaining packages.
-    fn run_job(&self, pkg: &Package, job: &Job) -> anyhow::Result<Option<String>> {
+    fn run_job(&self, pkg: &TestTarget, job: &Job) -> anyhow::Result<Option<String>> {
         let pkg_dir = &pkg.dir;
         println!(
             "==> mise ci test :: {} [{}:{}]{}",
