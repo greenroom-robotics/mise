@@ -103,7 +103,7 @@ on:
         type: boolean
         default: false
       timeout-minutes:
-        description: Per-package test job timeout. Bounds a hung test (e.g. a DDS teardown deadlock that no per-test timeout can catch) instead of inheriting GitHub's 360-minute default. Matrix mode only — the sequential job is bounded by `sequential-timeout-minutes` for the whole run.
+        description: Test job timeout. Bounds a hung test (e.g. a DDS teardown deadlock that no per-test timeout can catch) instead of inheriting GitHub's 360-minute default. Bounds one matrix leg (per package) — or, with `sequential`, the WHOLE sequential run, so raise it accordingly when enabling that mode.
         required: false
         type: number
         default: 60
@@ -112,11 +112,6 @@ on:
         required: false
         type: boolean
         default: false
-      sequential-timeout-minutes:
-        description: Whole-run timeout for the sequential job. GitHub expressions can't multiply `timeout-minutes` by the package count, so the sequential run gets its own explicit bound instead.
-        required: false
-        type: number
-        default: 180
       host-setup:
         description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
         required: false
@@ -344,7 +339,7 @@ jobs:
     needs: discover
     if: ${{ inputs.sequential && needs.discover.outputs.packages != '[]' }}
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: ${{ inputs.sequential-timeout-minutes }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
       contents: read
       id-token: write      # Azure OIDC login in setup
@@ -386,9 +381,14 @@ jobs:
           IGNORE_CONFIG_EXCLUDE: ${{ inputs.lfs-ignore-config-exclude }}
         run: |
           set -euo pipefail
-          include=$(jq -rn --argjson p "$PACKAGES" \
-            '[$p[] | (if .dir != "" then .dir + "/" else "" end) + .name + "/**"] | join(",")')
-          if [ -n "$EXTRA" ]; then include="$include,$EXTRA"; fi
+          include=$(python3 - <<'EOF'
+          import json, os
+          globs = [(f"{p['dir']}/" if p["dir"] else "") + f"{p['name']}/**"
+                   for p in json.loads(os.environ["PACKAGES"])]
+          extra = os.environ["EXTRA"]
+          print(",".join(globs + ([extra] if extra else [])))
+          EOF
+          )
           # See the matrix leg for why --exclude="" is opt-in only.
           if [ "$IGNORE_CONFIG_EXCLUDE" = "true" ]; then
             echo "git lfs pull --include=$include --exclude="
@@ -424,53 +424,45 @@ jobs:
           LOCKED: ${{ inputs.locked }}
           BUILD_ONLY: ${{ inputs.build-only }}
         run: |
-          set -euo pipefail
-          common=(--report-dir "$REPORT_DIR")
-          if [ "$LOCKED" = "false" ]; then
-            common+=(--no-locked)
-          fi
-          if [ "$BUILD_ONLY" = "true" ]; then
-            common+=(--build-only)
-          fi
-          while IFS= read -r job; do
-            [ -n "$job" ] && common+=(--job "$job")
-          done <<< "$JOBS"
+          python3 - <<'EOF'
+          import json, os, subprocess, sys, time
 
-          rows=()
-          failures=()
-          while IFS=$'\t' read -r name dir; do
-            echo "::group::mise ci test: $name"
-            start=$(date +%s)
-            set +e
-            pixi run --manifest-path "$MISE_MANIFEST" mise ci test \
-              --package "$name" --package-dir "$dir" "${common[@]}"
-            rc=$?
-            set -e
-            elapsed=$(( $(date +%s) - start ))
-            duration=$(printf '%dm%02ds' $((elapsed / 60)) $((elapsed % 60)))
-            if [ "$rc" -eq 0 ]; then
-              result=pass
-            else
-              result=fail
-              failures+=("$name")
-            fi
-            rows+=("| $name | $result | $duration |")
-            echo "::endgroup::"
-            echo "$name: $result ($duration)"
-          done < <(jq -rn --argjson p "$PACKAGES" '$p[] | [.name, .dir] | @tsv')
+          common = ["--report-dir", os.environ["REPORT_DIR"]]
+          if os.environ["LOCKED"] == "false":
+              common.append("--no-locked")
+          if os.environ["BUILD_ONLY"] == "true":
+              common.append("--build-only")
+          for job in filter(None, os.environ["JOBS"].splitlines()):
+              common += ["--job", job]
 
-          {
-            echo "## mise ci test (sequential)"
-            echo ""
-            echo "| package | result | duration |"
-            echo "| --- | --- | --- |"
-            printf '%s\n' "${rows[@]}"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          rows, failures = [], []
+          for pkg in json.loads(os.environ["PACKAGES"]):
+              print(f"::group::mise ci test: {pkg['name']}", flush=True)
+              start = time.monotonic()
+              rc = subprocess.run(
+                  ["pixi", "run", "--manifest-path", os.environ["MISE_MANIFEST"],
+                   "mise", "ci", "test",
+                   "--package", pkg["name"], "--package-dir", pkg["dir"], *common]
+              ).returncode
+              elapsed = int(time.monotonic() - start)
+              result = "pass" if rc == 0 else "fail"
+              if rc != 0:
+                  failures.append(pkg["name"])
+              duration = f"{elapsed // 60}m{elapsed % 60:02d}s"
+              rows.append(f"| {pkg['name']} | {result} | {duration} |")
+              print("::endgroup::", flush=True)
+              print(f"{pkg['name']}: {result} ({duration})", flush=True)
 
-          if [ "${#failures[@]}" -gt 0 ]; then
-            echo "::error::failed packages: ${failures[*]}"
-            exit 1
-          fi
+          table = "\n".join(["## mise ci test (sequential)", "",
+                             "| package | result | duration |",
+                             "| --- | --- | --- |", *rows])
+          print(table)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(table + "\n")
+          if failures:
+              print(f"::error::failed packages: {' '.join(failures)}")
+              sys.exit(1)
+          EOF
 
       # Report handling mirrors the actions/test composite; reports are
       # namespaced per package under report-dir, so one shared dir is safe.
