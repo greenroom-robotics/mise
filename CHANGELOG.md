@@ -1,3 +1,10 @@
+## [8.15.0](https://github.com/greenroom-robotics/mise/compare/mise@8.14.0...mise@8.15.0) (2026-08-26)
+
+
+### Features
+
+* submodule support for pixi-native builds and ci-test ([#91](https://github.com/greenroom-robotics/mise/issues/91)) ([d93b8a9](https://github.com/greenroom-robotics/mise/commit/d93b8a995a8e8700400b4aee8e41cb44b4bdbf15))
+
 ## [8.14.0](https://github.com/greenroom-robotics/mise/compare/mise@8.13.0...mise@8.14.0) (2026-08-26)
 
 
