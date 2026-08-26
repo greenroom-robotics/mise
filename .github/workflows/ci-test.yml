@@ -6,6 +6,10 @@
 # Single-package repos don't need this; they keep using the actions/test
 # composite directly. This wrapper just discovers packages → matrix → composite.
 #
+# `sequential: true` flips the trade: all selected packages run in order on ONE
+# runner — setup once, rattler cache shared across packages — with a
+# per-package pass/fail summary at the end instead of fail-fast.
+#
 # Usage (in a consumer repo's .github/workflows/test.yml):
 #
 #   jobs:
@@ -15,6 +19,7 @@
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
 #         changed-only: true        # PRs test only changed packages
+#         sequential: true          # one runner for all packages, shared cache
 #         jobs: |
 #           default:test
 #       secrets:
@@ -98,10 +103,20 @@ on:
         type: boolean
         default: false
       timeout-minutes:
-        description: Per-package test job timeout. Bounds a hung test (e.g. a DDS teardown deadlock that no per-test timeout can catch) instead of inheriting GitHub's 360-minute default.
+        description: Per-package test job timeout. Bounds a hung test (e.g. a DDS teardown deadlock that no per-test timeout can catch) instead of inheriting GitHub's 360-minute default. Matrix mode only — the sequential job is bounded by `sequential-timeout-minutes` for the whole run.
         required: false
         type: number
         default: 60
+      sequential:
+        description: Run every selected package sequentially on a single runner instead of one matrix leg per package. Setup happens once and the rattler cache is shared across packages, at the cost of no parallelism. Failures don't stop the run — a per-package summary is written at the end.
+        required: false
+        type: boolean
+        default: false
+      sequential-timeout-minutes:
+        description: Whole-run timeout for the sequential job. GitHub expressions can't multiply `timeout-minutes` by the package count, so the sequential run gets its own explicit bound instead.
+        required: false
+        type: number
+        default: 180
       host-setup:
         description: 'Optional bash run on the host runner before each package test (e.g. load a kernel module, bring up a vcan interface, add udev rules). Runs once per matrix leg since each leg is a fresh runner. Empty default is a no-op.'
         required: false
@@ -229,7 +244,7 @@ jobs:
   # Run each package's tests on `runner`.
   test:
     needs: discover
-    if: needs.discover.outputs.packages != '[]'
+    if: ${{ !inputs.sequential && needs.discover.outputs.packages != '[]' }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
     permissions:
@@ -320,12 +335,180 @@ jobs:
           locked: ${{ inputs.locked }}
           build-only: ${{ inputs.build-only }}
 
+  # Sequential counterpart to `test`: one runner, packages in order. Setup runs
+  # once (App token, Azure OIDC, pixi, mise) and the rattler cache carries from
+  # package to package — the win over the matrix for wide fanouts whose legs
+  # each repeat an expensive setup. Not fail-fast: every package runs, then a
+  # per-package summary decides the job result.
+  test_sequential:
+    needs: discover
+    if: ${{ inputs.sequential && needs.discover.outputs.packages != '[]' }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.sequential-timeout-minutes }}
+    permissions:
+      contents: read
+      id-token: write      # Azure OIDC login in setup
+      checks: write        # dorny/test-reporter publishes the combined check
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Same App-token submodule fetch as the matrix leg — checkout's own
+      # `submodules:` uses GITHUB_TOKEN, which 404s on private org submodules.
+      - name: Generate GitHub App token
+        if: inputs.submodules
+        id: submodule-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.gh-app-client-id }}
+          private-key: ${{ secrets.gh-app-private-key }}
+          owner: ${{ github.repository_owner }}
+      - name: Fetch submodules
+        if: inputs.submodules
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.submodule-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          key="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          git config --global "$key" "https://github.com/"
+          git config --global --add "$key" "git@github.com:"
+          git submodule update --init --recursive --depth=1
+          git config --global --unset-all "$key"
+
+      # One pull covering every selected package's dir (the matrix scopes this
+      # per leg); `lfs-include` extras ride along as usual.
+      - name: Fetch LFS objects for all selected packages
+        if: inputs.lfs
+        shell: bash
+        env:
+          PACKAGES: ${{ needs.discover.outputs.packages }}
+          EXTRA: ${{ inputs.lfs-include }}
+          IGNORE_CONFIG_EXCLUDE: ${{ inputs.lfs-ignore-config-exclude }}
+        run: |
+          set -euo pipefail
+          include=$(jq -rn --argjson p "$PACKAGES" \
+            '[$p[] | (if .dir != "" then .dir + "/" else "" end) + .name + "/**"] | join(",")')
+          if [ -n "$EXTRA" ]; then include="$include,$EXTRA"; fi
+          # See the matrix leg for why --exclude="" is opt-in only.
+          if [ "$IGNORE_CONFIG_EXCLUDE" = "true" ]; then
+            echo "git lfs pull --include=$include --exclude="
+            git lfs pull --include="$include" --exclude=""
+          else
+            echo "git lfs pull --include=$include"
+            git lfs pull --include="$include"
+          fi
+
+      - name: Host setup
+        if: inputs.host-setup != ''
+        shell: bash
+        run: ${{ inputs.host-setup }}
+
+      - uses: greenroom-robotics/mise/.github/actions/setup@v8
+        with:
+          gh-app-client-id: ${{ secrets.gh-app-client-id }}
+          gh-app-private-key: ${{ secrets.gh-app-private-key }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-subscription-id: ${{ secrets.azure-subscription-id }}
+
+      # Same invocation the actions/test composite assembles, once per package
+      # instead of once per runner. `mise ci test` could sweep a whole
+      # package-dir itself, but per-package invocations keep the pass/fail and
+      # duration attribution the summary needs.
+      - name: Run mise ci test per package
+        shell: bash
+        env:
+          PACKAGES: ${{ needs.discover.outputs.packages }}
+          REPORT_DIR: ${{ inputs.report-dir }}
+          JOBS: ${{ inputs.jobs }}
+          LOCKED: ${{ inputs.locked }}
+          BUILD_ONLY: ${{ inputs.build-only }}
+        run: |
+          set -euo pipefail
+          common=(--report-dir "$REPORT_DIR")
+          if [ "$LOCKED" = "false" ]; then
+            common+=(--no-locked)
+          fi
+          if [ "$BUILD_ONLY" = "true" ]; then
+            common+=(--build-only)
+          fi
+          while IFS= read -r job; do
+            [ -n "$job" ] && common+=(--job "$job")
+          done <<< "$JOBS"
+
+          rows=()
+          failures=()
+          while IFS=$'\t' read -r name dir; do
+            echo "::group::mise ci test: $name"
+            start=$(date +%s)
+            set +e
+            pixi run --manifest-path "$MISE_MANIFEST" mise ci test \
+              --package "$name" --package-dir "$dir" "${common[@]}"
+            rc=$?
+            set -e
+            elapsed=$(( $(date +%s) - start ))
+            duration=$(printf '%dm%02ds' $((elapsed / 60)) $((elapsed % 60)))
+            if [ "$rc" -eq 0 ]; then
+              result=pass
+            else
+              result=fail
+              failures+=("$name")
+            fi
+            rows+=("| $name | $result | $duration |")
+            echo "::endgroup::"
+            echo "$name: $result ($duration)"
+          done < <(jq -rn --argjson p "$PACKAGES" '$p[] | [.name, .dir] | @tsv')
+
+          {
+            echo "## mise ci test (sequential)"
+            echo ""
+            echo "| package | result | duration |"
+            echo "| --- | --- | --- |"
+            printf '%s\n' "${rows[@]}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          if [ "${#failures[@]}" -gt 0 ]; then
+            echo "::error::failed packages: ${failures[*]}"
+            exit 1
+          fi
+
+      # Report handling mirrors the actions/test composite; reports are
+      # namespaced per package under report-dir, so one shared dir is safe.
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pixi-test-reports
+          path: ${{ inputs.report-dir }}
+          if-no-files-found: ignore
+
+      - name: Check for test reports
+        id: reports
+        if: always()
+        shell: bash
+        run: |
+          if [ -d "${{ inputs.report-dir }}" ] && [ -n "$(find "${{ inputs.report-dir }}" -name '*.xml' -print -quit)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No JUnit XML under ${{ inputs.report-dir }}; skipping report publish."
+          fi
+
+      - name: Publish test report
+        if: always() && steps.reports.outputs.found == 'true'
+        uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 #v3
+        with:
+          name: Test Report (pixi)
+          path: ${{ inputs.report-dir }}/**/*.xml
+          reporter: java-junit
+          fail-on-error: false
+
   # Single stable status to require in branch protection. Matrix legs have
   # per-package names that can't be required directly; this collapses them into
   # one check that is green only when discovery succeeded and every leg passed.
   # An empty change set (PR touched no package) is a pass, not a failure.
   result:
-    needs: [discover, test]
+    needs: [discover, test, test_sequential]
     if: always()
     runs-on: ${{ inputs.runner }}
     permissions:
@@ -334,16 +517,20 @@ jobs:
       - shell: bash
         env:
           TEST: ${{ needs.test.result }}
+          TEST_SEQUENTIAL: ${{ needs.test_sequential.result }}
         run: |
-          echo "discover=${{ needs.discover.result }} test=$TEST packages=${{ needs.discover.outputs.packages }}"
+          echo "discover=${{ needs.discover.result }} test=$TEST test_sequential=$TEST_SEQUENTIAL packages=${{ needs.discover.outputs.packages }}"
           if [ "${{ needs.discover.result }}" != "success" ]; then
             echo "::error::package discovery failed"; exit 1
           fi
           if [ "${{ needs.discover.outputs.packages }}" = "[]" ]; then
             echo "no packages to test — nothing changed"; exit 0
           fi
-          # The test job is 'skipped' when the package set is empty — only an
+          # Exactly one of the two test jobs runs (per `sequential`); the other
+          # is 'skipped', as both are when the package set is empty — only an
           # actual failure should fail the gate.
-          if [ "$TEST" != "success" ] && [ "$TEST" != "skipped" ]; then
-            echo "::error::one or more package test jobs did not pass"; exit 1
-          fi
+          for r in "$TEST" "$TEST_SEQUENTIAL"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::one or more package test jobs did not pass"; exit 1
+            fi
+          done
