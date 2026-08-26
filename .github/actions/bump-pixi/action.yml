@@ -1,21 +1,26 @@
-name: Bump a pixi.toml and tag the release
+name: Bump pixi.toml(s) and tag the release
 description: >-
-  Release a package at an externally-chosen version: write it into the
-  package's pixi.toml via `mise ci bump-pixi`, commit, tag `<pkg>@<version>`
-  at the bump commit and push both. For versions owned by something other
-  than the package's own commits (e.g. a product image release) — the farm
-  builds from pixi.toml at the tagged rev, so tagging without the bump would
-  republish the old version. Pair with the recipes-pr action, which discovers
-  the tag and opens the recipe PR. Requires a checkout of the branch to bump
-  with enough history to commit (fetch-depth 0 is simplest).
+  Release one or more packages at an externally-chosen version: write it into
+  each package's pixi.toml via `mise ci bump-pixi`, make one commit containing
+  every bump, tag `<pkg>@<version>` per package at that commit and push all of
+  it. For versions owned by something other than the packages' own commits
+  (e.g. a product image release) — the farm builds from pixi.toml at the
+  tagged rev, so tagging without the bump would republish the old version.
+  Pair with the recipes-pr action, which discovers the tags and opens the
+  recipe PR. Requires a checkout of the branch to bump with enough history to
+  commit (fetch-depth 0 is simplest).
 author: Greenroom Robotics
 
 inputs:
   version:
-    description: Version to release, no leading 'v'.
+    description: Version to release, no leading 'v'. All packages get this version.
     required: true
   pixi-toml:
-    description: Repo-relative path to the package's pixi.toml.
+    description: >-
+      Repo-relative path(s) to each package's pixi.toml,
+      whitespace/newline-separated. One path bumps, commits and tags a single
+      package; several paths are bumped in one commit with one tag per
+      package.
     required: true
   branch:
     description: Branch the bump commit is pushed to. Must be checked out.
@@ -39,7 +44,9 @@ inputs:
 
 outputs:
   tag:
-    description: The `<pkg>@<version>` tag that was created and pushed.
+    description: >-
+      The `<pkg>@<version>` tag(s) created and pushed, space-separated, in
+      pixi-toml input order.
     value: ${{ steps.bump.outputs.tag }}
 
 runs:
@@ -67,13 +74,28 @@ runs:
         # URL's App token. Drop it so the pushes below go out as the App —
         # only the App has the branch-ruleset bypass.
         git config --local --unset-all "http.https://github.com/.extraheader" || true
+        manifests=($PIXI_TOML)
+        # bump-pixi validates every path before writing any file, so a bad
+        # path aborts with the working tree untouched.
         pixi run --manifest-path "$MISE_MANIFEST" mise ci bump-pixi \
-          --version="$VERSION" --pixi-toml="$PIXI_TOML"
-        name="$(python3 -c 'import tomllib, os; print(tomllib.load(open(os.environ["PIXI_TOML"], "rb"))["package"]["name"])')"
-        tag="${name}@${VERSION}"
-        git commit -am "chore(release): ${name} ${VERSION} [skip ci]"
+          --version="$VERSION" --pixi-toml "${manifests[@]}"
+        names=()
+        tags=()
+        for manifest in "${manifests[@]}"; do
+          name="$(python3 -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' "$manifest")"
+          names+=("$name")
+          tags+=("${name}@${VERSION}")
+        done
+        if [ "${#names[@]}" -eq 1 ]; then
+          git commit -am "chore(release): ${names[0]} ${VERSION} [skip ci]"
+        else
+          git commit -am "chore(release): ${#names[@]} packages ${VERSION} [skip ci]" \
+            -m "$(printf '%s\n' "${tags[@]}")"
+        fi
         # -f/--force so a job re-run after a partial release doesn't die here
-        git tag -f "$tag"
+        for tag in "${tags[@]}"; do
+          git tag -f "$tag"
+        done
         git push origin "HEAD:${BRANCH}"
-        git push -f origin "$tag"
-        echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+        git push -f origin "${tags[@]}"
+        echo "tag=${tags[*]}" >> "$GITHUB_OUTPUT"
