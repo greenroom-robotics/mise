@@ -1,3 +1,10 @@
+## [8.13.0](https://github.com/greenroom-robotics/mise/compare/mise@8.12.0...mise@8.13.0) (2026-08-26)
+
+
+### Features
+
+* build-only mode and multiple package-dirs for ci-test ([#88](https://github.com/greenroom-robotics/mise/issues/88)) ([8d0cad9](https://github.com/greenroom-robotics/mise/commit/8d0cad937b6ae8ab2bd83a34a2afe72cb66b2d8c))
+
 ## [8.12.0](https://github.com/greenroom-robotics/mise/compare/mise@8.11.0...mise@8.12.0) (2026-08-26)
 
 
