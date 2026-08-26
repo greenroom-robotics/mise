@@ -1,3 +1,10 @@
+## [8.14.0](https://github.com/greenroom-robotics/mise/compare/mise@8.13.0...mise@8.14.0) (2026-08-26)
+
+
+### Features
+
+* workspace discovery for ci-test ([#89](https://github.com/greenroom-robotics/mise/issues/89)) ([52f723c](https://github.com/greenroom-robotics/mise/commit/52f723cfe3aca68c2ace748930b2537c27c61568))
+
 ## [8.13.0](https://github.com/greenroom-robotics/mise/compare/mise@8.12.0...mise@8.13.0) (2026-08-26)
 
 
