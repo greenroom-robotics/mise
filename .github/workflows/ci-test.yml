@@ -256,7 +256,8 @@ jobs:
       # checkout's own `submodules:` input authenticates with GITHUB_TOKEN,
       # which is scoped to the calling repo — a private org submodule 404s.
       # Mint the GH App installation token (org-wide) and fetch them ourselves.
-      - name: Generate GitHub App token
+      - &generate-submodule-token
+        name: Generate GitHub App token
         if: inputs.submodules
         id: submodule-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -264,7 +265,8 @@ jobs:
           client-id: ${{ secrets.gh-app-client-id }}
           private-key: ${{ secrets.gh-app-private-key }}
           owner: ${{ github.repository_owner }}
-      - name: Fetch submodules
+      - &fetch-submodules
+        name: Fetch submodules
         if: inputs.submodules
         shell: bash
         env:
@@ -311,7 +313,8 @@ jobs:
             git lfs pull --include="$include"
           fi
 
-      - name: Host setup
+      - &host-setup
+        name: Host setup
         if: inputs.host-setup != ''
         shell: bash
         run: ${{ inputs.host-setup }}
@@ -347,28 +350,8 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      # Same App-token submodule fetch as the matrix leg — checkout's own
-      # `submodules:` uses GITHUB_TOKEN, which 404s on private org submodules.
-      - name: Generate GitHub App token
-        if: inputs.submodules
-        id: submodule-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.gh-app-client-id }}
-          private-key: ${{ secrets.gh-app-private-key }}
-          owner: ${{ github.repository_owner }}
-      - name: Fetch submodules
-        if: inputs.submodules
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.submodule-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          key="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
-          git config --global "$key" "https://github.com/"
-          git config --global --add "$key" "git@github.com:"
-          git submodule update --init --recursive --depth=1
-          git config --global --unset-all "$key"
+      - *generate-submodule-token
+      - *fetch-submodules
 
       # One pull covering every selected package's dir (the matrix scopes this
       # per leg); `lfs-include` extras ride along as usual.
@@ -398,10 +381,7 @@ jobs:
             git lfs pull --include="$include"
           fi
 
-      - name: Host setup
-        if: inputs.host-setup != ''
-        shell: bash
-        run: ${{ inputs.host-setup }}
+      - *host-setup
 
       - uses: greenroom-robotics/mise/.github/actions/setup@v8
         with:
