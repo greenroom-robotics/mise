@@ -16,7 +16,7 @@ jobs:
       # eof on the runners; without this a single blip fails the whole job.
       CARGO_NET_RETRY: "5"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           # tests/internal_action_refs.rs needs the release tags and the commits
           # since the latest one to know which major is about to ship.
@@ -25,7 +25,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable --component rustfmt,clippy --profile minimal
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format check
         run: cargo fmt --all --check
@@ -37,7 +37,9 @@ jobs:
         run: cargo build --all-targets --locked
 
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        with:
+          tool: nextest
 
       - name: Test
         # nextest runs each test in its own process, isolating tests that
