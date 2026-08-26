@@ -37,7 +37,7 @@ runs:
   steps:
     - name: Generate GitHub App token
       id: app-token
-      uses: actions/create-github-app-token@v3
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
       with:
         client-id: ${{ inputs.gh-app-client-id }}
         private-key: ${{ inputs.gh-app-private-key }}
@@ -70,7 +70,7 @@ runs:
         } >> "$GITHUB_ENV"
 
     - name: Azure login (OIDC)
-      uses: azure/login@v3
+      uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
       with:
         client-id: ${{ inputs.azure-client-id }}
         tenant-id: ${{ inputs.azure-tenant-id }}

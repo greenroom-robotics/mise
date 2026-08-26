@@ -125,7 +125,7 @@ jobs:
     outputs:
       packages: ${{ steps.assemble.outputs.packages }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0   # paths-filter diffs against the base ref
 
@@ -147,7 +147,7 @@ jobs:
 
       - id: filter
         if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: ${{ steps.all.outputs.map }}
           list-files: none
@@ -183,7 +183,7 @@ jobs:
       # package's globs at once, so changed-only would select nothing.
       - id: outside
         if: ${{ inputs.changed-only && inputs.package == '' && github.event_name == 'pull_request' }}
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           predicate-quantifier: every
           list-files: none
@@ -236,7 +236,7 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.discover.outputs.packages) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Checkout leaves LFS pointers alone; pull only the objects this leg can
       # actually use. `lfs: true` on checkout would drag the repo's ENTIRE LFS
