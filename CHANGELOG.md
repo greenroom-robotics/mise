@@ -1,3 +1,10 @@
+## [8.16.0](https://github.com/greenroom-robotics/mise/compare/mise@8.15.1...mise@8.16.0) (2026-08-26)
+
+
+### Features
+
+* sequential single-runner mode for ci-test ([#93](https://github.com/greenroom-robotics/mise/issues/93)) ([8bcd63a](https://github.com/greenroom-robotics/mise/commit/8bcd63acdbc77975119f98c67f1a9f3963233832))
+
 ## [8.15.1](https://github.com/greenroom-robotics/mise/compare/mise@8.15.0...mise@8.15.1) (2026-08-26)
 
 
