@@ -263,11 +263,13 @@ jobs:
           set -euo pipefail
           # Map both remote forms straight to the token URL — git applies
           # insteadOf once (no chaining), so ssh→https would miss a second rule.
+          # Must be --global: `submodule update` clones in fresh directories
+          # that never read the parent repo's local config.
           key="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
-          git config "$key" "https://github.com/"
-          git config --add "$key" "git@github.com:"
+          git config --global "$key" "https://github.com/"
+          git config --global --add "$key" "git@github.com:"
           git submodule update --init --recursive --depth=1
-          git config --unset-all "$key"
+          git config --global --unset-all "$key"
 
       # Checkout leaves LFS pointers alone; pull only the objects this leg can
       # actually use. `lfs: true` on checkout would drag the repo's ENTIRE LFS
