@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use super::yaml_block::{self, item_bounds};
 use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
-/// An entry in `rosdistro_additional_recipes.yaml`. Fields are emitted in this
-/// fixed order: url, tag, version. Matches the existing format in ros-recipes.
+/// An entry in `rosdistro_additional_recipes.yaml`, emitted as url, tag, version.
 pub struct Entry<'a> {
     pub package: &'a PackageName,
     pub url: &'a GithubRepoUrl,
@@ -43,9 +42,6 @@ fn render(entry: &Entry, nl: &str) -> String {
 fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
     let nl = yaml_block::line_ending(body);
 
-    // The package's block is its top-level `<name>:` key line plus everything
-    // indented under it — see `yaml_block::section_bounds`, which is also what
-    // decides whether the entry exists at all.
     if let Some(block) = yaml_block::section_bounds(body, entry.package.as_str()) {
         let mut out = String::with_capacity(body.len());
         out.push_str(block.before(body));
@@ -54,8 +50,6 @@ fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
         return Ok(out);
     }
 
-    // Append at EOF, separating with a blank line if the file is non-empty
-    // and doesn't already end with one.
     let mut out = body.to_string();
     let blank_tail = format!("{nl}{nl}");
     if !out.is_empty() && !out.ends_with(&blank_tail) {
@@ -68,20 +62,14 @@ fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
     Ok(out)
 }
 
-/// Mutate a hand-authored `vendor_recipes/<pkg>/recipe.yaml` in place. Returns
-/// the new content.
-///
-/// Behavior:
-/// - Replaces `version:` inside the top-level `package:` block.
-/// - Replaces `rev:` inside the top-level `source:` block.
-/// - Resets `number:` inside the top-level `build:` block to 0, but only when
-///   the version actually changed — manual rebuild bumps stay increment-only.
-/// - Returns the input unchanged when version and rev already match, so
-///   `open-pr` stages nothing and exits as a no-op.
+/// Mutate a hand-authored `vendor_recipes/<pkg>/recipe.yaml`, returning the
+/// new content:
+/// - Replaces `package.version` and `source.rev`.
+/// - Resets `build.number` to 0 only when the version actually changed —
+///   manual rebuild bumps stay increment-only.
+/// - Returns the input unchanged when version and rev already match.
 /// - Errors if any of the three fields is missing — never a silent no-op.
-/// - Every other line (comments, deps, formatting) passes through untouched.
-/// - The file is rebuilt line by line, so it comes back with the terminator
-///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
+/// - Everything else (comments, deps, formatting) passes through untouched.
 pub(crate) fn mutate_vendored_recipe(
     text: &str,
     version: &Version,
@@ -151,21 +139,15 @@ pub(crate) fn mutate_vendored_recipe(
 ///   lines as needed), and delete `ref:` if present.
 /// - If absent: append a new item at the end of the file with the same
 ///   indentation conventions.
-/// - The file is rebuilt line by line, so it comes back with the terminator
-///   [`yaml_block::line_ending`] reports — see that module's line-ending note.
+///
+/// `subdir` and `lfs` are authoritative facts about the package, not overlays:
+/// `None`/`false` remove an existing `subdir:`/`lfs:` line.
 pub(crate) fn mutate_pixi_entry(
     text: &str,
     name: &PackageName,
     url: &GithubRepoUrl,
     rev: &Sha40,
-    // `None` means the package sits at the root of its source repo, not "leave
-    // whatever is there alone" — the only producer computes it as the package
-    // directory relative to the git toplevel, so an absent value is a fact
-    // about the package, and the entry's `subdir:` line is removed to match.
     subdir: Option<&str>,
-    // Authoritative, like `subdir`: the releasing repo's `--lfs-package` list
-    // is the source of truth, so `false` removes an existing `lfs: true` line
-    // rather than leaving it alone.
     lfs: bool,
 ) -> anyhow::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
@@ -186,7 +168,6 @@ pub(crate) fn mutate_pixi_entry(
         for line in item.body(&lines) {
             let trimmed = line.trim_start();
             if trimmed.starts_with("ref:") {
-                // drop
                 continue;
             }
             if trimmed.starts_with("url:") {
@@ -203,7 +184,7 @@ pub(crate) fn mutate_pixi_entry(
                 if let Some(s) = subdir {
                     subdir_seen = true;
                     out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
-                } // else: no subdir means no subdir line — see the note on `subdir`
+                }
                 continue;
             }
             if trimmed.starts_with("lfs:") {
@@ -227,16 +208,12 @@ pub(crate) fn mutate_pixi_entry(
         if !lfs_seen && lfs {
             out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
         }
-        // The blank lines between this item and the next, then the rest of
-        // the file, pass through untouched.
         for line in item.trailing(&lines) {
             out.push(line.to_string());
         }
         out
     } else {
-        // Append a new entry at end of file.
         let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
-        // Ensure separation from previous content.
         if out.last().is_some_and(|s| !s.is_empty()) {
             out.push(String::new());
         }
@@ -305,15 +282,9 @@ pub(crate) fn vendored_recipe_path(recipes_root: &Path, package: &PackageName) -
     })
 }
 
-/// Where one package's release lands in the recipes repo, and the facts that
-/// destination needs.
-///
-/// This is the reified form of the routing decision below. Each arm holds
-/// exactly the fields its file format records, so the facts a destination does
-/// not use are not merely ignored — they are absent. A vendored recipe keeps
-/// its own `source.git`, so there is no `url` to get wrong; rosdistro pins a
-/// mutable tag and has nowhere to put a sha; pixi-native pins a sha and has
-/// nowhere to put a tag.
+/// Where one package's release lands in the recipes repo. Each arm holds
+/// exactly the fields its file format records: a vendored recipe keeps its
+/// own `source.git`, rosdistro pins a mutable tag, pixi-native pins a sha.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReleaseTarget {
     /// A hand-authored `vendor_recipes/<dir>/recipe.yaml`, patched in place.
@@ -342,8 +313,7 @@ pub(crate) enum ReleaseTarget {
 }
 
 impl ReleaseTarget {
-    /// The repo-relative file this target writes. Known at routing time, which
-    /// is what lets the caller stage it without waiting for the write.
+    /// The repo-relative file this target writes.
     pub fn rel_path(&self) -> PathBuf {
         match self {
             Self::Vendored { recipe_rel, .. } => recipe_rel.clone(),
@@ -353,9 +323,7 @@ impl ReleaseTarget {
     }
 }
 
-/// The facts only a `pixi_native_packages.yaml` entry records. Grouped so the
-/// arms that have nowhere to put them (vendored recipes, rosdistro) drop them
-/// at one boundary instead of carrying two more unused parameters.
+/// The facts only a `pixi_native_packages.yaml` entry records.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PixiEntryOpts<'a> {
     pub subdir: Option<&'a str>,
@@ -370,9 +338,7 @@ pub(crate) struct PixiEntryOpts<'a> {
 ///  3. package already has an entry in `rosdistro_additional_recipes.yaml` -> update there.
 ///  4. otherwise (brand-new) -> default to `pixi_native_packages.yaml`.
 ///
-/// Pure decision plus reads: nothing here writes. The facts a chosen arm does
-/// not carry are dropped at this boundary rather than travelling on as unused
-/// parameters.
+/// Pure decision plus reads: nothing here writes.
 pub(crate) fn route(
     recipes_root: &Path,
     package: &PackageName,
@@ -382,7 +348,6 @@ pub(crate) fn route(
     sha: &Sha40,
     pixi: PixiEntryOpts<'_>,
 ) -> anyhow::Result<ReleaseTarget> {
-    // 1. Vendored (name-convention tolerant: `_` ROS name -> `-` recipe dir).
     if let Some(recipe_rel) = vendored_recipe_path(recipes_root, package) {
         return Ok(ReleaseTarget::Vendored {
             recipe_rel,
@@ -405,7 +370,6 @@ pub(crate) fn route(
         .as_deref()
         .is_some_and(|t| rosdistro_has_entry(t, package));
 
-    // Arm 3: existing rosdistro entry (and not already pixi-native) -> update there.
     if in_rosdistro && !in_pixi_native {
         return Ok(ReleaseTarget::Rosdistro {
             package: package.clone(),
@@ -415,9 +379,7 @@ pub(crate) fn route(
         });
     }
 
-    // Arms 2 & 4: existing pixi-native entry, or brand-new package -> pixi-native.
-    // The file has to exist to append to, and finding that out now keeps it out
-    // of the write stage.
+    // The file has to exist to append to; fail here rather than in the write stage.
     anyhow::ensure!(
         pixi_native_text.is_some(),
         "{} not found in recipes repo; cannot add pixi-native entry for {package}",
@@ -432,7 +394,6 @@ pub(crate) fn route(
     })
 }
 
-/// The file's contents, or `None` if it does not exist.
 fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
@@ -470,7 +431,6 @@ pub(crate) fn apply(recipes_root: &Path, target: &ReleaseTarget) -> anyhow::Resu
             tag,
             version,
         } => {
-            // The previous pin is read before `upsert` replaces the block.
             let old_ref = read_if_exists(&abs)?
                 .as_deref()
                 .and_then(|t| yaml_block::field_of(t, package.as_str(), "tag"))

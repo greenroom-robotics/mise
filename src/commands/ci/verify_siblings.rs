@@ -29,7 +29,7 @@ impl VerifySiblings {
         let consumer = Package::read(&self.pixi_toml)?.identity().name;
 
         let Some(targets) = graph.path_deps.get(&consumer) else {
-            return Ok(()); // no path deps, nothing to verify
+            return Ok(());
         };
 
         let tags = crate::git::tags(&self.package_dir)?;

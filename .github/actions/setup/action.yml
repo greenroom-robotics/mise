@@ -46,12 +46,9 @@ runs:
         owner: ${{ github.repository_owner }}
 
     # Export the App's bot git identity into the job env so every later step
-    # in this job — including the release action's semantic-release run, in
-    # both the bundled-setup and skip-setup paths — commits as the App rather
-    # than semantic-release-bot, with no per-value input plumbing. The numeric
-    # user id makes the noreply email link the commit to the App account so
-    # GitHub renders it as the App (avatar + Verified badge), instead of the
-    # free-text label a hardcoded name would produce.
+    # in this job commits as the App. The numeric user id in the noreply email
+    # links commits to the App account, so GitHub renders them with the App's
+    # avatar and Verified badge.
     - name: Export App git identity
       shell: bash
       env:
@@ -83,10 +80,8 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-    # Install the Greenroom pixi fork (native az:// Azure Blob channel support;
-    # upstream pixi cannot read our az:// channels). Only the binary — we do not
-    # install a consumer environment for the CI orchestration tools (pixi/mise).
-    # Reading az:// channels only needs the ambient azure/login above (SAS is
+    # Install the Greenroom pixi fork — upstream pixi cannot read our az://
+    # channels. Reading az:// only needs the ambient azure/login above (SAS is
     # minted from it); explicit SAS is only required for writes (reindex).
     - name: Install pixi (Greenroom fork)
       if: inputs.skip-pixi != 'true'
@@ -100,19 +95,16 @@ runs:
         sh "$installer"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-    # Write a dedicated pixi manifest that depends solely on mise, pinned to the
-    # exact version this action ships, then install it. Downstream actions run
-    # mise via `pixi run --manifest-path "$MISE_MANIFEST"` (exported below)
+    # Write a dedicated pixi manifest that depends solely on mise, then install
+    # it. Downstream actions run mise via
+    # `pixi run --manifest-path "$MISE_MANIFEST"` (exported below).
     #
-    # The version is read from THIS repo's root pixi.toml [package].version —
-    # bumped on every release, with the major tag (v<MAJOR>) slid onto that
-    # commit. The spec is `<=version` (a ceiling, not `==`): between the bump
-    # commit landing (tag moves, version reads as new) and the new mise being
-    # published to the channel, `==` can't resolve and every action fails.
-    # `<=` falls back to the latest *published* version during that gap while
-    # never installing something newer than the action ships. The channel is
-    # the org's `general` az:// Azure Blob channel, where mise is published;
-    # the pixi fork reads it directly using the ambient azure/login session.
+    # The version is read from THIS repo's root pixi.toml [package].version.
+    # The spec is `<=version` (a ceiling, not `==`): between the release bump
+    # commit landing and the new mise being published to the channel, `==`
+    # can't resolve and every action fails. `<=` falls back to the latest
+    # *published* version during that gap while never installing something
+    # newer than the action ships.
     - name: Install mise
       if: inputs.skip-pixi != 'true'
       shell: bash

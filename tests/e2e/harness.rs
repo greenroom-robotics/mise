@@ -14,10 +14,9 @@
 //!   `insteadOf` rewrites that redirect would-be network URLs to local
 //!   `file://` remotes.
 //!
-//! mise's in-process HTTP calls can't be shimmed on PATH, so they get a
-//! [`FixtureServer`] on 127.0.0.1 plus the `MISE_GITHUB_RAW_URL` override. The git `http.proxy` setting above does
-//! not affect those — it is git config, not an environment proxy, and the
-//! cleared environment means `ureq` has no proxy configured either.
+//! mise's in-process HTTP calls can't be shimmed on PATH (and git's
+//! `http.proxy` never applies to them), so they get a [`FixtureServer`] on
+//! 127.0.0.1 plus the `MISE_GITHUB_RAW_URL` override.
 //!
 //! Commands run with a cleared environment; only PATH, HOME, TMPDIR, the git
 //! config overrides and per-test vars are present, so host git config
@@ -106,9 +105,7 @@ impl E2e {
         fs::write(&log, "").unwrap();
         // http.proxy points at an unroutable port so any git command that
         // tries to reach a real http(s) remote fails immediately; file://
-        // and local-path remotes are unaffected. (It does not constrain
-        // in-process ureq calls, which is why those need the base-URL
-        // overrides and [`FixtureServer`] instead.)
+        // and local-path remotes are unaffected.
         //
         // uploadpack.allowAnySHA1InWant lets a local fixture remote serve a
         // fetch-by-SHA the way GitHub does, so `git::fetch_rev` can be
@@ -304,8 +301,6 @@ impl E2e {
 /// mise reaches GitHub's raw-content host with in-process `ureq` calls, which
 /// no PATH shim can intercept. Pointing `MISE_GITHUB_RAW_URL` at one of these
 /// is what makes those paths testable.
-/// Written on `std::net` rather than a dev-dependency: the whole contract is
-/// "answer GET with a canned body".
 pub struct FixtureServer {
     base: String,
     addr: std::net::SocketAddr,

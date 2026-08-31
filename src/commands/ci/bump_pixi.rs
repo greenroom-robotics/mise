@@ -2,12 +2,9 @@ use anyhow::Context;
 use clap::Args;
 use std::path::PathBuf;
 
-/// Called by semantic-release's @semantic-release/exec plugin in the prepare
-/// phase, before the @semantic-release/git plugin commits. Writes the new
-/// version into the package's pixi.toml [package] section. Also called by the
-/// bump-pixi composite action, which may pass several manifests to bump to
-/// the same version in one go: all manifests are read and validated before
-/// any is written, so a bad path leaves every file untouched.
+/// Writes the new version into each package's pixi.toml [package] section.
+/// All manifests are read and validated before any is written, so a bad
+/// path leaves every file untouched.
 #[derive(Args, Debug)]
 pub struct BumpPixi {
     /// New version, no leading 'v' (matches `${nextRelease.version}`).

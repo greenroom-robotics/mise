@@ -295,7 +295,6 @@ fn package_name_deserialises_through_its_constructor() {
 
 #[test]
 fn version_orders_numeric_prerelease_identifiers_numerically() {
-    // The hand-rolled string sort this replaced put alpha.10 before alpha.2.
     assert!(Version::parse("1.0.0-alpha.2").unwrap() < Version::parse("1.0.0-alpha.10").unwrap());
     assert!(Version::parse("1.0.0-alpha.10").unwrap() < Version::parse("1.0.0").unwrap());
     assert!(Version::parse("1.9.0").unwrap() < Version::parse("1.21.0").unwrap());

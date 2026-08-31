@@ -43,17 +43,14 @@ pub(super) fn vinca(
 
     let arch_str = target_platform.to_string();
 
-    // 1. Generate `./recipes/` from vinca.yaml.
     process::run_in(
         repo.root(),
         "pixi",
         &["run", "vinca", "-m", "--platform", &arch_str],
     )?;
 
-    // 2. Manipulate recipes/ per mode.
     apply_recipe_filter(repo.root(), &mode)?;
 
-    // 3. Prepare variants args (and hold any temp file alive for the duration).
     let mut variant_args: Vec<String> = vec!["-m".into(), "conda_build_config.yaml".into()];
     let _pin = if let Some(v) = mode.version() {
         let tf = write_variants_pin(v)?;
@@ -66,7 +63,6 @@ pub(super) fn vinca(
         None
     };
 
-    // 4. Build.
     let abs_output_str = abs_output.to_string_lossy().into_owned();
     let mut args: Vec<&str> = vec![
         "run",
@@ -84,9 +80,8 @@ pub(super) fn vinca(
     let overrides_channel_url = overrides_channel_url.map(|c| c.to_string());
     args.extend_from_slice(&["-c", &channel_url]);
     // The overrides channel lets --skip-existing find already-published
-    // override packages (so they aren't rebuilt every run). It sits below the
-    // general channel; its packages carry down_prioritize_variant so the solver
-    // still prefers the stock build for any dependency.
+    // override packages; its packages carry down_prioritize_variant so the
+    // solver still prefers the stock build for any dependency.
     if let Some(ovr) = &overrides_channel_url {
         args.push("-c");
         args.push(ovr.as_str());
@@ -168,21 +163,11 @@ impl VincaBuildMode {
     }
 }
 
-/// Manipulate the `<repo>/recipes` directory before invoking rattler-build:
-///
-/// 1. Overlay each entry from `<repo>/vendor_recipes/` onto `recipes/`, overwriting
-///    existing dirs (vendor recipes win — they're handrolled and the vinca-generated
-///    versions in `recipes/` are stale).
-/// 2. Remove `recipes/deepstream-mutex` unconditionally (a payload-less noarch
-///    metapackage published by `bootstrap-mutex.yml`; consumed from the channel,
-///    never built here).
-/// 3. Apply the mode-specific filter:
-///    - `Normal` → no further filtering.
-///    - `DropDeepstream { recipes }` → remove each listed recipe dir.
-///    - `DeepstreamOnly { recipes, .. }` → remove every recipe dir whose name is NOT
-///      in the listed set.
-///    - `Only { recipes, .. }` → same keep-only sweep as `DeepstreamOnly`, but
-///      independent of DS-ness (used for local single-recipe debugging).
+/// Prepare `<repo>/recipes` for rattler-build: overlay `vendor_recipes/`
+/// entries (handrolled; they win over the stale vinca-generated versions),
+/// remove `recipes/deepstream-mutex` (a payload-less noarch metapackage
+/// consumed from the channel, never built here), then apply the mode's
+/// filter.
 fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Result<()> {
     let recipes_dir = repo_root.join("recipes");
     let vendor_dir = repo_root.join("vendor_recipes");
@@ -203,7 +188,6 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
         }
     }
 
-    // Always drop the mutex metapackage if vinca emitted one.
     let mutex = recipes_dir.join("deepstream-mutex");
     if mutex.exists() {
         fs::remove_dir_all(&mutex).with_context(|| format!("remove {}", mutex.display()))?;
@@ -242,7 +226,6 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
     Ok(())
 }
 
-/// Recursively copy `src` to `dst`, creating `dst` if needed.
 fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
@@ -259,14 +242,10 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
 }
 
 /// Write a one-off variants YAML pinning the DS axis (and, for DS 7.1, the gcc
-/// version that nvcc accepts). Returned `NamedTempFile` lives as long as the
-/// caller keeps it; rattler-build reads the path before it's dropped.
-///
-/// `None` means no pin — the caller should pass `variants/deepstream.yaml`
-/// (the full variants file with both DS versions) to rattler-build instead.
+/// version that nvcc accepts). The caller must keep the returned
+/// `NamedTempFile` alive until rattler-build has read the path.
 fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFile> {
-    // rattler-build's `-m` flag takes file paths, not KEY=VALUE. Passing
-    // `variants/deepstream.yaml` would expand over every listed version.
+    // rattler-build's `-m` flag takes file paths, not KEY=VALUE.
     // DS 7.1's CUDA 12.6 nvcc rejects host gcc > 13 as -ccbin; DS 8.0 (CUDA
     // 12.8) accepts gcc 14 — so 7.1 needs an explicit gcc pin alongside.
     let mut content = format!("deepstream_version:\n  - \"{version}\"\n");
@@ -296,11 +275,11 @@ pub(super) fn deepstream_container(
 ) -> anyhow::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
 
-    // 1. Configure git HTTPS auth for private repo clones. The container
-    //    cannot inherit the runner's git config, so this has to happen here.
+    // The container cannot inherit the runner's git config, so auth for
+    // private repo clones has to be configured here.
     gh::ensure_git_auth()?;
 
-    // 2. Host's .pixi/ has host-absolute shebangs that fail in-container; rebuild.
+    // Host's .pixi/ has host-absolute shebangs that fail in-container; rebuild.
     let host_pixi = repo.root().join(".pixi");
     if host_pixi.exists() {
         fs::remove_dir_all(&host_pixi)
@@ -316,17 +295,14 @@ pub(super) fn deepstream_container(
     ] {
         let p = Path::new(cache);
         if p.exists() {
-            // Best-effort: ignore failures cleaning caches.
             let _ = fs::remove_dir_all(p);
         }
     }
 
-    // 3. Install pixi env for the repo.
     process::run_in(repo.root(), "pixi", &["install"])?;
 
-    // 4. Delegate to build vinca (always DeepstreamOnly mode). DeepStream
-    // builds are filtered to DS recipes only and never touch overrides
-    // packages, so no overrides channel is passed.
+    // DeepStream builds never touch overrides packages, so no overrides
+    // channel is passed.
     vinca(
         Some(repo.root().to_path_buf()),
         channel_url,

@@ -25,14 +25,13 @@ const GLOBAL_VINCA: &[&str] = &[
 /// Vinca + DeepStream: variant pins feed both pipelines' build hashes.
 const GLOBAL_VINCA_DS: &[&str] = &["conda_build_config.yaml"];
 
-/// DeepStream-only: the DS container entry point.
 const DEEPSTREAM_ONLY: &[&str] = &["docker-compose.yml", "variants/deepstream.yaml"];
 
 const GLOBAL_BOTH: &[&str] = &[PIXI_TOML, "pixi.lock"];
 
 const GLOBAL_BOTH_PREFIXES: &[&str] = &[".github/workflows/", ".github/actions/", "scripts/"];
 
-/// The two archs and their default runner template (used by the vinca pipeline).
+/// The two archs, each with its vinca-pipeline runner template.
 const ARCHS: &[(Arch, &str)] = &[
     (Arch::Linux64, "runs-on={run_id}/runner=8cpu-linux-x64"),
     (
@@ -128,15 +127,13 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     gh::outputs::set("has-work", &has_work)?;
     gh::outputs::set("pixi-only", &pixi_only)?;
 
-    // Always print matrix_json to stdout — matches the Python script for log visibility.
+    // Stdout copy for CI log visibility.
     println!("{matrix_json}");
 
     Ok(())
 }
 
-/// The `pipeline` field of a row, and the only thing the consuming workflow
-/// switches on. Several [`RowKind`]s map onto one pipeline, so this is derived
-/// from the kind rather than stored beside it.
+/// The `pipeline` field of a row — what the consuming workflow switches on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum Pipeline {
@@ -147,20 +144,13 @@ enum Pipeline {
 }
 
 /// What a matrix row is for, carrying exactly the fields that kind of row has.
-///
-/// The serialized shape still spells the absent fields as `""` (see
-/// [`MatrixRow`]'s `Serialize`), but that shape exists only at the JSON
-/// boundary: a runner size on a vinca row, or a DeepStream image on a
-/// pixi-native one, has nowhere to live in this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowKind {
     /// A plain vinca/rattler build of `recipes/`.
     Vinca,
     /// A pixi-native build job, which handles every entry of one runner spec.
     PixiNative { runner: RunnerSpec },
-    /// A vinca build of the DeepStream recipes against one DS version. The
-    /// container image is a function of the version ([`ds_image_for`]) and so
-    /// is derived rather than stored — the two cannot disagree.
+    /// A vinca build of the DeepStream recipes against one DS version.
     Deepstream { version: DeepstreamVersion },
     /// No work: one placeholder row, because an empty matrix is an error to
     /// GitHub Actions.
@@ -170,8 +160,7 @@ enum RowKind {
 impl RowKind {
     fn pipeline(&self) -> Pipeline {
         match self {
-            // A DeepStream row runs the vinca pipeline; the DS axis is a
-            // variant of it, not a pipeline of its own.
+            // A DeepStream row runs the vinca pipeline.
             Self::Vinca | Self::Deepstream { .. } => Pipeline::Vinca,
             Self::PixiNative { .. } => Pipeline::PixiNative,
             Self::ShouldNotRun => Pipeline::ShouldNotRun,
@@ -180,10 +169,6 @@ impl RowKind {
 }
 
 /// One row of the matrix JSON output.
-///
-/// Fields are private and the constructors below are the only way to make one,
-/// so `runner` and `artifact_name` are always the strings that this kind of row
-/// on this arch is supposed to carry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MatrixRow {
     kind: RowKind,
@@ -239,10 +224,8 @@ impl MatrixRow {
     }
 }
 
-/// Field names mirror the original Python (kebab-case) and every row carries
-/// every key, with `""` where the kind has no such field, so the consuming
-/// workflow YAML keeps working unchanged. This is the *only* place that shape
-/// exists.
+/// Every row carries every key, with `""` where the kind has no such field —
+/// the shape the consuming workflow YAML expects.
 impl Serialize for MatrixRow {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
@@ -266,13 +249,8 @@ impl Serialize for MatrixRow {
     }
 }
 
-/// How much pixi-native work the changed files imply, as far as the file list
-/// alone can say. [`RawScope::ManifestScoped`] still needs the manifest diffed
-/// against the base ref, which is IO — so this is what [`classify`] returns and
-/// [`resolve`] consumes.
-///
-/// Note there is no `Only` arm: naming packages requires that diff, so a raw
-/// scope cannot claim to know them.
+/// Pixi-native scope as far as the changed-file list alone can say;
+/// [`resolve`] turns `ManifestScoped` into concrete package names.
 #[derive(Debug, Default, PartialEq, Eq)]
 enum RawScope {
     /// No pixi-native work.
@@ -285,9 +263,8 @@ enum RawScope {
     ManifestScoped,
 }
 
-/// Which pixi-native packages to build — the resolved form, the only one
-/// [`build_matrix`] accepts. Reaching it costs a [`resolve`] call, so a scope
-/// that still needs resolving cannot be built from.
+/// Which pixi-native packages to build — the resolved form [`build_matrix`]
+/// accepts.
 #[derive(Debug, Default, PartialEq, Eq)]
 enum PixiScope {
     /// No pixi-native work.
@@ -308,8 +285,7 @@ struct RawState {
     ds_versions: BTreeSet<DeepstreamVersion>,
 }
 
-/// A [`RawState`] with its pixi-native scope resolved: everything
-/// [`build_matrix`] needs, and nothing left to look up.
+/// A [`RawState`] with its pixi-native scope resolved.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct MatrixPlan {
     vinca: bool,
@@ -370,9 +346,6 @@ fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScop
     }
 }
 
-/// The parse stage's last step: consume the raw classification and produce the
-/// plan. Only `ManifestScoped` costs any IO; the other arms already say all
-/// there is to say.
 fn resolve(raw: RawState, repo: &Repo, event: &gh::Event) -> anyhow::Result<MatrixPlan> {
     let pixi_native = match raw.pixi_native {
         RawScope::None => PixiScope::None,
@@ -442,7 +415,6 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
         }
         if let Some(rest) = p.strip_prefix("vendor_recipes/") {
             let name = rest.split('/').next().unwrap_or("");
-            // RecipeName has no validation yet, so use the string directly.
             if ds.recipes.iter().any(|r| r.as_str() == name) {
                 state.ds_versions.extend(ds.versions.iter().copied());
             } else {
@@ -450,7 +422,7 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
             }
             continue;
         }
-        // `recipes/` is generated by vinca; ignore. Everything else (docs, README) → no jobs.
+        // `recipes/` is vinca-generated; changes there trigger nothing.
         if p.starts_with("recipes/") {
             continue;
         }
@@ -468,8 +440,7 @@ fn build_matrix(plan: &MatrixPlan, manifest: &PixiNativeManifest, run_id: &str) 
         }
     }
 
-    // One job per distinct runner spec, not per package: each job builds every
-    // entry of its spec.
+    // One job per distinct runner spec; each job builds every entry of its spec.
     let pixi_sizes: BTreeSet<RunnerSpec> = match &plan.pixi_native {
         PixiScope::All => manifest.packages.iter().map(|e| e.runner_spec()).collect(),
         PixiScope::Only(names) => manifest

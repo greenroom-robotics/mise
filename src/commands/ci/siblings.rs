@@ -26,7 +26,6 @@ pub fn analyze(packages: &[Package]) -> SiblingGraph {
         ..Default::default()
     };
 
-    // dir -> name, for resolving path deps to sibling packages.
     let dir_to_name: BTreeMap<PathBuf, PackageName> =
         g.dirs.iter().map(|(n, d)| (d.clone(), n.clone())).collect();
 

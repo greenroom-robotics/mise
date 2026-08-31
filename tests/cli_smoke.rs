@@ -84,8 +84,6 @@ fn matrix_compute_workflow_dispatch_produces_matrix() {
 
 #[test]
 fn build_recipes_vinca_rejects_ds_version_without_recipe() {
-    // VincaBuildMode::from_flags rejects --ds-version without any --ds-recipe.
-    // The command fails before any subprocess is spawned.
     let td = tempfile::TempDir::new().unwrap();
     std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
     mise()
@@ -110,7 +108,6 @@ fn build_recipes_vinca_rejects_ds_version_without_recipe() {
 fn build_recipes_pixi_fails_when_manifest_missing() {
     let td = tempfile::TempDir::new().unwrap();
     std::fs::write(td.path().join("pixi.toml"), "[workspace]\nname=\"x\"\n").unwrap();
-    // No pixi_native_packages.yaml in the temp repo — should fail at load.
     mise()
         .args([
             "build-recipes",
@@ -240,8 +237,8 @@ fn ci_build_help_lists_known_flags() {
 }
 
 // `--ros-distro` is a hidden compatibility shim on recipes-pr: the published
-// recipes-pr composite action still passes it, but nothing reads it. Help must
-// not advertise it (so new callers don't start passing it)...
+// composite action still passes it, but nothing reads it. Help must not
+// advertise it...
 #[test]
 fn ci_recipes_pr_help_hides_the_ros_distro_compat_flag() {
     let out = mise()
@@ -258,8 +255,8 @@ fn ci_recipes_pr_help_hides_the_ros_distro_compat_flag() {
 }
 
 // ...while still parsing, so an old action pinned against a new binary keeps
-// working. Parse-only: an empty --package-dir bails on "no packages found"
-// before any git remote, clone or `gh` call, so nothing is released here.
+// working. An empty --package-dir bails on "no packages found" before any git
+// remote, clone or `gh` call.
 #[test]
 fn ci_recipes_pr_still_accepts_the_ros_distro_compat_flag() {
     let tmp = tempfile::tempdir().unwrap();
@@ -361,9 +358,8 @@ fn ci_recipes_pr_against_empty_dir_errors_cleanly() {
 
 #[test]
 fn ci_test_discovers_fixture_package() {
-    // Discovery should find `foo`; the actual `pixi run` will fail since the
-    // fixture's tests env isn't installed during cargo test, but mise should
-    // get past discovery and attempt the run.
+    // The `pixi run` itself fails (the fixture's env isn't installed); only
+    // getting past discovery is asserted.
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ci/packages");
     let out = mise()

@@ -26,10 +26,7 @@ pub(super) struct BuildItem<'a> {
 ///
 /// The only constructor is [`BuildPlan::new`], which *is* the topological sort,
 /// so holding one is proof that every same-repo dependency target precedes its
-/// consumers. The build loop in [`super::pixi`] iterates it and does not
-/// re-check; a dependency
-/// cycle is rejected here, at the end of the check phase, before any build has
-/// run.
+/// consumers. A dependency cycle is rejected here, before any build has run.
 #[derive(Debug)]
 pub(super) struct BuildPlan<'a>(Vec<BuildItem<'a>>);
 
@@ -116,7 +113,6 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'
     if order.len() != items.len() {
         anyhow::bail!("path-dep cycle among pixi-native entries");
     }
-    // Reorder without cloning items.
     let mut slots: Vec<Option<BuildItem>> = items.into_iter().map(Some).collect();
     Ok(order
         .into_iter()

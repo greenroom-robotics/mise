@@ -1,8 +1,7 @@
 //! GitHub-facing plumbing: workflow events, auth, the REST/raw HTTP calls, the
 //! `gh` CLI wrappers, and the Actions output/summary files.
 //!
-//! Git subprocess work lives in [`crate::git`]; this module only knows about
-//! things that are GitHub rather than git.
+//! Git subprocess work lives in [`crate::git`].
 
 use std::env;
 use std::fmt::Display;
@@ -124,31 +123,19 @@ pub enum ChangedFiles {
 
 /// Environment variables holding a GitHub credential, in precedence order:
 ///
-/// 1. `API_TOKEN_GITHUB` — the cross-repo App/PAT token the release workflows
-///    export; it is the only one with write access to *other* repositories, so
-///    when it is present it is the one that was deliberately provided.
+/// 1. `API_TOKEN_GITHUB` — the cross-repo App/PAT token, the only one with
+///    write access to *other* repositories.
 /// 2. `GH_TOKEN` — the `gh` CLI's own variable, set explicitly per step.
-/// 3. `GITHUB_TOKEN` — the automatic per-job token, scoped to this repository
-///    only. Last because treating it as preferred would shadow either of the
-///    deliberate ones above.
+/// 3. `GITHUB_TOKEN` — the automatic per-job token, scoped to this repository.
 const TOKEN_VARS: [&str; 3] = ["API_TOKEN_GITHUB", "GH_TOKEN", "GITHUB_TOKEN"];
 
-/// The GitHub token: the first of [`TOKEN_VARS`] that is set to a non-empty
-/// value. An empty variable is skipped rather than winning, since CI commonly
-/// exports a variable with no value when a secret is unavailable.
-///
-/// This is the single precedence order for every GitHub credential in mise —
-/// REST calls, raw-content fetches, `git` HTTPS auth and clone URLs — replacing
-/// three divergent orders across four sites. The `GH_TOKEN` > `GITHUB_TOKEN`
-/// flip is deliberate: it was verified against the sole consumer (the recipes
-/// repo), which only ever sets `GH_TOKEN`, so the new order changes nothing
-/// there while fixing the sites that previously saw no token at all.
+/// The GitHub token: the first of [`TOKEN_VARS`] set to a non-empty value.
+/// An empty variable is skipped, since CI commonly exports a variable with no
+/// value when a secret is unavailable.
 pub fn token() -> Option<Secret> {
     token_from(|var| env::var(var).ok())
 }
 
-/// [`token`] against an arbitrary lookup, so the precedence rule is testable
-/// without mutating the process environment.
 fn token_from(lookup: impl Fn(&str) -> Option<String>) -> Option<Secret> {
     TOKEN_VARS
         .into_iter()
@@ -178,23 +165,10 @@ fn stale_instead_of_keys(get_regexp_output: &str) -> Vec<String> {
 /// Teach `git` to authenticate GitHub HTTPS remotes with [`token`], by writing
 /// an `insteadOf` rewrite into the global git config.
 ///
-/// mise owns this rather than its callers: every git operation in a build —
-/// rattler-build's source fetches, [`crate::git::fetch_rev`], and the clones
-/// that happen inside the DeepStream container, which cannot inherit the
-/// runner's git config — runs underneath a mise command, so configuring auth
-/// once at the top of each build entry point covers all of them.
-///
-/// Every previously-installed rule is removed first. `--replace-all` alone
-/// would not do it: the token is part of the config *key*, so a rotated token
-/// writes a second key rather than overwriting the first. On a long-lived
-/// self-hosted runner that would accumulate revoked tokens in the global
-/// config forever and leave several rules rewriting the same prefix, where
-/// git's choice between them is not defined.
-///
-/// A no-op except for the cleanup when no token is available. Not memoized:
-/// the whole operation is two cheap `git config` calls, and caching "it ran"
-/// would wrongly skip the write for a call that has a token after one that did
-/// not.
+/// Every previously-installed rule is removed first: the token is part of the
+/// config *key*, so a rotated token writes a second key rather than replacing
+/// the first, and on a long-lived runner revoked tokens would accumulate as
+/// competing rules for the same prefix.
 pub fn ensure_git_auth() -> anyhow::Result<()> {
     let existing = process::capture_probe(
         "git",
@@ -202,8 +176,6 @@ pub fn ensure_git_auth() -> anyhow::Result<()> {
             "config",
             "--global",
             "--get-regexp",
-            // Anchored on the scheme only; the filter below decides what is
-            // actually one of ours.
             "^url\\.https://x-access-token:",
         ],
     )?
@@ -219,26 +191,22 @@ pub fn ensure_git_auth() -> anyhow::Result<()> {
             t.expose_secret()
         );
         process::git(&["config", "--global", &key, "https://github.com/"])?;
-        // Also claim the SSH remote form, for `.gitmodules` entries that pin
-        // submodules by `git@github.com:` URL. It must map straight to the
-        // token URL: git applies insteadOf rewrites once (no chaining), so an
-        // ssh→https rewrite would NOT then pick up the rule above.
+        // Also claim the SSH remote form, mapped straight to the token URL:
+        // git applies insteadOf rewrites once (no chaining), so an ssh→https
+        // rewrite would not then pick up the rule above.
         process::git(&["config", "--global", "--add", &key, "git@github.com:"])?;
     }
     Ok(())
 }
 
-/// An override base URL, normalized to have no trailing slash so the `/`-joined
-/// `format!`s below cannot produce a double slash. This is the contract for
-/// every base URL in this module: **no trailing slash**, callers supply the
+/// An override base URL, normalized to no trailing slash; callers supply the
 /// leading `/` of the path.
 fn base_url(var: &str, default: &str) -> String {
     let raw = env::var(var).unwrap_or_else(|_| default.to_string());
     raw.trim_end_matches('/').to_string()
 }
 
-/// Base URL for raw file content. `MISE_GITHUB_RAW_URL` overrides it so the
-/// e2e suite can serve fixture manifests locally.
+/// Base URL for raw file content; `MISE_GITHUB_RAW_URL` overrides it.
 fn raw_base() -> String {
     base_url("MISE_GITHUB_RAW_URL", "https://raw.githubusercontent.com")
 }
@@ -301,12 +269,6 @@ pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles>
 
 /// A pull request identified the way every `gh pr` subcommand identifies one:
 /// the repository it lives in plus the head branch.
-///
-/// Private fields with one validating constructor, so a `PrRef` in hand is a
-/// well-formed `owner/repo` and a branch — the two can neither be swapped nor
-/// left unchecked. The only way to read the repo back is [`PrRef::repo_flag`],
-/// which emits `--repo <slug>`, so a subcommand that forgets to scope itself
-/// to the right repository is unrepresentable.
 #[derive(Debug, Clone, Copy)]
 pub struct PrRef<'a> {
     repo: &'a str,
@@ -338,11 +300,8 @@ impl<'a> PrRef<'a> {
     }
 }
 
-/// The `gh` CLI wrappers.
-///
-/// None of them takes a working directory: every call passes `--repo`
-/// explicitly, so `gh` never infers the target from a checkout — which also
-/// means the existence probe can run before the recipes repo has been cloned.
+/// The `gh` CLI wrappers. Every call passes `--repo` explicitly, so `gh`
+/// never infers the target from a checkout.
 pub mod pr {
     use super::*;
 
@@ -394,8 +353,7 @@ pub mod pr {
     /// URL of the PR for this branch. `None` if `gh` fails or prints nothing —
     /// callers treat the link as best-effort.
     pub fn view_url(pr: PrRef<'_>) -> Option<String> {
-        // `pr view` takes the branch first, so this one argv is hand-built;
-        // `repo_flag` still supplies the `--repo` pair.
+        // `pr view` takes the branch first, so this one argv is hand-built.
         let mut args = vec!["pr", "view", pr.branch()];
         args.extend(pr.repo_flag());
         args.extend(["--json", "url", "--jq", ".url"]);
@@ -405,8 +363,8 @@ pub mod pr {
     }
 
     /// Body of the open PR for this branch, or `None` if there is no such PR.
-    /// Doubles as the PR-exists check, so it must distinguish "no PR" from "PR
-    /// with an empty body" — hence the JSON parse rather than a `--jq` string.
+    /// Doubles as the PR-exists check: `None` means no PR, distinct from a PR
+    /// with an empty body.
     pub fn list_body(pr: PrRef<'_>) -> Option<String> {
         let out = process::capture_probe(
             "gh",

@@ -133,8 +133,8 @@ jobs:
   # `uses: greenroom-robotics/mise/.github/actions/<name>@v<MAJOR>` and
   # automatically pick up minor/patch updates to the composite actions.
   #
-  # This runs as a job here becase detecting a tag push will not trigger
-  # any workflows since the tag is pushed by github app
+  # A job here, not a tag-push-triggered workflow: the tag is pushed by the
+  # GitHub App, and App-pushed refs trigger no workflows.
   #
   # With ensure-major-tag above, internal refs are bumped in the breaking PR
   # itself, so the `chore(release)` commit inherits already-correct refs and the
@@ -150,12 +150,7 @@ jobs:
     steps:
       # App token, not the default GITHUB_TOKEN: sliding v<MAJOR> can move the
       # tag across a commit that edits a file under .github/workflows/, and
-      # GitHub rejects such a ref push unless the pushing identity holds the
-      # Workflows permission — which the App has and the default token cannot
-      # be granted (there is no `workflows` scope in the permissions block).
-      # App token scoped with the Workflows permission. Sliding v<MAJOR> can
-      # move the tag across a commit that edits a file under .github/workflows/,
-      # and GitHub rejects such a ref update (both `git push` and the REST API)
+      # GitHub rejects such a ref update (both `git push` and the REST API)
       # unless the pushing identity holds the Workflows permission. The default
       # GITHUB_TOKEN can't carry it, and the App token only carries it if the
       # GitHub App has been granted "Workflows: Read & write" in its settings.

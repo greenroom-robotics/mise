@@ -55,7 +55,6 @@ fn empty_manifest_is_a_successful_noop() {
     let e2e = E2e::new();
     let root = repo_with_manifest(&e2e, "packages: []\n");
     run_pixi(&e2e, &root, &[]).success();
-    // No channel sweep, no pixi subprocess at all.
     assert!(e2e.shim_calls().is_empty());
 }
 
@@ -84,13 +83,8 @@ fn malformed_routing_yaml_fails_before_any_check() {
     run_pixi(&e2e, &root, &[])
         .failure()
         .stderr(predicate::str::contains("routing.yaml"));
-    // Routing is validated before the check fan-out: no pixi call happened.
     assert!(e2e.shim_calls().is_empty());
 }
-
-// ---------------------------------------------------------------------------
-// check / triage, via the raw-URL and git-redirect seams
-// ---------------------------------------------------------------------------
 
 /// The channel the fixture repo builds into; only the `pixi` shim ever
 /// resolves it, so the host is deliberately unroutable.
@@ -162,8 +156,7 @@ fn already_published_entry_is_triaged_out_and_never_built() {
         format!("/example/alpha/{rev}/pixi.toml"),
         entry_manifest("alpha", "1.0.0", ""),
     )]));
-    // The channel already holds alpha 1.0.0 build 0 for linux-64 — exactly the
-    // artifact this job would produce.
+    // The channel already holds exactly the artifact this job would produce.
     e2e.respond(
         crate::harness::Shim::Pixi,
         &["search", "--json"],
@@ -192,7 +185,6 @@ fn already_published_entry_is_triaged_out_and_never_built() {
         "{stderr}"
     );
     assert!(stderr.contains("nothing to build"), "{stderr}");
-    // The channel was swept, but nothing was published and no checkout happened.
     assert!(publish_paths(&e2e).is_empty(), "{:?}", e2e.shim_calls());
 }
 
@@ -200,8 +192,6 @@ fn already_published_entry_is_triaged_out_and_never_built() {
 fn unpublished_entries_build_in_dependency_order() {
     let e2e = E2e::new();
 
-    // A two-package monorepo where `app` path-depends on `lib`. Served as a
-    // local bare repo standing in for github.com/example/mono.
     let seed = e2e.path().join("mono-seed");
     fs::create_dir_all(&seed).unwrap();
     write_file(&seed, "lib/pixi.toml", &entry_manifest("lib", "1.0.0", ""));
@@ -283,9 +273,6 @@ fn unpublished_entries_build_in_dependency_order() {
     );
 }
 
-// An unreachable channel used to look identical to an empty one: every package
-// appeared unpublished and the job rebuilt and republished the lot. It has to
-// be a hard failure instead.
 #[test]
 fn an_unreachable_channel_fails_the_job_instead_of_rebuilding_everything() {
     let e2e = E2e::new();

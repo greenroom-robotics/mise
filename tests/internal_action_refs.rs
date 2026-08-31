@@ -1,17 +1,12 @@
-// Composite actions can't use relative paths (`./`) for internal
-// `greenroom-robotics/mise/...` refs when the action is consumed from an
-// external repo — a relative `uses:` resolves against the *consumer's*
-// checkout, not this repo's. So internal refs are hard-pinned to
-// `@v<MAJOR>` instead, and every one of them must be bumped by hand on each
-// major release. It's easy to bump the package version and the public
-// `setup@vN` ref while forgetting one of the others, which silently leaves
-// external consumers running a stale mise binary. This test is the
-// tripwire: it fails if any internal ref's pinned major doesn't match
-// the major mise is *about to* release.
+// Internal `greenroom-robotics/mise/...` refs are hard-pinned to `@v<MAJOR>`
+// (a relative `uses:` resolves against the consumer's checkout) and must all
+// be bumped by hand on each major release; a forgotten one silently leaves
+// external consumers on a stale mise binary. This test fails if any pinned
+// major doesn't match the major mise is *about to* release.
 //
-// "about to" matters: pixi.toml is only bumped by the release job after merge,
-// so on the very PR that needs the refs bumped, pixi.toml still holds the old
-// major. So the expected major is pixi.toml's plus one whenever there's a
+// "about to": pixi.toml is only bumped by the release job after merge, so on
+// the very PR that needs the refs bumped it still holds the old major. The
+// expected major is therefore pixi.toml's plus one whenever there's a
 // breaking commit since the release tag pixi.toml's version names.
 use regex::Regex;
 use std::fs;
@@ -33,7 +28,6 @@ fn internal_action_refs_match_pixi_major() {
 
     let mismatches: Vec<String> = walk(&manifest_dir.join(".github"))
         .into_iter()
-        // skip non-utf8/binary files
         .filter_map(|path| fs::read_to_string(&path).ok().map(|c| (path, c)))
         .flat_map(|(path, contents)| {
             ref_re

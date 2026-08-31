@@ -20,8 +20,6 @@ fn single_package_release_writes_releaserc_and_runs_semantic_release() {
         .assert()
         .success();
 
-    // Exactly one npx invocation, in single-package mode with the package
-    // name embedded literally in the tag format.
     assert_eq!(
         e2e.shim_calls(),
         vec![vec![
@@ -32,13 +30,11 @@ fn single_package_release_writes_releaserc_and_runs_semantic_release() {
         ]]
     );
 
-    // The synthesized .releaserc, with the temp path normalized, is golden.
     let releaserc = fs::read_to_string(src.join(".releaserc")).unwrap();
     assert_golden(
         &normalize_path(&releaserc, &src),
         "release/single_package.releaserc.json",
     );
-    // Single-package mode synthesizes no package.json files.
     assert!(!src.join("package.json").exists());
 }
 
@@ -90,7 +86,6 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
         .assert()
         .success();
 
-    // Multi mode: multi-semantic-release with the ordering-only deps flag.
     assert_eq!(
         e2e.shim_calls(),
         vec![vec![
@@ -102,7 +97,6 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
         ]]
     );
 
-    // Root package.json lists cwd-relative workspace globs.
     let root_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(src.join("package.json")).unwrap()).unwrap();
     assert_eq!(
@@ -110,7 +104,7 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
         serde_json::json!(["packages/liba", "packages/nodeb"])
     );
 
-    // Per-package package.json: path dep encoded as "*" for msr ordering.
+    // A path dep is encoded as "*" — it exists only for msr's release ordering.
     let nodeb: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(src.join("packages/nodeb/package.json")).unwrap())
             .unwrap();
@@ -121,7 +115,6 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
             .unwrap();
     assert_eq!(liba["dependencies"], serde_json::json!({}));
 
-    // Each package got a .releaserc whose publish step targets that package.
     let rc = fs::read_to_string(src.join("packages/nodeb/.releaserc")).unwrap();
     assert_golden(
         &normalize_path(&rc, &src),

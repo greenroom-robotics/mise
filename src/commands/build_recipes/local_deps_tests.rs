@@ -27,9 +27,6 @@ fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
     p
 }
 
-/// dep-name -> subdir map for `resolve_sibling_pins`, matching how the main
-/// build loop in `super::super::pixi` derives it from same-repo
-/// `manifest.packages` entries.
 fn subdirs(pairs: &[(&str, &str)]) -> BTreeMap<PackageName, PathBuf> {
     pairs
         .iter()
@@ -41,7 +38,7 @@ fn subdirs(pairs: &[(&str, &str)]) -> BTreeMap<PackageName, PathBuf> {
 fn resolve_sibling_pins_resolves_matching_pin() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
-    write_checkout_pkg(root, "lib", ""); // version 2.5.0
+    write_checkout_pkg(root, "lib", "");
     let consumer = write_checkout_pkg(
         root,
         "node",
@@ -59,11 +56,11 @@ fn resolve_sibling_pins_resolves_matching_pin() {
 fn resolve_sibling_pins_skips_version_mismatch() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
-    write_checkout_pkg(root, "lib", ""); // checkout is 2.5.0
+    write_checkout_pkg(root, "lib", "");
     let consumer = write_checkout_pkg(
         root,
         "node",
-        "[package.run-dependencies]\nlib = \"==2.4.0\"\n", // older pin
+        "[package.run-dependencies]\nlib = \"==2.4.0\"\n",
     );
     let map = subdirs(&[("lib", "packages/lib")]);
     let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
@@ -79,7 +76,7 @@ fn resolve_sibling_pins_ignores_non_sibling_pins() {
         "node",
         "[package.run-dependencies]\nros-kilted-rclpy = \"==1.0.0\"\n",
     );
-    let map = subdirs(&[("lib", "packages/lib")]); // rclpy not in map
+    let map = subdirs(&[("lib", "packages/lib")]);
     let resolved = resolve_sibling_pins(&consumer, root, &map).unwrap();
     assert!(resolved.is_empty());
 }
@@ -100,6 +97,5 @@ fn check_local_build_guard_skips_already_built() {
     let mut local_built = BTreeSet::new();
     local_built.insert(pkg("lib"));
     assert!(!check_local_build_guard(&pkg("lib"), &visiting, &local_built).unwrap());
-    // Not yet built and not visiting: proceed.
     assert!(check_local_build_guard(&pkg("other"), &visiting, &local_built).unwrap());
 }

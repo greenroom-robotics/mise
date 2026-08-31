@@ -7,8 +7,8 @@
 //! No network is touched anywhere. Golden files live under
 //! `tests/e2e/fixtures/`; regenerate with `UPDATE_GOLDENS=1 cargo test`.
 
-// Module files live under tests/e2e/; a root test target resolves bare `mod`
-// declarations against tests/, hence the explicit paths.
+// A root test target resolves bare `mod` declarations against tests/, hence
+// the explicit paths.
 #[path = "e2e/harness.rs"]
 mod harness;
 

@@ -2,37 +2,30 @@
 //!
 //! The recipes repo's YAML is hand-maintained: comments, key order, blank-line
 //! grouping and quoting style all carry intent, and a round-trip through a YAML
-//! library rewrites all of it. So `recipes_upsert` edits these files by line
-//! surgery, replacing only the lines it owns.
-//!
-//! What that costs is a shared definition of where a block *ends*. Each file
-//! shape has a reader (what was pinned before?) and a writer (pin this
-//! instead), and if the two disagree about the extent of a block the reader
-//! reports a field the writer did not replace. This module is that definition,
-//! for two independently-shaped blocks:
+//! library rewrites all of it. So these files are edited by line surgery, and
+//! this module is the shared definition of where a block *ends* — readers and
+//! writers that disagreed about a block's extent would strand fields:
 //!
 //! * [`section_bounds`] / [`with_sections`] / [`field_of`] — a `<key>:` block
-//!   at indent 0, used by `rosdistro_additional_recipes.yaml` and
-//!   `vendor_recipes/*/recipe.yaml`. All three read their answer off the
-//!   single [`section_headers`] walk, so reader and writer cannot drift.
-//! * [`item_bounds`] — a `- name: <name>` list item nested under `packages:`,
-//!   used by `pixi_native_packages.yaml`. Its extent is settled by indentation
-//!   relative to the `-`, which is a different question and has one answer.
+//!   at indent 0 (`rosdistro_additional_recipes.yaml`,
+//!   `vendor_recipes/*/recipe.yaml`). All three read their answer off the
+//!   single [`section_headers`] walk, so they cannot drift.
+//! * [`item_bounds`] — a `- name: <name>` list item nested under `packages:`
+//!   (`pixi_native_packages.yaml`), whose extent is settled by indentation
+//!   relative to the `-`.
 //!
 //! # Where a top-level block ends
 //!
 //! At the next line in column 0 that is not a comment — a blank line never
 //! ends a block, so the blank separating two entries belongs to the one above.
 //!
-//! A column-0 *comment* is the ambiguous case, and the rule is: a run of
-//! column-0 comments ends the block **unless the block's indented body resumes
-//! after the run**. In these files a comment flush against the left margin is
-//! nearly always a caption for the entry below it (`# fork of upstream` above
-//! `bar_pkg:`), and absorbing it into the block above would mean an upsert of
-//! that block silently deletes someone's caption. But when indented content
-//! follows the comment, the comment is plainly interior to the block, and
-//! cutting the block short there would leave the writer splicing over only
-//! half an entry — stale keys stranded next to the ones it just wrote.
+//! A run of column-0 comments ends the block **unless the block's indented
+//! body resumes after the run**: a flush-left comment is nearly always a
+//! caption for the entry below it (`# fork of upstream` above `bar_pkg:`), and
+//! absorbing it into the block above would mean an upsert silently deletes the
+//! caption; but when indented content follows, the comment is interior, and
+//! cutting the block short there would strand stale keys next to freshly
+//! written ones.
 //!
 //! # Line endings
 //!
