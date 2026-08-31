@@ -48,7 +48,7 @@ on:
         type: string
         default: ""
       package-dir:
-        description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`. Packages are discovered and unioned across every dir given; a package name found under more than one dir is an error.'
+        description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/foo`. Packages are discovered and unioned across every dir given; a package name found under more than one dir is an error.'
         required: false
         type: string
         default: packages
@@ -148,11 +148,6 @@ jobs:
       # reusable-workflow steps run in the CALLER's checkout — a repo-local
       # `.github/scripts/...` path 404s for every external caller. The
       # composite ships its own script, resolved via github.action_path.
-      # Emits `all` (JSON array) + `map` (paths-filter map). The map's filter
-      # for each package is its own dir plus the dirs of its TRANSITIVE
-      # path-dep closure, so a change to a leaf retriggers every consumer
-      # whose committed pixi.lock transitively pins it. Single root-[package]
-      # repos use the test composite directly, not this workflow.
       - id: all
         uses: greenroom-robotics/mise/.github/actions/discover@v8
         with:
@@ -236,7 +231,6 @@ jobs:
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "Packages: $packages"
 
-  # Run each package's tests on `runner`.
   test:
     needs: discover
     if: ${{ !inputs.sequential && needs.discover.outputs.packages != '[]' }}
@@ -391,10 +385,8 @@ jobs:
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-subscription-id: ${{ secrets.azure-subscription-id }}
 
-      # Same invocation the actions/test composite assembles, once per package
-      # instead of once per runner. `mise ci test` could sweep a whole
-      # package-dir itself, but per-package invocations keep the pass/fail and
-      # duration attribution the summary needs.
+      # Per-package invocations (not one package-dir sweep) keep the pass/fail
+      # and duration attribution the summary needs.
       - name: Run mise ci test per package
         shell: bash
         env:
@@ -444,8 +436,8 @@ jobs:
               sys.exit(1)
           EOF
 
-      # Report handling mirrors the actions/test composite; reports are
-      # namespaced per package under report-dir, so one shared dir is safe.
+      # Reports are namespaced per package under report-dir, so one shared
+      # dir is safe.
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

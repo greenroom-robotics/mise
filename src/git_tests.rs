@@ -22,21 +22,14 @@ fn commit(repo: &Path, args: &[&str]) {
     process::run_in(repo, "git", &argv).unwrap();
 }
 
-// Guards against re-running `git commit` when an earlier sibling run
-// already staged the identical recipe content: `git commit` errors with
-// "nothing to commit, working tree clean" in that case, so the caller
-// must detect it beforehand via `nothing_staged` and skip the commit.
 #[test]
 fn nothing_staged_detects_no_pending_index_changes() {
     let td = temp_repo();
     let repo = td.path();
 
-    // Nothing staged after a fresh checkout -> nothing staged.
     assert!(nothing_staged(repo).unwrap());
 
-    // Writing and staging a file the same as an already-committed one
-    // (i.e. re-applying an identical recipe update) leaves nothing
-    // staged -> still nothing staged.
+    // Staging a file identical to the committed one leaves nothing staged.
     std::fs::write(repo.join("recipe.yaml"), "same content\n").unwrap();
     process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
     commit(repo, &["-m", "add recipe"]);
@@ -44,22 +37,16 @@ fn nothing_staged_detects_no_pending_index_changes() {
     process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
     assert!(nothing_staged(repo).unwrap());
 
-    // An untracked file left behind in the checkout (e.g. a build
-    // artifact) must not be mistaken for something to commit — unlike
-    // `git status --porcelain`, `git diff --cached` ignores it.
+    // An untracked file must not be mistaken for something to commit.
     std::fs::write(repo.join("untracked.tmp"), "leftover\n").unwrap();
     assert!(nothing_staged(repo).unwrap());
     std::fs::remove_file(repo.join("untracked.tmp")).unwrap();
 
-    // A genuine content change leaves something staged -> not clean.
     std::fs::write(repo.join("recipe.yaml"), "different content\n").unwrap();
     process::run_in(repo, "git", &["add", "recipe.yaml"]).unwrap();
     assert!(!nothing_staged(repo).unwrap());
 }
 
-// The other half of the `git diff --quiet` trichotomy: a pathspec-scoped
-// comparison between two revs, which is how verify-siblings decides whether a
-// sibling has drifted from its release tag.
 #[test]
 fn is_clean_distinguishes_untouched_from_changed_paths() {
     let td = temp_repo();
@@ -171,8 +158,6 @@ fn shallow_clone_checks_out_the_named_branch() {
     );
 }
 
-// The whole point of fetch_rev over a clone: land on an arbitrary commit,
-// not just a branch tip, without downloading history.
 #[test]
 fn fetch_rev_lands_on_an_arbitrary_commit_and_creates_the_destination() {
     let (_origin, url, first, _second) = origin_repo();

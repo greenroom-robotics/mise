@@ -1,7 +1,4 @@
-//! The one place production code spawns subprocesses. (Two test files still
-//! build their own `Command` — `verify_siblings_tests.rs` needs per-invocation
-//! `GIT_*` identity env, and `internal_action_refs.rs` runs outside the lib —
-//! neither is a code path that ships.)
+//! The one place production code spawns subprocesses.
 //!
 //! Three shapes, by what the caller needs back:
 //!
@@ -11,10 +8,6 @@
 //! | stdout | an error | [`capture_in`] |
 //! | stdout *or* the failure | an answer | [`capture_probe`] / [`capture_probe_in`] |
 //! | just the exit code | an answer | [`status_code`] / [`status_code_in`] |
-//!
-//! Arguments are `AsRef<OsStr>`, so `&str`, `String`, `Path`, `PathBuf` and
-//! `OsStr` all work directly — callers never launder a path through
-//! `to_str().unwrap()` and risk a panic on a non-UTF-8 path.
 //!
 //! Every command label that reaches a log or an error goes through
 //! [`crate::secret::scrub`], so a token embedded in an argument (a tokenized
@@ -33,9 +26,9 @@ use crate::secret;
 /// enough for a git/gh/pixi diagnostic, short enough not to bury the message.
 const STDERR_LIMIT: usize = 2000;
 
-/// Human-readable `prog arg arg`, with any registered secret redacted. Lossy
-/// on purpose: a label is diagnostic text, and a non-UTF-8 argument must not
-/// turn a perfectly runnable command into an error.
+/// Human-readable `prog arg arg`, with any registered secret redacted. Lossy:
+/// a label is diagnostic text, and a non-UTF-8 argument must not turn a
+/// runnable command into an error.
 fn label(prog: &str, args: &[impl AsRef<OsStr>]) -> String {
     let mut s = prog.to_string();
     for a in args {
@@ -196,11 +189,7 @@ pub fn capture_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow:
 /// --quiet` reports "no difference" as 0 and "difference" as 1, and both are
 /// successful outcomes. `None` means the process was terminated by a signal
 /// and produced no code at all, which the type keeps distinct from every real
-/// code rather than encoding as a sentinel.
-///
-/// Kept as a pair despite one caller each (`git`'s shared `diff --quiet`
-/// trichotomy, and `ci test`): the alternative is a second module building its
-/// own `Command`, which is what this module exists to prevent.
+/// code.
 pub fn status_code(prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<Option<i32>> {
     status_code_inner(prog, args, None)
 }

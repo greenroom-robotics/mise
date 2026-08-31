@@ -159,12 +159,10 @@ fn is_noarch(toml: &str) -> bool {
 
 #[test]
 fn noarch_detects_python_and_ament_python() {
-    // pixi-build-python backend → noarch
     assert!(is_noarch(
         "[package]\nname=\"c\"\nversion=\"1\"\n\
          [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
     ));
-    // ament_python ROS package → noarch
     assert!(is_noarch(
         "[package]\nname=\"p\"\nversion=\"1\"\n\
          [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
@@ -340,8 +338,7 @@ fn discover_falls_through_when_root_pixi_is_workspace_only() {
 
 #[test]
 fn discover_skips_workspace_only_manifest() {
-    // deepstream_extensions shape: a dev env for a package published from a
-    // hand-authored recipe. It must not break the whole repo's release.
+    // A workspace-only dev env must not break the whole repo's release.
     let tmp = TempDir::new().unwrap();
     make_pkg(tmp.path(), "alpha");
     make_workspace_only(tmp.path(), "deepstream_extensions");

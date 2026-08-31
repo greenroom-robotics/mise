@@ -120,7 +120,6 @@ fn apply_filter_overlays_vendor_recipes() {
 
 #[test]
 fn apply_filter_overlays_vendor_overwriting() {
-    // recipes/foo exists with content "marker"; vendor_recipes/foo exists too
     let td = TempDir::new().unwrap();
     let recipes = td.path().join("recipes");
     fs::create_dir_all(&recipes).unwrap();
@@ -132,7 +131,6 @@ fn apply_filter_overlays_vendor_overwriting() {
     fs::write(vendor.join("foo/new.txt"), "new").unwrap();
 
     apply_recipe_filter(td.path(), &VincaBuildMode::Normal).unwrap();
-    // After overlay, recipes/foo/new.txt should exist and recipes/foo/old.txt should not.
     assert!(recipes.join("foo/new.txt").exists());
     assert!(!recipes.join("foo/old.txt").exists());
 }

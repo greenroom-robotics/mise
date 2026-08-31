@@ -109,9 +109,7 @@ impl FromStr for DeepstreamVersion {
 /// **The rule:** non-empty, first character ASCII alphanumeric, every
 /// character ASCII alphanumeric or one of `-`, `_`, `.`.
 ///
-/// That set is chosen from what the *consumers* of a name require, not from
-/// how the names in this fleet happen to look, because a name that satisfies
-/// the rule is safe at every site one reaches:
+/// A name satisfying the rule is safe at every site it reaches:
 ///
 /// * spliced into a `pixi search` match spec (`<name>==<version>`) — so no
 ///   `=`, `<`, `>`, `*`, `,`, `[`, or whitespace;
@@ -120,11 +118,10 @@ impl FromStr for DeepstreamVersion {
 /// * used as an argv element and as the head of a synthesized `.conda`
 ///   filename for routing.
 ///
-/// The rule is deliberately *permissive*, because this same type carries names
-/// the tool does not control: dependency **keys** copied out of upstream
-/// `pixi.toml` files and solved environments. Rejecting a key a manifest
-/// legitimately declares would turn a parse error into a build outage, so the
-/// rule only forbids what would actually break a consumer above. Concretely:
+/// The rule is *permissive* because this type also carries names the tool
+/// does not control — dependency **keys** copied out of upstream `pixi.toml`
+/// files and solved environments — so it only forbids what would break a
+/// site above. Concretely:
 ///
 /// * uppercase is allowed even though conda names are lowercase by policy, and
 ///   case is preserved rather than folded, since the name is compared against
@@ -195,11 +192,9 @@ impl<'de> Deserialize<'de> for PackageName {
 
 /// A release version of a package this repo publishes.
 ///
-/// Ordered by [`semver::Version`], which is what the release pipeline actually
-/// produces: semantic-release emits `X.Y.Z` and `X.Y.Z-alpha.N`. Ordering by
-/// semver buys the correct total order for free — it compares numeric
-/// prerelease identifiers numerically, so `alpha.2 < alpha.10`, which the
-/// hand-rolled sort key this replaces got backwards.
+/// Ordered by [`semver::Version`], which is what the release pipeline
+/// produces: semantic-release emits `X.Y.Z` and `X.Y.Z-alpha.N`, and semver
+/// compares numeric prerelease identifiers numerically (`alpha.2 < alpha.10`).
 ///
 /// A shorter `X` or `X.Y` is accepted too and filled out to a triple for
 /// ordering, because pixi/conda allow it and hand-written manifests use it. The
@@ -228,11 +223,9 @@ pub struct Version {
 
 impl Version {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
-        // `semver::Comparator` is the crate's own lenient parser: it makes the
-        // minor and patch components optional, which is exactly the widening
-        // we want, without a second version grammar to maintain. It is a
-        // *requirement* parser though, so two things it accepts have to be
-        // refused here.
+        // `semver::Comparator` is the crate's own lenient parser: it makes
+        // the minor and patch components optional. It is a *requirement*
+        // parser though, so some of what it accepts must be refused here.
         //
         // Build metadata first, because `Comparator` has no field for it and
         // would drop it silently — and to this program build metadata is
@@ -449,12 +442,9 @@ impl fmt::Display for RecipeName {
 // GitHub repository URL
 // ---------------------------------------------------------------------------
 
-/// A GitHub repository, identified by owner and name.
-///
-/// Fields are private and the only constructor validates, so every rendering a
-/// caller might want is a method here rather than string surgery at the call
-/// site: the `.git` suffix, the ssh↔https normalization and the compare-URL
-/// shape each have exactly one definition.
+/// A GitHub repository, identified by owner and name. The `.git` suffix, the
+/// ssh↔https normalization and the compare-URL shape each have exactly one
+/// definition here.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GithubRepoUrl {
     owner: String,
@@ -472,12 +462,8 @@ impl GithubRepoUrl {
 
     /// Parse any spelling git writes into `remote.<name>.url`: the https URL
     /// above, the scp-style `git@github.com:<owner>/<repo>[.git]`, or the full
-    /// `ssh://[git@]github.com/<owner>/<repo>[.git]`.
-    ///
-    /// All three occur in real checkouts — the ssh forms depend on how the
-    /// clone was made and on any `url.*.insteadOf` rewrite in effect — and the
-    /// caller only has whatever git reports, so refusing one would fail a
-    /// release for a reason that has nothing to do with the release.
+    /// `ssh://[git@]github.com/<owner>/<repo>[.git]`. All three occur in real
+    /// checkouts, and the caller only has whatever git reports.
     pub fn parse_remote(url: &str) -> anyhow::Result<Self> {
         const SSH_PREFIXES: [&str; 3] = [
             "git@github.com:",
@@ -568,14 +554,9 @@ impl Serialize for GithubRepoUrl {
 // Channels
 // ---------------------------------------------------------------------------
 
-/// A conda channel served over the network.
-///
-/// The capability that matters lives on this type rather than on
-/// [`ChannelUrl`]: a remote channel cannot change while a build job runs
-/// (builds publish into a local output channel and are drained to the real
-/// ones afterwards), so its index may be swept once and cached. That is why
-/// `ChannelIndexCache::get` takes a `&RemoteChannel` — handing it a local
-/// channel is a compile error rather than a rule stated in a comment.
+/// A conda channel served over the network. It cannot change while a build
+/// job runs (builds publish into a local output channel and are drained to
+/// the real ones afterwards), so its index may be swept once and cached.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RemoteChannel(Url);
 
@@ -593,7 +574,7 @@ impl RemoteChannel {
     /// The channel of the same host and parent path named `channel`.
     ///
     /// Routing names destination channels relative to the default one
-    /// (`.../general` → `.../gama`), so this replaces the last path segment.
+    /// (`.../default` → `.../foo`), so this replaces the last path segment.
     pub fn sibling(&self, channel: &str) -> Self {
         let mut url = self.0.clone();
         if let Ok(mut segments) = url.path_segments_mut() {
@@ -622,9 +603,9 @@ impl FromStr for RemoteChannel {
 /// as it goes, so a snapshot of it goes stale mid-loop and it has to be
 /// queried live.
 ///
-/// Holds the directory rather than a `Url` because the `file://` rendering is
-/// consumed by `pixi`, and building it by hand keeps a path with characters a
-/// URL would percent-encode byte-identical to what previous releases emitted.
+/// Holds the directory rather than a `Url`: the `file://` rendering is
+/// consumed by `pixi`, and building it by hand keeps the path byte-identical
+/// rather than percent-encoded.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LocalChannel(PathBuf);
 
@@ -818,12 +799,9 @@ impl PixiNativeManifest {
 
     /// True if the manifest lists an entry named `name`.
     ///
-    /// Deliberately parsed through [`PixiNativeNames`] rather than
-    /// [`Self::from_yaml_str`]: this answers "is this package routed
-    /// pixi-native?" for a package we are about to rewrite, and it must not
-    /// fail because some *other* entry in the file is malformed (an unmigrated
-    /// `ref:`, a URL the buildfarm hasn't taught itself to parse). The file's
-    /// own structure still has to be valid YAML.
+    /// Parsed through [`PixiNativeNames`]: the answer must not fail because
+    /// some *other* entry in the file is malformed. The file's own structure
+    /// still has to be valid YAML.
     pub fn has_entry(yaml: &str, name: &PackageName) -> anyhow::Result<bool> {
         let names: PixiNativeNames = serde_yaml_ng::from_str(yaml)?;
         Ok(names.packages.iter().any(|p| &p.name == name))

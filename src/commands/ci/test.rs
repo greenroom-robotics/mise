@@ -101,8 +101,6 @@ impl Test {
             job.task,
             if self.build_only { " (build-only)" } else { "" }
         );
-        // Lockfile satisfaction is strict by default; --no-locked opts out and
-        // re-resolves from the manifest instead.
         let mut argv: Vec<&OsStr> =
             vec![OsStr::new(if self.build_only { "install" } else { "run" })];
         if self.locked {
@@ -114,16 +112,11 @@ impl Test {
             OsStr::new("-e"),
             OsStr::new(&job.env),
         ]);
-        // `pixi install` only sets up the environment; the task is what
-        // `--build-only` skips running.
         if !self.build_only {
             argv.push(OsStr::new(&job.task));
         }
         let code = crate::process::status_code("pixi", &argv)?;
-        // Collect reports after each job, namespaced by env, so variants that
-        // share the same colcon `build/` (e.g. standalone vs Boost Asio) don't
-        // overwrite each other's JUnit XML. Collect regardless of pass/fail so
-        // failing-test XML is captured too.
+        // Collected regardless of pass/fail so failing-test XML is captured too.
         match collect_reports(pkg_dir, &self.report_dir, &job.env) {
             Ok(0) => eprintln!("    no JUnit XML found under {}/build", pkg_dir.display()),
             Ok(n) => println!(

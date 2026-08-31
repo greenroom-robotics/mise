@@ -8,8 +8,7 @@ use crate::git;
 use crate::process;
 use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
-/// Called by semantic-release's @semantic-release/exec plugin once a new version
-/// has been determined. Opens/updates a PR on the recipes repo with the new pin.
+/// Opens/updates a PR on the recipes repo pinning the released version.
 #[derive(Args, Debug)]
 pub struct RecipesPr {
     /// Release version, no leading 'v' (matches `${nextRelease.version}`).
@@ -24,19 +23,15 @@ pub struct RecipesPr {
     /// Single package, used when semantic-release ran in multi-package mode.
     #[arg(long)]
     pub package: Option<PackageName>,
-    /// Accepted and ignored for compatibility: older callers (the recipes-pr
-    /// composite action) still pass `--ros-distro`, but nothing reads it.
-    /// `Option` rather than a defaulted `String` so passing it is
-    /// distinguishable from omitting it, and thus warnable.
+    /// Ignored legacy flag; passing it logs a warning.
     #[arg(long, hide = true)]
     pub ros_distro: Option<String>,
     /// Tagged commit SHA (matches ${nextRelease.gitHead}). Used as source.rev for vendored recipes.
     #[arg(long)]
     pub sha: Sha40,
-    /// In a sweep (set by the action when no explicit package is requested), a
-    /// name with no monorepo pixi.toml and no vendored recipe is a non-conda
-    /// package (e.g. a launch/meta package) — skip it instead of erroring.
-    /// Omitted for explicit single-package releases so a typo still fails loudly.
+    /// In a sweep, a name with no monorepo pixi.toml and no vendored recipe is
+    /// a non-conda package (e.g. a launch/meta package) — skip it instead of
+    /// erroring. Omit for explicit single-package releases so a typo fails loudly.
     #[arg(long)]
     pub allow_missing_recipe: bool,
     /// Repeatable. Packages whose pixi-native entry gets `lfs: true`, so
@@ -55,18 +50,6 @@ impl RecipesPr {
             tracing::warn!("--ros-distro is accepted but ignored; remove it from the caller");
         }
 
-        // 1. Resolve which package(s) we're upserting. semantic-release always
-        //    invokes us with a known version; in single-package mode --package
-        //    is set; in multi-package mode the plugin's cwd is the package
-        //    being released, so --package may also be set there. If --package
-        //    is empty we upsert every package in --package-dir at the same
-        //    version (matches platform_cli's behavior). A `--package` naming
-        //    something with no monorepo pixi.toml (and no root manifest) is a
-        //    vendored monorepo package — its conda artifact is built from a
-        //    hand-authored vendor_recipes/<name>/recipe.yaml, so there's
-        //    nothing to discover.
-        // Resolved once: every path-relativization below anchors on it, and
-        // it is also where the source repo's remote is read from.
         let cwd = std::env::current_dir()?;
 
         let mode = release_mode(&self.package_dir, self.package.as_ref())?;
@@ -77,12 +60,11 @@ impl RecipesPr {
                 if pkgs.is_empty() {
                     anyhow::bail!("no packages found under {}", self.package_dir.display());
                 }
-                // Path from the source-repo root to the dir holding each
-                // package's pixi.toml. "" or "." means the package sits at
-                // the repo root. Anchor on the git toplevel, not cwd:
-                // multi-semantic-release runs the publish step with cwd =
-                // the package dir, and --package-dir arrives absolute, so
-                // cwd-stripping would leak an absolute subdir.
+                // Subdir from the source-repo root to each package's
+                // pixi.toml ("" or "." = repo root). Anchored on the git
+                // toplevel: the publish step's cwd is the package dir and
+                // --package-dir arrives absolute, so cwd-stripping would
+                // leak an absolute subdir.
                 let toplevel = git::toplevel(&cwd)?;
                 pkgs.iter()
                     .map(|pkg| {
@@ -107,13 +89,11 @@ impl RecipesPr {
             }
         };
 
-        // 2. Identify the source repo from the current git remote.
         let src_url = GithubRepoUrl::parse_remote(&git::remote_url(&cwd, ORIGIN)?)?;
         let src_short = src_url.repo();
         let tag = format!("v{}", self.version);
         let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
-        // 3. Clone the recipes repo into a tempdir.
         let tmp = tempfile::TempDir::new()?;
         let recipes_root = tmp.path().join("recipes");
         git::shallow_clone(
@@ -122,14 +102,9 @@ impl RecipesPr {
             &recipes_root,
         )?;
 
-        // 4. Create or continue the rolling release branch. The rolling PR
-        //    being open is the sole signal: pending entries on an open
-        //    rolling PR are never clobbered — the upsert is block-scoped per
-        //    package, so appending preserves sibling entries; a closed
-        //    (unmerged) PR means the content was rejected and starting fresh
-        //    from main is correct. This also covers same-run coupled
-        //    releases: the first package's push creates the PR, so the
-        //    second package sees it open and appends.
+        // The rolling PR being open is the sole signal: open → append (the
+        // upsert is block-scoped per package, so sibling entries survive);
+        // closed/absent → its content was rejected, reset from main.
         let branch = release_branch(src_short);
         let pr = PrRef::new(&self.recipes_repo, &branch)?;
         let existing_body = gh::pr::list_body(pr);
@@ -145,23 +120,18 @@ impl RecipesPr {
             process::run_in(&recipes_root, "git", &["checkout", "-b", &branch])?;
         }
 
-        // 5. Apply each package's release (vendored recipe or rosdistro upsert).
         use std::collections::BTreeSet;
         let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
-        // Package -> tag for everything the PR carries. Seeded from the open
-        // PR's body so a rolling PR that already holds siblings keeps listing
-        // them (at their own versions) instead of being rewritten around
-        // whichever package released last.
+        // Seeded from the open PR's body so siblings already on the rolling
+        // PR keep their entries at their own versions.
         let mut released: std::collections::BTreeMap<PackageName, String> = existing_body
             .as_deref()
             .map(body_packages)
             .unwrap_or_default();
-        // The refs each package was pinned to before this release, for a diff link.
         let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
         for (name, subdir) in &targets {
             // A vendored-by-name target with no recipe would otherwise fall
-            // through routing to a spurious pixi-native entry. Decide
-            // skip-vs-error based on whether this is a tolerant sweep.
+            // through routing to a spurious pixi-native entry.
             let has_recipe = recipes_upsert::vendored_recipe_path(&recipes_root, name).is_some();
             match recipe_action(&mode, has_recipe, self.allow_missing_recipe) {
                 RecipeAction::Skip => {
@@ -192,30 +162,16 @@ impl RecipesPr {
             released.insert(name.clone(), tag.clone());
         }
 
-        // Every target was skipped (sweep tolerating packages with no conda
-        // recipe) — there's nothing to commit, so don't try to open a PR.
         if changed.is_empty() {
             println!("no recipe changes to publish; nothing to do");
             return Ok(());
         }
 
-        // 6. Commit + push + open PR.
         let add_args: Vec<&OsStr> = std::iter::once(OsStr::new("add"))
             .chain(changed.iter().map(|p| p.as_os_str()))
             .collect();
         process::run_in(&recipes_root, "git", &add_args)?;
         let title = release_title(src_short, &released, &tag);
-        // A package can be a no-op against the recipes checkout: an earlier CI
-        // run (e.g. a sibling release workflow sweeping the same tag) may have
-        // already staged the identical recipe content, in which case `git
-        // diff --cached --quiet` reports nothing staged and `git commit`
-        // would fail with "nothing to commit, working tree clean". What to do
-        // about that depends on the baseline: if we reset from main (no open
-        // PR), there's nothing new to publish at all, so bail out before the
-        // push/PR steps rather than force-pushing main-as-is and opening an
-        // empty PR. If we appended to an open PR, the branch carries prior
-        // pending content that still needs to reach the remote, so we skip
-        // only the commit and continue through push + PR refresh.
         match classify_noop(git::nothing_staged(&recipes_root)?, pr_open) {
             NoopOutcome::EarlyReturn => {
                 println!("recipe for {title} already up to date; nothing to publish");
@@ -225,10 +181,6 @@ impl RecipesPr {
                 tracing::info!("recipe for {title} already up to date; skipping commit");
             }
             NoopOutcome::Commit => {
-                // Commit as the App bot. The release action exports its identity via
-                // GIT_AUTHOR_*/GIT_COMMITTER_*, which git honours natively; we mirror
-                // it onto -c so a standalone run still has a usable identity, falling
-                // back to the greenroom-bot label only when the env is unset.
                 let (git_name, git_email) = git_identity();
                 let name_cfg = format!("user.name={git_name}");
                 let email_cfg = format!("user.email={git_email}");
@@ -251,13 +203,10 @@ impl RecipesPr {
                 )?;
             }
         }
-        // Plain --force, not --force-with-lease: the recipes repo is cloned
-        // shallow on `main` only, so there's no remote-tracking ref for the
-        // rolling branch and --force-with-lease would reject the push.
+        // The clone is shallow on `main` only: the rolling branch has no
+        // remote-tracking ref, so --force-with-lease would reject the push.
         process::run_in(&recipes_root, "git", &["push", "--force", ORIGIN, &branch])?;
 
-        // Link to the source-repo diff between what the recipe was pinned to
-        // before and this release, so a reviewer sees what changed.
         let old = diff_ref(&old_refs, &self.sha);
         let body = pr_body(
             old.map(|o| src_url.compare_url(o, self.sha.as_str()))
@@ -266,21 +215,16 @@ impl RecipesPr {
         );
 
         if pr_open {
-            // The rolling PR already exists from a previous release; refresh its
-            // title and body so the version and diff link aren't stale.
             gh::pr::edit(pr, &title, &body)?;
             println!("PR already exists for {branch}; branch, title and body updated.");
         } else {
             gh::pr::create(pr, &title, &body)?;
         }
 
-        // Enable GitHub native auto-merge so the PR lands once CI passes
-        // (mirrors `mise bump`'s behavior).
         gh::pr::merge_auto(pr)?;
 
-        // Drop a link to the recipes PR into the Actions run summary so the
-        // release job's page points straight at it. Best-effort: a missing URL
-        // or no $GITHUB_STEP_SUMMARY (local run) must not fail the release.
+        // Best-effort: a missing URL or no $GITHUB_STEP_SUMMARY (local run)
+        // must not fail the release.
         if let Some(url) = gh::pr::view_url(pr) {
             println!("recipes PR: {url}");
             gh::summary::append(&format!("### Recipes PR\n\n[{title}]({url})\n"));
@@ -290,10 +234,8 @@ impl RecipesPr {
     }
 }
 
-/// Version-independent rolling branch, one per source repo. Packages land on
-/// it as long as the rolling PR is open (see `pr_exists`); a closed/absent PR
-/// resets it from main. Shared so coupled sibling releases land in ONE
-/// recipes PR and build together in one pr-validate run.
+/// Version-independent rolling branch, one per source repo, so coupled
+/// sibling releases land in one recipes PR and build together.
 fn release_branch(src_short: &str) -> String {
     format!("release/{src_short}")
 }
@@ -302,12 +244,10 @@ fn run_marker(run_id: &str) -> String {
     format!("[mise-run:{run_id}]")
 }
 
-/// PR title / commit message, mirroring `release_branch`. Single-package repos
-/// read `release: <repo> v<ver>`; one package `release: <repo>/<pkg> v<ver>`;
-/// several `release: <repo>/{a v1.2.3, b v0.4.0}`. Packages on a rolling PR are
-/// each at their own version, so the version travels with the name. A list too
-/// long for GitHub's 256-char title collapses to a count — the full list lives
-/// in the PR body, which is what the next append reads back.
+/// PR title / commit message: `release: <repo> v1`, `release: <repo>/<pkg> v1`,
+/// or `release: <repo>/{a v1, b v2}`. A list too long for the title collapses
+/// to a count — the full list lives in the PR body, which is what the next
+/// append reads back.
 fn release_title(
     src_short: &str,
     packages: &std::collections::BTreeMap<PackageName, String>,
@@ -333,30 +273,23 @@ fn release_title(
 }
 
 /// Recipes PRs are squash-merged, so the title becomes the commit subject —
-/// keep it inside the conventional 72-char subject line rather than GitHub's
-/// 256-char title cap.
+/// keep it inside the conventional 72-char subject line.
 const MAX_TITLE_CHARS: usize = 72;
 
-/// How `recipes-pr` sources the package(s) to release. Distinct from
-/// [`recipes_upsert::ReleaseTarget`], which is where one package's release
-/// *lands* in the recipes repo — this only says where the list of packages
-/// comes from.
+/// Where the list of packages to release comes from — not where a release
+/// lands (that is [`recipes_upsert::ReleaseTarget`]).
 #[derive(Debug, PartialEq, Eq)]
 enum ReleaseMode {
-    /// Discover pixi packages under `--package-dir` (existing behavior).
+    /// Discover pixi packages under `--package-dir`.
     Discovered,
     /// A single package named by `--package` that has no monorepo pixi.toml;
-    /// its conda artifact is built from a hand-authored vendored recipe
-    /// (e.g. deepstream_extensions).
+    /// its conda artifact is built from a hand-authored vendored recipe.
     VendoredByName(PackageName),
 }
 
-/// True when a manifest exists at `path` AND declares a `[package]`.
-///
-/// The distinction matters: a *workspace-only* manifest is a dev environment
-/// for a package built somewhere else, so for release purposes it is the same
-/// as having no manifest at all. Checking mere file existence would classify
-/// such a package as `Discovered` and then fail on the missing `[package]`.
+/// True when a manifest exists at `path` AND declares a `[package]`. A
+/// workspace-only manifest is a dev environment for a package built somewhere
+/// else, so for release purposes it is the same as no manifest at all.
 fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
     if !path.exists() {
         return Ok(false);
@@ -367,9 +300,9 @@ fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
     ))
 }
 
-/// Choose the release mode. A `--package` with neither a per-package
-/// `<dir>/<pkg>/pixi.toml` nor a root `<dir>/pixi.toml` *declaring a package*
-/// is a vendored monorepo package; everything else discovers as before.
+/// A `--package` with neither a per-package `<dir>/<pkg>/pixi.toml` nor a
+/// root `<dir>/pixi.toml` declaring a package is a vendored monorepo package;
+/// everything else is `Discovered`.
 fn release_mode(
     package_dir: &std::path::Path,
     package: Option<&PackageName>,
@@ -385,9 +318,8 @@ fn release_mode(
     }
 }
 
-/// What to do with a resolved target once we know whether a vendored recipe
-/// exists for it. Only a `VendoredByName` with no recipe is special: skip it in
-/// a tolerant sweep (`allow_missing`), else fail loudly (explicit target).
+/// Only a `VendoredByName` with no recipe is special: skip it in a tolerant
+/// sweep (`allow_missing`), else fail loudly.
 #[derive(Debug, PartialEq, Eq)]
 enum RecipeAction {
     Apply,
@@ -423,9 +355,8 @@ fn diff_ref<'a>(
         .filter(|v| *v != sha.as_str())
 }
 
-/// Git author/committer identity for the recipes commit. Prefers the App bot
-/// identity the release action exports via GIT_AUTHOR_NAME/EMAIL, falling back
-/// to the greenroom-bot label for standalone runs where those aren't set.
+/// Commit identity: GIT_AUTHOR_NAME/EMAIL when set, else the greenroom-bot
+/// label so a standalone run still has a usable identity.
 fn git_identity() -> (String, String) {
     fn env_or(var: &str, fallback: &str) -> String {
         std::env::var(var)
@@ -439,8 +370,7 @@ fn git_identity() -> (String, String) {
     )
 }
 
-/// Gremlin flavor text for PR bodies. The footer stays factual so anyone
-/// reading the PR still knows what created it.
+/// Gremlin flavor text for PR bodies.
 const GREMLINS: &[&str] = &[
     "🐉 A gremlin smelled a fresh release and dragged this recipe in by its tail.",
     "🐉 The recipe gremlins have been fed. They demand you click merge.",
@@ -488,9 +418,6 @@ fn pr_body(
     body
 }
 
-/// The three things that can happen with a staged upsert, depending on
-/// whether anything is actually staged and whether the rolling PR is open
-/// (i.e. whether the branch was appended-to or reset from main).
 #[derive(Debug, PartialEq, Eq)]
 enum NoopOutcome {
     /// Something is staged: commit it normally.

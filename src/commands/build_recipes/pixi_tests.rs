@@ -23,12 +23,10 @@ packages:
 "#;
     let m = crate::types::PixiNativeManifest::from_yaml_str(yaml).unwrap();
 
-    // --only alpha,beta with no size filter → alpha, beta
     let sel = select_entries(&m.packages, None, &[pkg("alpha"), pkg("beta")]);
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "beta"]);
 
-    // --only alpha,beta + runner-size 4cpu → alpha only
     let sel = select_entries(
         &m.packages,
         Some("4cpu".parse().unwrap()),
@@ -37,7 +35,6 @@ packages:
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha"]);
 
-    // empty --only → size filter only (all 4cpu)
     let sel = select_entries(&m.packages, Some("4cpu".parse().unwrap()), &[]);
     let names: Vec<&str> = sel.iter().map(|e| e.name.as_str()).collect();
     assert_eq!(names, vec!["alpha", "gamma"]);

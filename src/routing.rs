@@ -1,12 +1,10 @@
-//! Channel routing for published artifacts, mirroring ros-recipes'
-//! `scripts/staging.py` (`load_routing_rules` / `resolve_channels`).
+//! Channel routing for published artifacts.
 //!
-//! ros-recipes' `routing.yaml` maps built .conda filenames to destination
-//! channels via ordered glob rules — first match wins, no match routes to the
-//! default channel. The buildfarm's already-published skip check must look in
-//! the channel a package actually publishes to, not just `general`, or every
-//! routed package (gama/lookout/missim cli+config, gama variants) rebuilds on
-//! every run.
+//! `routing.yaml` maps built .conda filenames to destination channels via
+//! ordered glob rules — first match wins, no match routes to the default
+//! channel. The buildfarm's already-published skip check must look in the
+//! channel a package actually publishes to, not just the default, or every
+//! routed package rebuilds on every run.
 
 use std::path::Path;
 
@@ -34,9 +32,8 @@ struct RawRule {
 
 /// Compile a routing.yaml glob pattern to an anchored regex. `*` becomes
 /// `.*`; the literal token `{variant}` becomes a named non-greedy capture —
-/// non-greedy so `gama_config_{variant}-*` against
-/// `gama_config_austal_m_usv-5.0.0-py_0.conda` captures up to the FIRST `-`
-/// (the version boundary). Same semantics as staging.py's _pattern_to_regex.
+/// non-greedy so `foo_{variant}-*` against `foo_bar_baz-1.2.3-py_0.conda`
+/// captures up to the FIRST `-` (the version boundary).
 fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
     let mut out = String::from("^");
     let mut rest = pattern;
@@ -62,8 +59,8 @@ fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
 }
 
 /// Load `routing.yaml` from the repo root. A missing file yields no rules
-/// (everything routes to the default channel — the pre-routing behaviour); a
-/// malformed file errors loudly rather than silently mis-routing.
+/// (everything routes to the default channel); a malformed file errors loudly
+/// rather than silently mis-routing.
 pub fn load_rules(repo_root: &Path) -> anyhow::Result<Vec<RoutingRule>> {
     let path = repo_root.join("routing.yaml");
     if !path.is_file() {

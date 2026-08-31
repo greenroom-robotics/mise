@@ -1,21 +1,14 @@
 //! `pixi.toml`: one reader, one writer.
 //!
-//! Two views live here, deliberately, because they answer different questions:
-//!
-//! * **Read** — [`Manifest`] / [`PackageManifest`], a serde model. Use it for
-//!   every question *about* a manifest: package identity, build settings,
-//!   platform support, dependency tables. It is lossy (comments, key order and
-//!   spacing are gone) and it cannot write.
+//! * **Read** — [`Manifest`] / [`PackageManifest`], a serde model. Lossy
+//!   (comments, key order and spacing are gone) and cannot write.
 //! * **Write** — the `toml_edit` functions ([`set_package_version`],
-//!   [`set_build_number`], [`resolve_path_deps`], [`prepend_channels`]). Use
-//!   them for every mutation: a manifest we rewrite is either committed by
-//!   semantic-release or handed to `pixi build`, and in both cases the diff has
-//!   to be limited to the key we touched. Never round-trip a manifest through
-//!   the serde model to change it.
+//!   [`set_build_number`], [`resolve_path_deps`], [`prepend_channels`]).
+//!   A rewritten manifest's diff must be limited to the key touched, so
+//!   never round-trip a manifest through the serde model to change it.
 //!
 //! [`Package`] is the two joined at the point of discovery: a manifest parsed
-//! once, carrying the directory that owns it, so no downstream command re-reads
-//! the file or re-derives the directory.
+//! once, carrying the directory that owns it.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -43,18 +36,10 @@ pub const DEP_TABLES: &[&[&str]] = &[
 // ---------------------------------------------------------------------------
 
 /// A parsed `pixi.toml`.
-///
-/// The two variants are the two kinds of manifest this repo's tooling meets,
-/// so no caller has to probe for a `[package]` table itself.
 #[derive(Debug)]
 pub enum Manifest {
-    /// No `[package]` table.
-    ///
-    /// A workspace-only manifest is a dev/test environment for something this
-    /// repo does not publish — e.g. a DeepStream-linked package whose artifact
-    /// comes from a hand-authored recipe in ros-recipes, but which still wants
-    /// a pixi env for colcon and the ROS dev tools. It has no version to
-    /// release and nothing for `pixi build` to build.
+    /// No `[package]` table: a dev/test environment for something this repo
+    /// does not publish — no version to release, nothing for `pixi build`.
     WorkspaceOnly,
     /// Declares a `[package]` table: a releasable, buildable package.
     Package(PackageManifest),
@@ -69,11 +54,9 @@ pub struct PackageManifest {
     deps: Vec<Dep>,
 }
 
-/// A package's name and version together, which is what every release path
-/// needs. Guaranteed present on any [`PackageManifest`] value: both keys are
-/// required to deserialize `[package]`, so a manifest that parses into one
-/// always has an identity. A `[package]` that fails on those keys never becomes
-/// a `PackageManifest` — see [`Candidate::UnreadableIdentity`].
+/// A package's name and version together. Both keys are required to
+/// deserialize `[package]`, so a manifest that parses into a
+/// [`PackageManifest`] always has an identity.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PackageIdentity {
     pub name: PackageName,
@@ -125,7 +108,6 @@ struct BuildBackend {
 
 #[derive(Debug, Deserialize)]
 struct BuildConfig {
-    /// Defaults to 0 when omitted from the manifest.
     #[serde(default, rename = "build-number")]
     build_number: u64,
     #[serde(default, rename = "build-type")]
@@ -160,8 +142,7 @@ impl Manifest {
     }
 }
 
-/// Every dependency entry in [`DEP_TABLES`] order. Values are cloned out of the
-/// document so the read view owns them; dep tables are a handful of entries.
+/// Every dependency entry in [`DEP_TABLES`] order.
 fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
     let mut out = Vec::new();
     for table_path in DEP_TABLES {
@@ -194,23 +175,17 @@ fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
 }
 
 impl Dep {
-    /// The `path = "..."` of a local dep, relative to the consumer's directory.
-    ///
-    /// Callers must exclude the self-as-workspace-member idiom themselves, and
-    /// they do it two different ways on purpose: lexically (`path == "."`) when
-    /// only the manifest is in hand, and by resolved target when the caller
-    /// knows the package's own directory (which also catches `../<self>`).
+    /// The `path = "..."` of a local dep, relative to the consumer's
+    /// directory. Includes the self-as-workspace-member idiom (`path = "."`);
+    /// callers exclude it.
     pub fn path(&self) -> Option<&str> {
         self.value.get("path").and_then(toml::Value::as_str)
     }
 }
 
-/// The version of an exact `==X.Y.Z` pin, else `None`. Exact means `==`
-/// followed by a single concrete semantic version. Ranges (`>=`, `<`),
-/// wildcards (`==1.2.*`) and `+build` metadata are not pins and [`Version`]
-/// already rejects all of them. The three-component check is the one exclusion
-/// that has to be explicit, because `Version` is wider than a pin here: a
-/// two-component `==1.2` parses, but it is a range to the solver.
+/// The version of an exact `==X.Y.Z` pin, else `None`. The explicit-triple
+/// check matters: a two-component `==1.2` parses as a [`Version`] but is a
+/// range to the solver.
 fn exact_pin_version(s: &str) -> Option<Version> {
     Version::parse(s.trim().strip_prefix("==")?)
         .ok()
@@ -236,7 +211,6 @@ impl PackageManifest {
         &self.package.version
     }
 
-    /// Name and version together.
     pub fn identity(&self) -> PackageIdentity {
         PackageIdentity {
             name: self.package.name.clone(),
@@ -260,9 +234,8 @@ impl PackageManifest {
 
     /// `true` if this package builds a platform-independent (noarch) artifact:
     /// the `pixi-build-python` backend, or an `ament_python` ROS package. Those
-    /// produce byte-identical output on every arch, so the buildfarm only builds
-    /// them on linux-64. Anything else (ament_cmake, ament_idl, cmake, unknown)
-    /// compiles per-arch and is not treated as noarch.
+    /// produce byte-identical output on every arch, so the buildfarm only
+    /// builds them on linux-64.
     pub fn is_noarch(&self) -> bool {
         let Some(build) = &self.package.build else {
             return false;
@@ -325,8 +298,7 @@ impl PackageManifest {
 // ---------------------------------------------------------------------------
 
 /// A package discovered on disk: its manifest parsed once, with the directory
-/// that owns it. Commands take these rather than paths, so nothing downstream
-/// re-reads the manifest or re-derives the directory from the file path.
+/// that owns it.
 #[derive(Debug)]
 pub struct Package {
     /// Path to the package's `pixi.toml`, as given to discovery.
@@ -364,20 +336,15 @@ impl Package {
         }
     }
 
-    /// Name and version.
     pub fn identity(&self) -> PackageIdentity {
         self.manifest.identity()
     }
 }
 
-/// What discovery found at one candidate `pixi.toml`.
-///
-/// Outcomes rather than `Result<Option<Package>>` because the failures must not
-/// all be `?`-able: discovery sweeps a directory nobody curated for it, and a
-/// manifest it cannot use — missing `[package]`, TOML syntax error, or a key
-/// that is missing or whose type does not match the schema — usually says
-/// nothing about its neighbours. Returning the failure as a variant forces the sweep to decide
-/// what to do with each kind instead of aborting on all of them.
+/// What discovery found at one candidate `pixi.toml`. Discovery sweeps a
+/// directory nobody curated for it, and a manifest it cannot use usually says
+/// nothing about its neighbours — each variant lets the sweep decide per kind
+/// instead of aborting on all of them.
 enum Candidate {
     Package(Box<Package>),
     /// Parsed, but declares no `[package]` — see [`Manifest::WorkspaceOnly`].
@@ -390,8 +357,7 @@ enum Candidate {
     },
     /// Declares a `[package]` that does not give this tool a readable `name`
     /// and `version` — either key absent, or spelled in a way our newtypes
-    /// reject. This *is* a package, and it is one we would otherwise drop on
-    /// the floor, so it is fatal even in a tolerant sweep.
+    /// reject. This *is* a package, so it is fatal even in a tolerant sweep.
     UnreadableIdentity {
         path: PathBuf,
         error: anyhow::Error,
@@ -454,11 +420,8 @@ impl Candidate {
 /// Whether `text` is valid TOML declaring a `[package]` table whose `name` or
 /// `version` is missing, or is not a string our own newtypes accept.
 ///
-/// Deliberately structural rather than a match on the serde error text, and
-/// deliberately limited to identity: a `[package]` with a bad `build-number` is
-/// not fatal, because nothing about releasing *this* package reads it.
-///
-/// The table check is load-bearing. A `package` key that is not a table at all
+/// Limited to identity: a `[package]` with a bad `build-number` is not fatal.
+/// The table check is load-bearing: a `package` key that is not a table
 /// (`package = "oops"`, a stray `[[package]]`) is a malformed manifest, not a
 /// package that names itself unreadably — it stays a tolerated skip so one
 /// broken file cannot abort discovery for its siblings.
@@ -492,13 +455,10 @@ fn declares_unreadable_identity(text: &str) -> bool {
 /// one mistyped key in a monorepo would otherwise block the release of every
 /// unrelated package sitting beside it.
 pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<Package>> {
-    // Root-package layout: package_dir itself holds the package's pixi.toml
-    // (e.g. mise — a single-package repo with pixi.toml at its root). Only take
-    // this branch when the root pixi.toml is a readable package; a
-    // workspace-only or unusable root manifest is skipped and falls through to
-    // the per-subdir scan so it doesn't shadow real packages under package_dir.
-    // A root manifest with an unreadable *identity* is the exception: fatal,
-    // because silently skipping it would drop a real package from the release.
+    // Root-package layout: package_dir itself holds the package's pixi.toml.
+    // A workspace-only or unusable root manifest falls through to the
+    // per-subdir scan; an unreadable *identity* is fatal (silently skipping
+    // would drop a real package from the release).
     let root_pixi = package_dir.join(PIXI_TOML);
     if root_pixi.exists()
         && let Some(pkg) = Candidate::read(&root_pixi).into_package()?
@@ -517,8 +477,6 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
         if !pixi.exists() {
             anyhow::bail!("package {name} not found at {}", pixi.display());
         }
-        // An explicit request naming something unreleasable says so, rather
-        // than letting the caller trip over a missing [package] later.
         let manifest = match Manifest::read(&pixi)? {
             Manifest::Package(m) => m,
             Manifest::WorkspaceOnly => anyhow::bail!(
@@ -548,11 +506,9 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
 }
 
 /// A pixi manifest `mise ci test` can run pixi commands against — either a
-/// releasable [`Package`] or a workspace-only manifest with no `[package]`
-/// table (e.g. a docker-build variant workspace that has no publishable
-/// package but still has pixi environments/tasks to install and test).
-/// Running tests never reads package identity, only the manifest path and
-/// the directory pixi commands run in.
+/// releasable [`Package`] or a workspace-only manifest. Running tests never
+/// reads package identity, only the manifest path and the directory pixi
+/// commands run in.
 #[derive(Debug)]
 pub struct TestTarget {
     pub manifest_path: PathBuf,
@@ -626,12 +582,9 @@ pub fn discover_test_targets(
 // ---------------------------------------------------------------------------
 
 /// Set `[package].version`, preserving every comment, key order and blank line
-/// in the rest of the document.
-///
-/// Text in, text out, and not pixi-specific: Cargo.toml has the same
-/// `[package] version` shape and `ci sync-cargo` bumps it through here too.
-/// Errors if there is no `[package]` table or it has no `version` key —
-/// creating either would be papering over a manifest that isn't a package.
+/// in the rest of the document. Not pixi-specific: Cargo.toml has the same
+/// `[package] version` shape. Errors if there is no `[package]` table or it
+/// has no `version` key.
 pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = toml_text.parse().context("parsing TOML")?;
     let package = doc
@@ -718,16 +671,11 @@ pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result
 /// fresh sibling.
 #[derive(Debug)]
 pub struct ResolvedDep {
-    /// The dependency *key* in the consumer's manifest (e.g. `ros-kilted-lib`).
-    /// This is the channel artifact name, which is what `ChannelIndex` /
-    /// `version_published` / `built_this_job` / the local-build guard key off
-    /// of. It is NOT necessarily the sibling's `package.name`: the published
-    /// artifact name is prefixed/transformed relative to it. The dep key is
-    /// guaranteed correct because the consumer's manifest can only solve
-    /// against the real channel name.
+    /// The dependency *key* in the consumer's manifest — the channel artifact
+    /// name, not necessarily the sibling's `package.name`.
     pub name: PackageName,
     pub version: Version,
-    /// The sibling's pixi.toml inside the same checkout (used for fallback local builds).
+    /// The sibling's pixi.toml inside the same checkout.
     pub manifest: PathBuf,
 }
 
@@ -738,8 +686,8 @@ pub struct ResolvedDep {
 /// consumers accept future sibling releases within the major without a
 /// re-release; [`SiblingPinStyle::Exact`] is the lockstep opt-in.
 ///
-/// This is only ever called by the farm (via `mise build-recipes`) on
-/// ephemeral temp checkouts; the committed manifest keeps its path deps.
+/// For ephemeral temp checkouts only; the committed manifest keeps its path
+/// deps.
 pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result<Vec<ResolvedDep>> {
     let manifest_dir = manifest_path.parent().unwrap_or(Path::new(""));
     let text = std::fs::read_to_string(manifest_path)
@@ -770,9 +718,7 @@ fn for_each_dep_table_mut(
     Ok(())
 }
 
-/// Walk `path` from `item` to the table it names. Recursive rather than a loop
-/// because reassigning a `&mut` borrow inside a loop does not pass the borrow
-/// checker.
+/// Walk `path` from `item` to the table it names.
 fn table_at_mut<'a>(
     item: &'a mut toml_edit::Item,
     path: &[&str],
@@ -784,8 +730,6 @@ fn table_at_mut<'a>(
 }
 
 /// Rewrite the sibling `path =` deps of one table to a `style` version pin.
-/// A free fn rather than a closure because the closure form fights the borrow
-/// checker across the `get_mut` walk.
 fn rewrite_path_deps_in(
     table: &mut dyn toml_edit::TableLike,
     manifest_dir: &Path,

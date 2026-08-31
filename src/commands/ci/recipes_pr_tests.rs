@@ -13,7 +13,6 @@ fn release_mode_vendored_when_no_manifest() {
     let td = tempfile::TempDir::new().unwrap();
     let pkgs = td.path().join("packages");
     std::fs::create_dir_all(&pkgs).unwrap();
-    // No packages/deepstream_extensions/pixi.toml and no packages/pixi.toml.
     assert_eq!(
         release_mode(&pkgs, Some(&pkg("deepstream_extensions"))).unwrap(),
         ReleaseMode::VendoredByName(pkg("deepstream_extensions"))
@@ -38,10 +37,6 @@ fn release_mode_discovered_when_per_package_manifest_exists() {
 
 #[test]
 fn release_mode_vendored_when_manifest_is_workspace_only() {
-    // deepstream_extensions ships a dev-env pixi.toml (no [package]) so it
-    // can be built with colcon in a DS container, but its conda artifact
-    // still comes from vendor_recipes/. The manifest's mere existence must
-    // not reclassify it as a discoverable package.
     let td = tempfile::TempDir::new().unwrap();
     let pkgs = td.path().join("packages");
     std::fs::create_dir_all(pkgs.join("deepstream_extensions")).unwrap();
@@ -82,7 +77,6 @@ fn release_mode_discovered_when_no_package_filter() {
 
 #[test]
 fn recipe_action_applies_for_discovered() {
-    // Discovered packages always apply, regardless of has_recipe/allow.
     assert_eq!(
         recipe_action(&ReleaseMode::Discovered, false, false),
         RecipeAction::Apply
@@ -99,7 +93,6 @@ fn recipe_action_applies_for_vendored_with_recipe() {
 
 #[test]
 fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
-    // No recipe + not allowed to miss (explicit target) -> loud error.
     assert_eq!(
         recipe_action(&ReleaseMode::VendoredByName(pkg("x")), false, false),
         RecipeAction::Error
@@ -108,7 +101,6 @@ fn recipe_action_errors_for_vendored_without_recipe_when_explicit() {
 
 #[test]
 fn recipe_action_skips_for_vendored_without_recipe_when_sweeping() {
-    // No recipe + allowed to miss (sweep) -> skip quietly.
     assert_eq!(
         recipe_action(&ReleaseMode::VendoredByName(pkg("x")), false, true),
         RecipeAction::Skip
@@ -137,8 +129,6 @@ fn release_title_shapes() {
         release_title("toolbox", &pkgs(&[("gama", "v1.0.0")]), "v1.0.0"),
         "release: toolbox/gama v1.0.0"
     );
-    // Each package carries its own version — a rolling PR accumulates
-    // packages released independently.
     assert_eq!(
         release_title(
             "toolbox",
@@ -164,8 +154,6 @@ fn body_packages_round_trips() {
     }
 }
 
-// Past the title limit the list collapses to a count — but the body still
-// carries every package, so the next append doesn't lose them.
 #[test]
 fn long_package_list_collapses_in_title_only() {
     let many = pkgs(&[
@@ -180,8 +168,6 @@ fn long_package_list_collapses_in_title_only() {
     assert_eq!(body_packages(&pr_body(None, &many)), many);
 }
 
-// The squash-merged commit subject stays readable no matter how many
-// packages ride along.
 #[test]
 fn title_never_exceeds_subject_limit() {
     let many: std::collections::BTreeMap<PackageName, String> = (0..40)
@@ -201,8 +187,6 @@ fn release_branch_is_version_independent() {
     assert!(!a.contains("4.5"), "branch must not embed a version: {a}");
 }
 
-// Shared per-repo branch: every package of a multi-package repo lands on ONE
-// rolling PR so coupled releases build together in one pr-validate run.
 #[test]
 fn release_branch_is_per_repo_not_per_package() {
     assert_eq!(
@@ -223,18 +207,14 @@ fn diff_ref_prefers_immutable_rev_over_tag() {
     ];
     // Rev wins even though the tag came first.
     assert_eq!(diff_ref(&refs, &new), Some(old.as_str()));
-    // Tag is used when that's all there is.
     assert_eq!(
         diff_ref(&[OldRef::Tag("1.2.3".into())], &new),
         Some("1.2.3")
     );
-    // Same-rev re-pin and no prior pin both yield no link.
     assert_eq!(diff_ref(&[OldRef::Rev(new.as_str().into())], &new), None);
     assert_eq!(diff_ref(&[], &new), None);
 }
 
-/// The compare link is derived from the parsed source repo, so the `.git`
-/// suffix a remote URL carries never reaches the URL.
 #[test]
 fn compare_url_has_no_git_suffix() {
     let repo = GithubRepoUrl::parse_remote("https://github.com/gr/mise.git").unwrap();
@@ -244,10 +224,6 @@ fn compare_url_has_no_git_suffix() {
     );
 }
 
-// The three-way outcome that gates commit/push/PR: only "nothing staged
-// AND no open PR" is safe to bail out on before push — an open rolling PR
-// means the branch carries prior pending content that must still reach
-// the remote even when this package's upsert was itself a no-op.
 #[test]
 fn classify_noop_outcomes() {
     assert_eq!(classify_noop(false, false), NoopOutcome::Commit);
@@ -264,6 +240,5 @@ fn pr_body_includes_diff_link_when_present() {
     );
     assert!(body.contains("Diff since last release"));
     assert!(body.contains("compare/v1.0.0...v1.1.0"));
-    // No link line when there's no prior tag.
     assert!(!pr_body(None, &pkgs(&[])).contains("Diff since last release"));
 }

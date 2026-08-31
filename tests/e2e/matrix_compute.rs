@@ -97,7 +97,6 @@ fn workflow_dispatch_builds_everything() {
 
     let run = run_matrix(&e2e, &root, "workflow_dispatch", None);
     assert_golden(&run.output, "matrix/workflow_dispatch.github_output.txt");
-    // The matrix JSON is also printed to stdout for log visibility.
     assert!(run.stdout.contains("\"include\""), "stdout: {}", run.stdout);
 }
 
@@ -113,8 +112,6 @@ fn schedule_event_builds_everything() {
 
 #[test]
 fn push_diffs_its_own_before_after_range() {
-    // A push scopes change detection to its own `before..after` range: bumping
-    // alpha's rev builds alpha only.
     let e2e = E2e::new();
     let (root, base, head) = pr_repo(&e2e, |root| {
         let manifest = root.join("pixi_native_packages.yaml");
@@ -155,8 +152,6 @@ fn pr_touching_vinca_yaml_triggers_vinca_only() {
 
 #[test]
 fn pr_changing_one_manifest_entry_scopes_pixi_to_it() {
-    // Bumping alpha's rev in pixi_native_packages.yaml scopes pixi-native work
-    // to alpha's runner size only, and names it in the pixi-only output.
     let e2e = E2e::new();
     let (root, base, head) = pr_repo(&e2e, |root| {
         let manifest = root.join("pixi_native_packages.yaml");
@@ -176,8 +171,6 @@ fn pr_changing_one_manifest_entry_scopes_pixi_to_it() {
 
 #[test]
 fn pr_comment_only_manifest_change_yields_no_pixi_work() {
-    // The manifest file changed but no package entry did: the scoped diff
-    // resolves to nothing to build.
     let e2e = E2e::new();
     let (root, base, head) = pr_repo(&e2e, |root| {
         let manifest = root.join("pixi_native_packages.yaml");
@@ -196,8 +189,6 @@ fn pr_comment_only_manifest_change_yields_no_pixi_work() {
 
 #[test]
 fn push_with_unreachable_before_degrades_to_full_rebuild() {
-    // A `before` that no longer exists locally (force-push rewrote it away)
-    // cannot be diffed from, so everything rebuilds.
     let e2e = E2e::new();
     let (root, _base, head) = pr_repo(&e2e, |root| {
         write_file(root, "README.md", "docs only\n");

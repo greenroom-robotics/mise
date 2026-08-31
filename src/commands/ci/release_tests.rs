@@ -10,7 +10,6 @@ fn ver(s: &str) -> Version {
     Version::parse(s).unwrap()
 }
 
-// Minimal parser wrapper so we can exercise Release's arg definitions.
 #[derive(Parser, Debug)]
 struct TestCli {
     #[command(flatten)]
@@ -19,7 +18,6 @@ struct TestCli {
 
 #[test]
 fn changelog_accepts_explicit_bool_value() {
-    // Matches what the release composite action passes.
     let cli = TestCli::parse_from(["x", "--package-dir", ".", "--changelog", "true"]);
     assert!(cli.release.changelog);
 
@@ -53,8 +51,6 @@ fn multi_package_tag_format_uses_msr_name_placeholder() {
     assert_eq!(tag_format(true, &pkg("mise")), "${name}@${version}");
 }
 
-// Extra prepare cmd + git assets must reach the .releaserc so the Cargo bump
-// lands in the same release commit/tag as pixi.toml.
 #[test]
 fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
     let dir = std::env::temp_dir().join("mise-release-test");
@@ -93,12 +89,9 @@ fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
     assert!(assets.iter().any(|a| a == "Cargo.lock"));
 }
 
-// msr runs each package's semantic-release (and thus the exec plugin's
-// commands) with cwd = the package directory, so any relative path in
-// prepareCmd/publishCmd resolves against the wrong directory.
-// The farm derives versions and pins from pixi.toml at the tagged rev, so
-// the bump MUST be committed even with --changelog false — otherwise the
-// tag lands on a rev whose manifest still carries the old version.
+// Versions and pins are derived from pixi.toml at the tagged rev, so the bump
+// MUST be committed even with --changelog false — otherwise the tag lands on
+// a rev whose manifest still carries the old version.
 #[test]
 fn pixi_toml_is_always_a_release_asset() {
     let dir = std::env::temp_dir().join("mise-release-asset-test");
@@ -119,8 +112,6 @@ fn pixi_toml_is_always_a_release_asset() {
     assert!(!assets.iter().any(|a| a == "CHANGELOG.md"));
 }
 
-// The release commit subject must name the package so `git log` shows what
-// each `chore(release)` bumped, not just a bare version.
 #[test]
 fn git_commit_message_names_the_package() {
     let dir = std::env::temp_dir().join("mise-release-msg-test");
@@ -149,7 +140,6 @@ fn git_commit_message_names_the_package() {
         msg.starts_with("chore(release): object_tracker ${nextRelease.version} [skip ci]"),
         "commit subject must name the package: {msg}"
     );
-    // Release notes must still ride in the body.
     assert!(
         msg.contains("${nextRelease.notes}"),
         "notes preserved: {msg}"
@@ -239,7 +229,6 @@ fn msr_ordering_deps_encodes_path_deps_not_pins() {
         .pin_deps
         .insert(pkg("node"), BTreeSet::from([pkg("msgs")]));
     let deps = msr_ordering_deps(&graph, &pkg("node"));
-    // Path dep orders the release; committed pin is not encoded at all.
     assert!(deps.contains("lib"));
     assert!(!deps.contains("msgs"), "pins must not be encoded: {deps:?}");
 }
@@ -248,8 +237,6 @@ fn msr_ordering_deps_encodes_path_deps_not_pins() {
 fn release_argv_multi_orders_without_cascade() {
     let argv = release_argv(true, "${name}@${version}");
     assert_eq!(argv[1], "multi-semantic-release");
-    // The flag that turns the package.json dep graph into ordering-only:
-    // a "*" range always satisfies, so no dependency-only cascade fires.
     assert!(
         argv.iter().any(|a| a == "--deps.release=inherit"),
         "multi mode must suppress the cascade: {argv:?}"
@@ -271,7 +258,7 @@ fn ensure_root_workspaces_merges_into_existing_tooling_json() {
     ensure_root_workspaces(&root, &["packages/geolocation".into()]).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&root).unwrap()).unwrap();
-    assert_eq!(v["name"], "mise-release-tooling"); // existing fields kept
+    assert_eq!(v["name"], "mise-release-tooling");
     assert_eq!(v["workspaces"][0], "packages/geolocation");
 }
 
@@ -288,13 +275,11 @@ fn ensure_root_workspaces_creates_minimal_json_when_absent() {
 
 #[test]
 fn workspace_globs_are_cwd_relative() {
-    // Test absolute path under cwd becomes relative
     let cwd = std::env::current_dir().unwrap();
     let abs_path = cwd.join("packages/x");
     let rel = cwd_relative(&abs_path);
     assert_eq!(rel, std::path::PathBuf::from("packages/x"));
 
-    // Test relative path is unchanged
     let rel_path = std::path::PathBuf::from("packages/y");
     let result = cwd_relative(&rel_path);
     assert_eq!(result, rel_path);

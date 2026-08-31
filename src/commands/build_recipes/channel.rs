@@ -1,16 +1,5 @@
 //! Talking to a conda channel: asking what it already holds, and naming one
 //! as a publish target.
-//!
-//! The publish check and dependency satisfaction both reduce to "does this
-//! channel have `name == version` (at this build number, in this subdir)". How
-//! that question is answered depends on the channel: a remote one cannot
-//! change while the job runs, so it is swept once into a [`ChannelIndex`] and
-//! matched in memory; a local output channel gains packages as the job
-//! publishes into it, so it goes through [`version_published`] live.
-//!
-//! [`publish_argv`] lives here rather than beside either of its callers: both
-//! the main build loop and the local-dependency fallback publish, and putting
-//! it in either one would make the two modules mutually dependent.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
@@ -23,8 +12,8 @@ use crate::manifest::PackageManifest;
 use crate::process;
 use crate::types::{Arch, LocalChannel, PackageName, RemoteChannel, Version};
 
-/// `pixi publish` argv. Built from `OsStr` so a non-UTF-8 manifest path is
-/// passed through rather than panicking a `to_str().unwrap()`.
+/// `pixi publish` argv. `OsStr`-based so a non-UTF-8 manifest path passes
+/// through.
 pub(super) fn publish_argv<'a>(
     manifest: &'a Path,
     target_channel: &'a str,
@@ -44,13 +33,8 @@ pub(super) fn publish_argv<'a>(
 
 /// Substrings in `pixi search` stderr that mean the channel could not be
 /// consulted at all, as opposed to being consulted and having nothing to say.
-///
-/// The distinction matters because the two outcomes lead opposite ways: a
-/// genuinely empty channel means "not published, go build it", while an
-/// unreachable one means the publish check has no idea and building would
-/// risk republishing an artifact that already exists. Matching on message text
-/// is unpleasant, but `pixi search` exits non-zero for both cases and offers
-/// no other signal.
+/// `pixi search` exits non-zero for both cases; message text is the only
+/// signal.
 const UNREACHABLE_MARKERS: &[&str] = &[
     "error sending request",
     "failed to fetch",
@@ -164,33 +148,22 @@ impl fmt::Display for BuildSubdir {
 /// Every record in one channel for one platform, from a single
 /// `pixi search --json '*'` sweep.
 ///
-/// `pixi search` takes an exclusive advisory lock on the repodata cache entry
-/// for a channel (rattler's `utils/flock.rs`), so N searches against the *same*
-/// channel cost N × one-search however many threads issue them. Sweeping once
-/// and matching in memory collapses the whole check phase into a single lock
-/// hold: measured against the GR channel, 40 concurrent exact searches take
-/// 14.3s while one sweep of all 283 packages takes 0.45s warm / ~6s cold.
+/// `pixi search` takes an exclusive advisory lock on a channel's repodata
+/// cache entry, so concurrent per-package searches serialize; one sweep
+/// matched in memory is a single lock hold.
 ///
-/// Only sound for a channel that cannot change while the snapshot is held. That
-/// holds for the upstream and product channels during a build job — builds
-/// publish into a local `file://` output channel and are drained to the real
-/// ones later. The mutable local channels keep using [`version_published`].
+/// Only sound for a channel that cannot change while the snapshot is held.
+/// The mutable local channels go through [`version_published`] instead.
 ///
-/// One of these per channel, built on demand by [`ChannelIndexCache`], since
-/// routing sends different packages to different channels.
+/// Records are keyed on the raw strings the channel reported: a channel holds
+/// artifacts whose conda versions (epochs, `1.2`, `post`/`dev` segments) are
+/// a wider grammar than semver, and one unparseable record must not fail the
+/// sweep. The *queries* are typed instead — a lookup can only be made with a
+/// parsed name and version.
 ///
-/// Records are keyed on the raw strings the channel reported. Neither the
-/// package name nor the version is parsed into [`PackageName`] / [`Version`]:
-/// a channel holds artifacts this repo does not publish, whose conda versions
-/// (epochs, `1.2`, `post`/`dev` segments) are a wider grammar than semver, and
-/// one unparseable record must not fail the sweep. The *queries* are typed
-/// instead — a lookup can only be made with a parsed name and version, which
-/// is where the invariant is actually needed.
-///
-/// Do not point this at a public channel: a `'*'` glob makes the gateway pull
-/// the channel's full name index and then fetch records per match, which on
-/// e.g. robostack (34k names) takes minutes. The GR channels are all small —
-/// `general` is 283 packages, the product channels 1-2 each.
+/// Do not point this at a public channel: a `'*'` glob pulls the channel's
+/// full name index and fetches records per match, which takes minutes at tens
+/// of thousands of names.
 pub(super) struct ChannelIndex {
     /// `(subdir, name, version)` -> build numbers published *in that subdir*.
     /// Kept per-subdir because the publish check must ask about the one subdir
@@ -263,12 +236,8 @@ impl ChannelIndex {
 }
 
 /// Sweeps each channel at most once per job and hands the snapshot to every
-/// caller that asks for it.
-///
-/// The set of channels isn't known before the check fan-out: routing rules map
-/// a package to its product channels, and the package's version only arrives
-/// with the upstream manifest each thread fetches. So sweep on first ask and
-/// memoize rather than trying to enumerate up front.
+/// caller that asks for it. The set of channels is only discovered during the
+/// check fan-out, so sweep on first ask and memoize.
 pub(super) struct ChannelIndexCache {
     target_platform: Arch,
     // ponytail: one lock over the whole map, held across the sweep, so sweeps
@@ -308,10 +277,9 @@ impl ChannelIndexCache {
 /// Whether *any* build of `name == version` exists in `channel` for
 /// `target_platform`, asked live.
 ///
-/// Takes a [`LocalChannel`] because that is the only kind that has to be asked
-/// live: those gain packages as the job publishes into them, so a snapshot
-/// would go stale mid-loop. Their repodata is small and uncontended, so the
-/// per-package search is cheap here. Remote channels go through
+/// Takes a [`LocalChannel`] because that is the only kind that has to be
+/// asked live: those gain packages as the job publishes into them, so a
+/// snapshot would go stale mid-loop. Remote channels go through
 /// [`ChannelIndexCache`] instead.
 pub(super) fn version_published(
     name: &PackageName,

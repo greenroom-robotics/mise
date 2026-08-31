@@ -111,8 +111,7 @@ fn check_entry(
         });
     }
 
-    // noarch artifacts are arch-independent; build them once on linux-64 and
-    // skip every other platform rather than repeating the (identical) build.
+    // noarch artifacts are arch-independent; built once, on linux-64.
     if upstream.is_noarch() && target_platform != Arch::Linux64 {
         return Ok(CheckOutcome::SkipNoarchNonCanonical {
             name: id.name,
@@ -123,10 +122,10 @@ fn check_entry(
     let upstream_build = upstream.build_number();
     let effective_build = upstream_build + rebuild_epoch;
 
-    // Routed packages (see routing.yaml) publish to product channels, never
-    // to the default channel — search where they actually land. Skip only
-    // when every routed channel has the build (a partially-drained
-    // multi-channel publish, e.g. dual-publish rules, should re-run).
+    // Routed packages publish to product channels, never to the default
+    // channel — search where they actually land. Skip only when every routed
+    // channel has the build: a partially-drained multi-channel publish
+    // should re-run.
     let published =
         crate::routing::published_channels(routing_rules, channel, &id.name, &id.version);
     let subdir = BuildSubdir::of(&upstream, target_platform);
@@ -207,8 +206,6 @@ pub(super) fn pixi(
     let channel_ref = &channel;
     let routing_rules = crate::routing::load_rules(repo.root())?;
     let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
-    // Shared across the fan-out so each channel is swept once for the whole
-    // job instead of once per entry.
     let channels = ChannelIndexCache::new(target_platform);
     let channels_ref = &channels;
     let rebuild_epoch = manifest.rebuild_epoch;
@@ -262,8 +259,6 @@ pub(super) fn pixi(
                     effective_build,
                     name: name.clone(),
                     rel_path_deps: upstream.path_dep_rel_paths(),
-                    // Dep keys of exact `==X.Y.Z` pins. Mirrors `rel_path_deps`
-                    // above for the committed-pin farm ordering rule.
                     pin_dep_names: upstream.exact_pins().into_iter().map(|(k, _)| k).collect(),
                 });
             }
@@ -295,11 +290,8 @@ pub(super) fn pixi(
         }
     }
 
-    // End of the check phase: everything below consumes the plan and performs
-    // side effects, so the dependency order (and any cycle) is settled here.
-    // A cycle is reported with the entries that were in the failing set — the
-    // ordinary "building N entries" line below is never reached in that case,
-    // and a cycle is undiagnosable without knowing what was being ordered.
+    // A cycle is reported with the entries being ordered — it is undiagnosable
+    // otherwise, and the "building N entries" line below is never reached.
     let queued = to_build.len();
     let plan = BuildPlan::new(to_build)
         .with_context(|| format!("ordering {queued} entries: {}", build_labels.join(", ")))?;
@@ -314,9 +306,8 @@ pub(super) fn pixi(
         build_labels.join(", "),
     );
 
-    // Dep satisfaction deliberately only consults the default channel, same as
-    // before routing was introduced: routing decides where an artifact is
-    // *published*, not which channels a consumer solves against.
+    // Dep satisfaction consults only the default channel: routing decides
+    // where an artifact is *published*, not what a consumer solves against.
     let default_channel = channels.get(&channel)?;
 
     let output_channel = LocalChannel::new(&abs_output);
@@ -353,13 +344,10 @@ pub(super) fn pixi(
             })?;
         }
 
-        // Resolve path deps ephemerally in the temp checkout: derived pins in
-        // the published artifact, and local channels for anything the real
-        // channel can't satisfy yet.
         let local_deps_dir = tmp.path().join("local-deps");
         let sib_subdirs = sibling_subdirs(entry, &manifest.packages);
         // Read committed `==` pins before resolve_path_deps rewrites path deps
-        // into pins (else those freshly-written pins would be re-detected here).
+        // into pins, which would be re-detected here.
         let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
         let mut resolved = resolve_path_deps(&manifest_path, entry.pin_style)?;
         resolved.extend(sibling_pins);
@@ -374,8 +362,6 @@ pub(super) fn pixi(
             sibling_subdirs: &sib_subdirs,
         };
         for dep in &resolved {
-            // The output channel gains packages as this loop publishes into it,
-            // so it has to be asked live rather than swept.
             let in_output_channel = built_this_job.contains(&dep.name)
                 || version_published(&dep.name, &dep.version, &output_channel, target_platform)?;
             if in_output_channel {
@@ -383,9 +369,8 @@ pub(super) fn pixi(
             } else if default_channel.has_version(&dep.name, &dep.version) {
                 // Satisfied by the real channel; nothing to do.
             } else {
-                // Fallback: build the sibling from this same checkout (correct
-                // rev by construction) into a local-only channel. Not drained;
-                // the sibling's own entry / linux-64 stays the canonical publisher.
+                // Build the sibling from this same checkout (correct rev by
+                // construction) into a local-only channel that is never drained.
                 tracing::info!(
                     "entry {}: sibling {} floor {} not in channel and not built this job; fallback local build",
                     entry.name,
@@ -403,13 +388,11 @@ pub(super) fn pixi(
             prepend_channels(&manifest_path, &extra_channels)?;
         }
 
-        // No lockfile gate before publish: like conda-forge, a source build
-        // re-resolves build/host/run from the manifest + current channels.
-        // `pixi publish` re-resolves regardless, and the backend re-derives
-        // package metadata at build time (e.g. ament_python noarch run-deps),
-        // so a committed pixi.lock written by an older backend would spuriously
-        // fail `--locked` here even when the build is fine. The manifest, not
-        // pixi.lock, is the source of truth for the published artifact.
+        // No `--locked` gate before publish: `pixi publish` re-resolves from
+        // the manifest + channels regardless, and the backend re-derives
+        // package metadata at build time, so a pixi.lock written by an older
+        // backend would fail spuriously. The manifest is the source of truth
+        // for the published artifact.
 
         // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
         // the upload-artifact glob.

@@ -16,9 +16,7 @@ pub struct Release {
     #[arg(long, default_value = crate::consts::RECIPES_REPO)]
     pub recipes_repo: String,
     /// Whether to commit CHANGELOG.md back to the source repo.
-    // ArgAction::Set so the flag takes an explicit value (`--changelog false`);
-    // a bare bool flag would reject the `--changelog true` the release action
-    // passes.
+    // ArgAction::Set so `--changelog true|false` both parse.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub changelog: bool,
     /// Comma-separated branch list passed to semantic-release.
@@ -29,8 +27,6 @@ pub struct Release {
     pub github_release: bool,
     /// Extra path(s) to include in the release commit alongside pixi.toml,
     /// committed and tagged in the same `chore(release)` commit. Repeatable.
-    /// Used by Rust-native repos (e.g. mise itself) to fold Cargo.toml/Cargo.lock
-    /// into the release commit; the generic path stays Cargo-agnostic.
     #[arg(long)]
     pub extra_git_asset: Vec<String>,
     /// Extra shell command appended (with `&&`) to semantic-release's prepare
@@ -67,9 +63,7 @@ fn msr_ordering_deps(
 /// with the synthesized package.json ranges pinned to `"*"`, a sibling release
 /// always satisfies the range, so multi-semantic-release orders the coupled
 /// release sibling-first but never cascade-releases a consumer that has no
-/// commits of its own. Path deps stay committed as the permanent state; the
-/// buildfarm derives range pins ephemerally at build time via `mise
-/// build-recipes` (resolve_path_deps) on a temp checkout — not pixi.
+/// commits of its own.
 fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
     let bin = if multi {
         "multi-semantic-release"
@@ -132,8 +126,8 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
         .unwrap_or_else(|| p.to_owned())
 }
 
-/// Merge a `workspaces` array into the root package.json (staged by the
-/// release action), creating a minimal one for standalone/local runs.
+/// Merge a `workspaces` array into the root package.json, creating a minimal
+/// one if absent.
 fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
     use anyhow::Context;
     let mut v: serde_json::Value = if root_pkg_json.exists() {
@@ -158,16 +152,8 @@ impl Release {
         }
         let multi = self.package.is_none() && pkgs.len() > 1;
 
-        // Sibling graph: drives msr's topological release *order* (multi mode)
-        // via synthesized package.json files — NOT a cascade (see release_argv:
-        // --deps.release=inherit). Only path deps participate; pin deps don't.
-        // Path deps are guarded (verify-siblings) and stay committed permanently
-        // — the buildfarm derives range pins ephemerally at build time via
-        // `mise build-recipes` (resolve_path_deps), not pixi.
         let graph = crate::commands::ci::siblings::analyze(&pkgs);
 
-        // Write a .releaserc (and, in multi mode, a package.json encoding
-        // sibling deps) next to each package's pixi.toml.
         let mut workspace_globs: Vec<String> = Vec::new();
         for pkg in &pkgs {
             let pkg_dir = &pkg.dir;
@@ -187,29 +173,24 @@ impl Release {
         if multi {
             ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
         }
-        // Single mode runs plain semantic-release from cwd, and semantic-release
-        // resolves its config from cwd — a .releaserc down in the package dir is
-        // invisible to it (only msr, which runs per-package, reads those). With no
-        // config at cwd it falls back to its own defaults, whose branch list has no
-        // `main`, and dies with ERELEASEBRANCHES.
+        // Plain semantic-release resolves its config from cwd — a .releaserc
+        // down in the package dir is invisible to it, and its own defaults
+        // have no `main` branch (ERELEASEBRANCHES).
         if !multi {
             let pkg = &pkgs[0];
             let releaserc = self.releaserc_json(&pkg.manifest_path, &pkg.identity().name)?;
             std::fs::write(".releaserc", releaserc)?;
         }
 
-        // In single-package mode `pkgs` holds exactly the package being
-        // released, so its name can be embedded literally in the tag format.
+        // Multi mode ignores the name; single mode's pkgs[0] is the one package.
         let tag_format = tag_format(multi, &pkgs[0].identity().name);
 
         let argv = release_argv(multi, &tag_format);
         crate::process::run("npx", &argv)
     }
 
-    /// `pkg_name` is the resolved `package.name` of the manifest at `pixi`. It
-    /// is passed in rather than re-read: it is embedded literally in both
-    /// callbacks so multi-semantic-release needs no plugin-context env vars at
-    /// runtime.
+    /// `pkg_name` is embedded literally in both callbacks so
+    /// multi-semantic-release needs no plugin-context env vars at runtime.
     fn releaserc_json(
         &self,
         pixi: &std::path::Path,
@@ -265,19 +246,17 @@ impl Release {
                 { "assets": [], "successComment": false }
             ]));
         }
-        // The git plugin is unconditional: the farm reads versions and derived
-        // pins from pixi.toml at the tagged rev, so the bump must always be
-        // committed. --changelog only controls the CHANGELOG.md asset.
+        // The git plugin is unconditional: versions are read from pixi.toml at
+        // the tagged rev, so the bump must always be committed. --changelog
+        // only controls the CHANGELOG.md asset.
         let mut assets: Vec<String> = Vec::new();
         if self.changelog {
             assets.push("CHANGELOG.md".to_string());
         }
         assets.push("**/pixi.toml".to_string());
         assets.extend(self.extra_git_asset.iter().cloned());
-        // Name the package in the release commit subject so `git log` says what
-        // was bumped. msr runs each package's own semantic-release with this
-        // per-package .releaserc, so `pkg_name` is exactly the package being
-        // released here. The rest matches @semantic-release/git's default.
+        // Names the package in the commit subject; otherwise matches
+        // @semantic-release/git's default message.
         let git_message = format!(
             "chore(release): {name} ${{nextRelease.version}} [skip ci]\n\n${{nextRelease.notes}}",
             name = pkg_name,

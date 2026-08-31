@@ -14,8 +14,7 @@ use crate::harness::{E2e, Shim, assert_golden, flag_value, package_pixi_toml, wr
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// The same constant the binary defaults to; a divergence here would make this
-// suite pass against a repo slug the tool no longer uses.
+// The binary's own default, so the suite can't drift onto a stale repo slug.
 use mise::consts::RECIPES_REPO;
 const TOKEN: &str = "test-token";
 const RELEASE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -206,7 +205,6 @@ fn vendored_recipe_arm_patches_recipe_and_opens_pr() {
         "vendor_recipes/demo-pkg/recipe.yaml",
     );
     assert_golden(&recipe, "recipes_pr/vendored_recipe.yaml");
-    // The other two routing targets were not touched.
     assert_eq!(
         remote_file(
             &e2e,
@@ -226,7 +224,6 @@ fn vendored_recipe_arm_patches_recipe_and_opens_pr() {
         ROSDISTRO_BASE
     );
 
-    // gh flow: existence probe, create, native auto-merge, summary link.
     assert_eq!(gh_subcommands(&e2e), FULL_CREATE_FLOW);
     let create = gh_pr_call(&e2e, "create");
     assert_eq!(
@@ -240,7 +237,6 @@ fn vendored_recipe_arm_patches_recipe_and_opens_pr() {
     let merge = gh_pr_call(&e2e, "merge");
     assert!(merge.contains(&"--auto".to_string()) && merge.contains(&"--squash".to_string()));
 
-    // The commit lands as the fallback bot identity with the run marker.
     let log = e2e.git(
         &remote,
         &["log", "-1", "--format=%an|%B", "release/demo_pkg"],
@@ -279,7 +275,6 @@ fn rosdistro_arm_updates_existing_entry_in_place() {
         "rosdistro_additional_recipes.yaml",
     );
     assert_golden(&yaml, "recipes_pr/rosdistro.yaml");
-    // The pixi-native manifest was not touched.
     let pixi = remote_file(
         &e2e,
         &remote,
@@ -347,7 +342,6 @@ fn brand_new_monorepo_package_appends_pixi_entry_with_subdir() {
     )
     .success();
 
-    // ssh origin is normalized to https, and the monorepo subdir is recorded.
     let yaml = remote_file(&e2e, &remote, "release/mono", "pixi_native_packages.yaml");
     assert_golden(&yaml, "recipes_pr/pixi_new_subdir.yaml");
 }
@@ -355,7 +349,6 @@ fn brand_new_monorepo_package_appends_pixi_entry_with_subdir() {
 #[test]
 fn open_rolling_pr_is_appended_to_and_edited_not_created() {
     let e2e = E2e::new();
-    // gh reports an open rolling PR whose body already carries a sibling.
     e2e.respond(
         Shim::Gh,
         &["pr", "list"],
@@ -363,8 +356,8 @@ fn open_rolling_pr_is_appended_to_and_edited_not_created() {
     );
     let remote = make_recipes_remote(&e2e, &[("pixi_native_packages.yaml", PIXI_NATIVE_BASE)]);
 
-    // The rolling branch already exists on the remote with the sibling's entry
-    // pending (an earlier release of the same source repo).
+    // Seed the rolling branch with the sibling's pending entry, as an earlier
+    // release of the same source repo would have left it.
     let seed2 = e2e.path().join("branch-seed");
     e2e.git(
         e2e.path(),
@@ -402,7 +395,6 @@ fn open_rolling_pr_is_appended_to_and_edited_not_created() {
     let yaml = remote_file(&e2e, &remote, "release/mono", "pixi_native_packages.yaml");
     assert_golden(&yaml, "recipes_pr/pixi_append_branch.yaml");
 
-    // An open PR is edited (title+body refreshed), never re-created.
     assert_eq!(
         gh_subcommands(&e2e),
         ["pr list", "pr edit", "pr merge", "pr view"]
@@ -419,9 +411,6 @@ fn open_rolling_pr_is_appended_to_and_edited_not_created() {
 
 #[test]
 fn rerunning_same_release_on_open_pr_skips_commit_but_keeps_pr_fresh() {
-    // Re-running the publish hook for an already-applied release (e.g. a
-    // retried job): the upsert stages nothing, the commit is skipped, but the
-    // branch is still pushed and the PR refreshed.
     let e2e = E2e::new();
     let manifest = "\
 packages:
@@ -432,7 +421,6 @@ packages:
     let remote = make_recipes_remote(&e2e, &[("pixi_native_packages.yaml", manifest)]);
     let src = make_source_repo(&e2e, "pixi_pkg");
 
-    // First release creates the rolling branch + PR.
     run_recipes_pr(
         &e2e,
         &src,
@@ -443,7 +431,6 @@ packages:
     let tip_after_first = e2e.git(&remote, &["rev-parse", "release/pixi_pkg"]);
     let gh_calls_first = gh_subcommands(&e2e).len();
 
-    // Now the PR is open, carrying what the first run released.
     e2e.respond(
         Shim::Gh,
         &["pr", "list"],
@@ -457,11 +444,9 @@ packages:
     )
     .success();
 
-    // No new commit: the branch tip is byte-for-byte the first run's.
     let tip_after_second = e2e.git(&remote, &["rev-parse", "release/pixi_pkg"]);
     assert_eq!(tip_after_first, tip_after_second);
 
-    // The second run still pushed and refreshed the PR (edit, not create).
     let second_run_calls = gh_subcommands(&e2e).split_off(gh_calls_first);
     assert_eq!(
         second_run_calls,
@@ -472,8 +457,7 @@ packages:
 #[test]
 fn gh_pr_list_failure_is_treated_as_no_open_pr() {
     // `pr list` exiting non-zero is read as "no rolling PR": the branch is
-    // reset from main and a fresh PR is created — load-bearing current
-    // behavior of `pr_body_of`.
+    // reset from main and a fresh PR is created.
     let e2e = E2e::new();
     e2e.respond_exit(Shim::Gh, &["pr", "list"], 1);
     let remote = make_recipes_remote(&e2e, &[("pixi_native_packages.yaml", PIXI_NATIVE_BASE)]);
@@ -519,7 +503,6 @@ fn tolerant_sweep_skips_package_with_no_manifest_and_no_recipe() {
     )
     .success();
 
-    // Only the PR probe happened; nothing was pushed.
     assert_eq!(gh_subcommands(&e2e), ["pr list"]);
     let branches = e2e.git(&remote, &["branch", "--list"]);
     assert!(

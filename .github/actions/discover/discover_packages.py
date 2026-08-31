@@ -5,8 +5,8 @@ Reads env PACKAGE / PACKAGE_DIR / INCLUDE_WORKSPACES, writes `all`, `map` and
 `dirs` outputs to the file named by GITHUB_OUTPUT. PACKAGE_DIR is one or more
 directories, whitespace-separated (spaces and/or newlines both work —
 `str.split()` treats either as a separator), so a caller can discover
-packages fanned out across several directories (e.g.
-`libs\nprojects/gama_vessel_variants`) in one pass.
+packages fanned out across several directories (e.g. `libs\nprojects/foo`)
+in one pass.
 
 `all` is a compact JSON array of discovered dir-names, unique across every
 given dir (the same name found under two dirs is an error — see
@@ -20,11 +20,10 @@ manifest's dir without re-running discovery.
 
 When INCLUDE_WORKSPACES=true, discovery also includes workspace-only
 manifests (`[workspace]`, no `[package]`) that have a committed pixi.lock —
-e.g. gama's docker-build variant workspaces, which have no publishable
-package but still have pixi environments/tasks `mise ci test` can install
-and run. A workspace's name is its dir basename (same convention as a
-package), so it round-trips through `<package-dir>/<name>/pixi.toml` the
-same way a package does.
+manifests with no publishable package but still pixi environments/tasks
+`mise ci test` can install and run. A workspace's name is its dir basename
+(same convention as a package), so it round-trips through
+`<package-dir>/<name>/pixi.toml` the same way a package does.
 
 # ponytail: package deps only follow single-level `path = "../x"` / `'../x'`
 # sibling deps in a flat layout; deeper paths (`../../x`) and non-flat
@@ -58,13 +57,7 @@ def load_manifest(manifest):
 
 
 def declares_package(manifest):
-    """True when the manifest has a [package] table.
-
-    Workspace-only manifests are dev environments for packages this repo does
-    not publish (e.g. one built from a hand-authored recipe elsewhere); they
-    have no tests to fan out to a matrix leg. Mirrors `declares_package` in
-    src/commands/ci/packages.rs — keep the two in step.
-    """
+    """True when the manifest has a [package] table."""
     with open(manifest, "rb") as f:
         return "package" in tomllib.load(f)
 
@@ -89,8 +82,7 @@ def workspace_names_in_dir(package_dir):
     """Workspace-only ([workspace], no [package]) names directly under one
     package-dir, restricted to ones with a committed pixi.lock — a workspace
     with no lock has nothing for `mise ci test` to install against
-    reproducibly (e.g. gama's `src/` and `storm_atlas_bringup/`, which are
-    plain source trees / scratch dirs, not testable workspaces)."""
+    reproducibly."""
     out = []
     for entry in sorted(os.listdir(package_dir)):
         sub = os.path.join(package_dir, entry)
@@ -161,8 +153,7 @@ def dep_paths(manifest_dir):
     directly, parsed generically from `[dependencies]` and every
     `[feature.*.dependencies]` table, resolved relative to `manifest_dir` —
     unlike a package's flat single-level sibling convention, these may point
-    anywhere in the repo (e.g. gama's
-    `gama_bringup = { path = "../../gama_vessel/src/gama_bringup" }`)."""
+    anywhere in the repo (e.g. `foo = { path = "../../src/foo" }`)."""
     data = load_manifest(os.path.join(manifest_dir, "pixi.toml"))
     if data is None:
         return set()
@@ -249,7 +240,6 @@ def selftest():
         assert transitive_deps(pkgdir, "c") == set()
         assert discover_dirs([pkgdir], "") == {"a": pkgdir, "b": pkgdir, "c": pkgdir}
 
-        # A workspace-only manifest is a dev env, not a matrix leg, by default.
         os.mkdir(os.path.join(pkgdir, "devenv"))
         open(os.path.join(pkgdir, "devenv", "pixi.toml"), "w").write(
             '[workspace]\nname = "devenv"\n[tasks]\nbuild = "colcon build"\n'
@@ -258,8 +248,6 @@ def selftest():
             "devenv must be skipped"
         )
 
-        # Multi-dir: union across two package-dirs, names stay attributed to
-        # their own dir, and deps stay scoped within a dir (no cross-dir dep).
         other = os.path.join(root, "other")
         os.mkdir(other)
         os.mkdir(os.path.join(other, "d"))
@@ -269,7 +257,6 @@ def selftest():
         assert split_dirs(f"{pkgdir}\n{other}") == [pkgdir, other]
         assert split_dirs(f"{pkgdir} {other}") == [pkgdir, other]
 
-        # Name collision across dirs is an error, not a silent pick.
         dup = os.path.join(root, "dup")
         os.mkdir(dup)
         os.mkdir(os.path.join(dup, "a"))
@@ -280,17 +267,13 @@ def selftest():
         except SystemExit:
             pass
 
-        # `package` filter scopes discovery to one name, resolved to its dir.
         assert discover_dirs([pkgdir, other], "d") == {"d": other}
-
-        # --- include_workspaces ---
 
         # devenv has no pixi.lock: excluded even with include_workspaces.
         assert "devenv" not in discover_dirs([pkgdir], "", include_workspaces=True)
 
-        # A locked workspace-only manifest is included, keyed by its dir
-        # basename (so it round-trips through <package-dir>/<name>/pixi.toml
-        # the same way a package does).
+        # A locked workspace-only manifest is keyed by its dir basename, not
+        # its [workspace] name.
         ws = os.path.join(pkgdir, "variant")
         os.mkdir(ws)
         open(os.path.join(ws, "pixi.toml"), "w").write(
@@ -309,8 +292,7 @@ def selftest():
         }, "include_workspaces=False must not change existing behaviour"
 
         # Workspace path deps resolve generically and may point outside the
-        # workspace's own package-dir entirely (gama's real shape), at
-        # different `../` depths.
+        # workspace's own package-dir entirely, at different `../` depths.
         deep = os.path.join(pkgdir, "deep")
         os.mkdir(deep)
         open(os.path.join(deep, "pixi.toml"), "w").write(
@@ -327,14 +309,11 @@ def selftest():
         assert two_up in got
         assert three_up in got
 
-        # Map fanout: `deep`'s filter covers its own dir plus its resolved
-        # (out-of-package-dir) dep globs.
         m = build_map({"deep": pkgdir})
         assert f"{pkgdir}/deep/**" in m
         assert f"{two_up}/**" in m
         assert f"{three_up}/**" in m
 
-        # A package's map entry is unaffected — still the flat sibling walk.
         m2 = build_map({"a": pkgdir})
         assert m2 == f"a:\n  - '{pkgdir}/a/**'\n  - '{pkgdir}/b/**'\n  - '{pkgdir}/c/**'"
     print("selftest ok")

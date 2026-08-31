@@ -6,10 +6,9 @@
 //!   guarantees: no `Display` at all, no `Debug` that can reach the plaintext,
 //!   and zeroize-on-drop so the plaintext doesn't linger in freed memory. The
 //!   plaintext is only reachable through [`ExposeSecret::expose_secret`],
-//!   which is greppable. None of that is worth hand-rolling once a maintained
-//!   crate does it. What this module does add is the `Debug` *text*: the crate
-//!   prints `SecretBox<str>([REDACTED])`, and [`Secret`] prints exactly
-//!   [`REDACTED`] so that debug output and scrubbed output are the same string.
+//!   which is greppable. This module adds the `Debug` *text*: [`Secret`]
+//!   prints exactly [`REDACTED`] so that debug output and scrubbed output are
+//!   the same string.
 //! - A process-wide scrub registry (`register`/[`scrub`]), which the crate
 //!   does *not* provide and can't: constructing a `Secret` registers its
 //!   plaintext, and [`crate::process`] scrubs every command label it logs or
@@ -58,11 +57,8 @@ impl ExposeSecret<str> for Secret {
 }
 
 impl fmt::Debug for Secret {
-    /// Writes [`REDACTED`] verbatim rather than delegating to
-    /// [`SecretString`], whose own `Debug` is `SecretBox<str>([REDACTED])`.
-    /// Both are safe; only this one is byte-identical to what [`scrub`]
-    /// leaves behind, so a redacted value looks the same however it got
-    /// redacted and neither form can be mistaken for a real token.
+    /// Writes [`REDACTED`] verbatim — byte-identical to what [`scrub`] leaves
+    /// behind, so a redacted value looks the same however it got redacted.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(REDACTED)
     }
@@ -73,8 +69,7 @@ impl fmt::Debug for Secret {
 pub const REDACTED: &str = "[REDACTED]";
 
 /// The registered plaintexts, held in [`Zeroizing`] so the copies this module
-/// keeps are wiped when the process tears the registry down — [`Secret`] gets
-/// that from the crate, and a plain `String` here would quietly undo it.
+/// keeps are wiped when the process tears the registry down.
 ///
 /// Entries are never removed. Deregistering on drop would be unsound with
 /// `Secret: Clone`: the first copy dropped would unregister a plaintext its

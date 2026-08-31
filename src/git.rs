@@ -1,10 +1,6 @@
-//! Git subprocess wrappers, built on [`crate::process`].
-//!
-//! Everything here shells out to `git`. Nothing here talks to GitHub's API —
-//! that lives in [`crate::gh`]. The split matters because the two have
-//! different failure modes and different auth: git reads credentials from the
-//! `insteadOf` rule `gh::ensure_git_auth` installs, the API takes a bearer
-//! token.
+//! Git subprocess wrappers, built on [`crate::process`]. GitHub API calls
+//! live in [`crate::gh`]; git reads credentials from the `insteadOf` rule
+//! `gh::ensure_git_auth` installs.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -26,11 +22,9 @@ pub fn shallow_clone(url: &str, branch: &str, dest: &Path) -> anyhow::Result<()>
 }
 
 /// Materialize exactly one commit of `url` in `dest`: init a fresh repo, point
-/// it at the remote, fetch the single rev, check it out.
-///
-/// A plain shallow clone can't do this — `--branch` only takes a ref name, and
-/// the rev we want is usually a tagged release commit that no branch tip
-/// points at any more.
+/// it at the remote, fetch the single rev, check it out. The rev is usually a
+/// tagged release commit no branch tip points at, which `clone --branch`
+/// cannot fetch.
 pub fn fetch_rev(dest: &Path, url: &str, rev: &Sha40) -> anyhow::Result<()> {
     std::fs::create_dir_all(dest)?;
     process::run_in(dest, "git", &["init", "--quiet"])?;
@@ -60,11 +54,9 @@ pub fn submodule_update(dest: &Path) -> anyhow::Result<()> {
 
 /// Pull the LFS objects under `include` into an existing checkout.
 ///
-/// `--exclude=` is unconditional here, unlike the CI-test LFS pull where a
-/// repo's `.lfsconfig` `fetchexclude` is a deliberate cost control. This
-/// checkout is a throwaway build workdir scoped to one entry's `include`, so
-/// the source repo's `fetchexclude = *` (set to stop local auto-fetch) would
-/// only mean fetching nothing at all.
+/// `--exclude=` clears any `.lfsconfig` `fetchexclude`: this checkout is a
+/// throwaway build workdir scoped to one entry's `include`, and a source
+/// repo's `fetchexclude = *` would mean fetching nothing at all.
 pub fn lfs_pull(dest: &Path, include: &str) -> anyhow::Result<()> {
     let include = format!("--include={include}");
     process::run_in(dest, "git", &["lfs", "pull", &include, "--exclude="])
@@ -113,11 +105,9 @@ pub fn is_clean(cwd: &Path, from: &str, to: &str, path: &Path) -> anyhow::Result
     )
 }
 
-/// Whether nothing is staged in the index relative to HEAD. `git commit` fails
-/// with "nothing to commit, working tree clean" in that case, so callers must
-/// check first rather than let the commit error out. Unlike `git status
-/// --porcelain` this ignores untracked files: a stray file left in the
-/// checkout must not be mistaken for a change to commit.
+/// Whether nothing is staged in the index relative to HEAD — `git commit`
+/// fails in that case, so callers check first. Ignores untracked files: a
+/// stray file left in the checkout is not a change to commit.
 pub fn nothing_staged(cwd: &Path) -> anyhow::Result<bool> {
     diff_quiet(
         cwd,

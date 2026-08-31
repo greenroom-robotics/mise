@@ -93,12 +93,11 @@ runs:
           local label="$1" tag="$2" pkg_arg="$3" ver sha
           [ -n "$tag" ] || return 0
           # Skip tags that already existed before this run: those whose commit
-          # is a *strict* ancestor of the dispatch SHA. A fresh release whose
-          # tag lands directly on the dispatch commit (semantic-release tags
-          # HEAD for packages it doesn't bump a version file for, e.g. vendored
-          # ament packages with no pixi.toml) is new, not old — the `!=` keeps
-          # it from being mistaken for a pre-existing tag. Peel `${tag}^{}` so
-          # this is correct for annotated tags.
+          # is a *strict* ancestor of the dispatch SHA. A fresh release can tag
+          # the dispatch commit itself (semantic-release tags HEAD for packages
+          # it doesn't bump a version file for), so the `!=` keeps that from
+          # reading as pre-existing. Peel `${tag}^{}` so this is correct for
+          # annotated tags.
           if [ "$(git rev-parse "${tag}^{}")" != "$DISPATCH_SHA" ] \
             && git merge-base --is-ancestor "${tag}^{}" "$DISPATCH_SHA" 2>/dev/null; then
             return 0
@@ -120,13 +119,11 @@ runs:
         }
 
         if [ -f "$PACKAGE_DIR/pixi.toml" ] && grep -q '^\[package\]' "$PACKAGE_DIR/pixi.toml"; then
-          # Root single-package layout: package-dir points at the package itself
-          # (mirrors `packages::discover`). Tags are plain semver (X.Y.Z); some
-          # single-package repos still tag <pkg>@<ver>, so match both.
-          # `for-each-ref --count=1` rather than `git tag | head -n1`: head
-          # exits after the first line, so git's next write to the closed pipe
-          # dies with SIGPIPE and `pipefail` fails the step. A race, hit only
-          # once a package has enough tags to need a second write (~4 KB).
+          # Root single-package layout: package-dir points at the package
+          # itself. Tags are plain semver (X.Y.Z); some single-package repos
+          # still tag <pkg>@<ver>, so match both. `git tag | head -n1` here
+          # would SIGPIPE under pipefail once the tag list outgrows one pipe
+          # write (~4 KB) — hence `for-each-ref --count=1`.
           globs=('[0-9]*.[0-9]*.[0-9]*')
           [ -n "$ONLY_PACKAGE" ] && globs+=("${ONLY_PACKAGE}@*")
           tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "${globs[@]/#/refs/tags/}")"
@@ -140,16 +137,13 @@ runs:
             tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${ONLY_PACKAGE}@*")"
             publish_one "$ONLY_PACKAGE" "$tag" "$ONLY_PACKAGE"
           else
-            # Sweep: every current package (has pixi.toml or package.xml — the
-            # latter catches vendored ROS packages like deepstream_extensions,
-            # drops junk/renamed dirs).
-            # --allow-missing-recipe lets a tagged non-conda package (launch/meta,
-            # e.g. perception_bringup) skip instead of failing the whole run.
+            # Sweep every current package. --allow-missing-recipe lets a tagged
+            # non-conda package (launch/meta) skip instead of failing the run.
             EXTRA_RECIPES_PR_ARGS="--allow-missing-recipe"
             for pkg in $(ls "$PACKAGE_DIR"); do
               # A real package has a pixi.toml (pixi-native) or a package.xml
-              # (ROS, incl. vendored packages like deepstream_extensions with no
-              # pixi.toml). Union keeps both; junk/renamed dirs (neither) drop.
+              # (ROS, incl. vendored packages with no pixi.toml); junk/renamed
+              # dirs (neither) drop.
               { [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || [ -f "$PACKAGE_DIR/$pkg/package.xml" ]; } || continue
               tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${pkg}@*")"
               publish_one "$pkg" "$tag" "$pkg"

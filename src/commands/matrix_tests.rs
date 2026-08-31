@@ -364,7 +364,6 @@ fn build_matrix_ds_versions_sorted_ascending() {
     plan.ds_versions.insert(DeepstreamVersion::V8_0);
     plan.ds_versions.insert(DeepstreamVersion::V7_1);
     let out = build_matrix(&plan, &empty_manifest(), "RUN");
-    // First 2 rows should be 7.1, last 2 should be 8.0
     let versions: Vec<DeepstreamVersion> = out.iter().map(ds_version).collect();
     use DeepstreamVersion::{V7_1, V8_0};
     assert_eq!(versions, vec![V7_1, V7_1, V8_0, V8_0]);

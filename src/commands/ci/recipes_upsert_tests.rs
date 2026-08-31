@@ -70,11 +70,9 @@ bar:
   version: 0.1.0
 ";
     let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
-    // foo's block is replaced with the new tag/version
     assert!(out.contains(
         "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     ));
-    // bar's block is untouched
     assert!(out.contains(
         "bar:\n  url: https://example.invalid/bar.git\n  tag: 0.1.0\n  version: 0.1.0\n"
     ));
@@ -109,9 +107,8 @@ bar:
 #[test]
 fn upsert_replaces_block_with_extra_optional_fields() {
     let (p, u, v) = foo_entry();
-    // Real-world entries sometimes carry additional_folder / branch /
-    // manifest_file. On upsert we replace with the canonical four-field
-    // shape — this is acceptable because callers know the canonical shape.
+    // Entries sometimes carry extra optional fields; upsert deliberately
+    // replaces the block with the canonical four-field shape.
     let existing = "\
 foo:
   url: https://github.com/example/foo.git
@@ -233,7 +230,6 @@ fn vendored_updates_version_rev_and_resets_build_number() {
     assert!(out.contains("  version: 1.3.0"));
     assert!(out.contains("  rev: 1111111111111111111111111111111111111111"));
     assert!(out.contains("  number: 0"));
-    // Everything else untouched.
     assert!(out.contains("# Vendor recipe for foo — header comment must survive."));
     assert!(out.contains("  script: ${{ '$RECIPE_DIR/build.sh' }}"));
     assert!(out.contains("    - bar ==1.1.3"));
@@ -388,7 +384,6 @@ fn pixi_replaces_ref_with_rev_on_existing_entry() {
     assert!(!out.contains("ref: main"));
     assert!(out.contains("rev: 3333333333333333333333333333333333333333"));
     assert!(out.contains("url: https://github.com/example/alpha.git"));
-    // Other entries untouched.
     assert!(out.contains("subdir: packages/beta"));
     assert!(out.contains("# Header comment"));
 }
@@ -552,7 +547,6 @@ fn pixi_preserves_blank_line_between_items() {
         .iter()
         .position(|l| l.trim() == "- name: beta")
         .unwrap();
-    // Inside alpha's block (from header to next blank/item) there must be NO blank line.
     let alpha_block_end = lines[alpha_idx + 1..beta_idx]
         .iter()
         .position(|l| l.trim().is_empty())
@@ -564,7 +558,6 @@ fn pixi_preserves_blank_line_between_items() {
             "alpha block should be contiguous, got blank inside: {out}"
         );
     }
-    // And the blank between alpha and beta must still exist.
     assert!(
         lines[alpha_block_end..beta_idx]
             .iter()
@@ -626,7 +619,6 @@ fn release_patches_vendored_recipe_when_present() {
         path,
         std::path::Path::new("vendor_recipes/is-core/recipe.yaml")
     );
-    // Old ref is the source.rev the recipe pinned before this release.
     assert_eq!(
         old_ref,
         Some(OldRef::Rev(
@@ -700,7 +692,6 @@ fn release_updates_existing_rosdistro_entry() {
         path,
         std::path::Path::new("rosdistro_additional_recipes.yaml")
     );
-    // rosdistro pins a tag; old ref is the previous tag.
     assert_eq!(old_ref, Some(OldRef::Tag("0.1.0".into())));
     let out = std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml")).unwrap();
     assert!(out.contains("tag: v0.2.0") && out.contains("version: 0.2.0"));
@@ -726,7 +717,6 @@ fn release_defaults_brand_new_package_to_pixi_native() {
     )
     .unwrap();
     assert_eq!(path, std::path::Path::new("pixi_native_packages.yaml"));
-    // Brand-new package had no prior pin.
     assert_eq!(old_ref, None);
     let out = std::fs::read_to_string(root.join("pixi_native_packages.yaml")).unwrap();
     assert!(out.contains("- name: newpkg"));
@@ -736,8 +726,6 @@ fn release_defaults_brand_new_package_to_pixi_native() {
 
 #[test]
 fn release_errors_when_pixi_native_absent() {
-    // Brand-new package, no vendored recipe, and no pixi_native_packages.yaml
-    // to append to -> loud error rather than silently writing nothing.
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     let err = route_and_apply(
@@ -788,8 +776,7 @@ fn release_resolves_hyphenated_vendored_dir() {
 #[test]
 fn route_picks_pixi_native_over_rosdistro_when_both_list_the_package() {
     // A package that got migrated keeps its stale rosdistro block; the
-    // pixi-native entry wins, and the routing decision says so before
-    // anything is written.
+    // pixi-native entry wins.
     let td = tempfile::TempDir::new().unwrap();
     let root = td.path();
     write(
@@ -820,7 +807,6 @@ fn route_picks_pixi_native_over_rosdistro_when_both_list_the_package() {
         target.rel_path(),
         std::path::Path::new("pixi_native_packages.yaml")
     );
-    // The rosdistro file is untouched: routing does not write.
     assert!(
         std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml"))
             .unwrap()

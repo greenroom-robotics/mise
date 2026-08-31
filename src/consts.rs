@@ -1,16 +1,6 @@
-//! Literals that more than one module has to agree on.
-//!
-//! Deliberately narrow: a constant earns a place here only when it already
-//! appeared at two or more sites and a divergence between them would be a
-//! bug (a manifest filename read in one module and written in another, a
-//! channel URL refreshed in one command and solved against in another).
-//! Single-use literals stay where they are used — this is not a inventory of
-//! every string in the codebase.
-//!
-//! It is its own module because the users span `repo`, `matrix`,
-//! `recipes_upsert`, `build_recipes`, `snapshot` and `gh`; there is no
-//! existing module that owns all of them without one importing another for no
-//! other reason.
+//! Literals that more than one module has to agree on. A constant earns a
+//! place here only when it appears at two or more sites and a divergence
+//! between them would be a bug; single-use literals stay where they are used.
 
 /// Default `owner/repo` of the conda recipes repository.
 /// (`ci release --recipes-repo`, `ci recipes-pr --recipes-repo`.)

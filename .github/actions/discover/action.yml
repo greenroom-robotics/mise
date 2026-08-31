@@ -8,7 +8,7 @@ inputs:
     required: false
     default: ""
   package-dir:
-    description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/gama_vessel_variants`. Packages are unioned across every dir; a package name found under more than one dir is an error.'
+    description: 'One or more directories containing per-package pixi workspaces, whitespace-separated (space- or newline-separated both work), e.g. `libs` or `libs\nprojects/foo`. Packages are unioned across every dir; a package name found under more than one dir is an error.'
     required: false
     default: packages
   include-workspaces:

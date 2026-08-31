@@ -48,7 +48,6 @@ fn build_plan_orders_same_repo_path_deps() {
 
 #[test]
 fn build_plan_orders_same_repo_pin_deps() {
-    // node pins lib by its channel artifact name (entry.name), not a path.
     let lib = test_entry("lib", "packages/lib");
     let node = test_entry("node", "packages/node");
     let items = vec![

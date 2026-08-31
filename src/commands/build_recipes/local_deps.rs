@@ -22,8 +22,7 @@ use super::channel::publish_argv;
 
 /// Resolve committed `==X.Y.Z` pins that reference a same-repo sibling, so the
 /// fallback local build can satisfy a coupled cross-bucket dependency the real
-/// channel hasn't drained yet. Unlike `resolve_path_deps` this rewrites
-/// nothing — pins are already pins.
+/// channel hasn't drained yet. Rewrites nothing.
 ///
 /// `sibling_subdirs` maps dep-name -> repo-relative subdir for the current
 /// entry's same-repo siblings. Only pins whose key is in that map and whose
@@ -43,7 +42,7 @@ pub(super) fn resolve_sibling_pins(
     let mut out = Vec::new();
     for (name, pin) in upstream.exact_pins() {
         let Some(subdir) = sibling_subdirs.get(&name) else {
-            continue; // not a same-repo sibling; real channel owns it
+            continue;
         };
         let sib_manifest = workdir.join(subdir).join(PIXI_TOML);
         let sib_text = fs::read_to_string(&sib_manifest).with_context(|| {
@@ -95,16 +94,14 @@ pub(super) fn sibling_subdirs(
         .collect()
 }
 
-/// Push `c` onto `v` unless it's already present.
 pub(super) fn push_unique(v: &mut Vec<ChannelUrl>, c: ChannelUrl) {
     if !v.contains(&c) {
         v.push(c);
     }
 }
 
-/// Guard for `build_local_dep`'s recursion, factored out so it's testable
-/// without invoking pixi. `Ok(false)` means skip (already built this entry),
-/// `Ok(true)` means proceed, `Err` means a cycle was detected among the
+/// Guard for `build_local_dep`'s recursion. `Ok(false)` means skip (already
+/// built this entry), `Ok(true)` means proceed, `Err` means a cycle among the
 /// sibling path deps being built as local fallbacks.
 fn check_local_build_guard(
     name: &PackageName,
@@ -129,7 +126,7 @@ fn check_local_build_guard(
 }
 
 /// Immutable context shared across a `build_local_dep` recursion (fixed for
-/// one top-level entry). Split out to keep the recursive fn's arg count sane.
+/// one top-level entry).
 pub(super) struct LocalBuildCtx<'a> {
     pub(super) local_deps_dir: &'a Path,
     /// Snapshot of the upstream channel, swept once for the whole job.
@@ -160,7 +157,7 @@ pub(super) fn build_local_dep(
     }
     fs::create_dir_all(ctx.local_deps_dir)?;
     visiting.push(dep.name.clone());
-    // Same read-before-rewrite ordering as the main build loop in `super::pixi`.
+    // Read committed pins before resolve_path_deps rewrites path deps into pins.
     let sibling_pins = resolve_sibling_pins(&dep.manifest, ctx.workdir, ctx.sibling_subdirs)?;
     // Pin style is irrelevant here: local fallback artifacts satisfy this
     // job's solve only and are never drained to a real channel.
