@@ -1,3 +1,10 @@
+## [8.19.0](https://github.com/greenroom-robotics/mise/compare/mise@8.18.0...mise@8.19.0) (2026-09-02)
+
+
+### Features
+
+* allow user to pass filenames instead of package name ([#98](https://github.com/greenroom-robotics/mise/issues/98)) ([a62a32b](https://github.com/greenroom-robotics/mise/commit/a62a32b2cfcd6c91af41e922b0be29324bb30043))
+
 ## [8.18.0](https://github.com/greenroom-robotics/mise/compare/mise@8.17.0...mise@8.18.0) (2026-09-02)
 
 
