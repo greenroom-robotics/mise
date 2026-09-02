@@ -1,3 +1,10 @@
+## [8.19.1](https://github.com/greenroom-robotics/mise/compare/mise@8.19.0...mise@8.19.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* replace anyhow with color_eyre ([637f9c8](https://github.com/greenroom-robotics/mise/commit/637f9c8e99b785bb3303eeb4693ee7a1fc07c739))
+
 ## [8.19.0](https://github.com/greenroom-robotics/mise/compare/mise@8.18.0...mise@8.19.0) (2026-09-02)
 
 

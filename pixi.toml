@@ -25,7 +25,7 @@ test = { features = ["test"], no-default-feature = true }
 
 [package]
 name = "mise"
-version = "8.19.0"
+version = "8.19.1"
 
 [package.build.backend]
 channels = [
