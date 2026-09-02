@@ -35,7 +35,7 @@ enum Top {
 
 impl Cli {
     /// Run the mise cli
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self.command {
             Top::Matrix(c) => c.run(),
             Top::BuildRecipes(c) => c.run(),

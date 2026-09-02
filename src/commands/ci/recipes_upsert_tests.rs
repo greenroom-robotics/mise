@@ -582,7 +582,7 @@ fn route_and_apply(
     version: &Version,
     sha: &Sha40,
     subdir: Option<&str>,
-) -> anyhow::Result<(std::path::PathBuf, Option<OldRef>)> {
+) -> color_eyre::eyre::Result<(std::path::PathBuf, Option<OldRef>)> {
     let target = route(
         root,
         package,

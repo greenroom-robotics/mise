@@ -1,5 +1,5 @@
-use anyhow::Context;
 use clap::Args;
+use color_eyre::eyre::WrapErr;
 use std::path::PathBuf;
 
 /// Writes the new version into each package's pixi.toml [package] section.
@@ -16,7 +16,7 @@ pub struct BumpPixi {
 }
 
 impl BumpPixi {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let bumped = self
             .pixi_toml
             .iter()
@@ -27,7 +27,7 @@ impl BumpPixi {
                     .with_context(|| format!("bumping {}", path.display()))?;
                 Ok((path, new_body))
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<color_eyre::eyre::Result<Vec<_>>>()?;
         for (path, new_body) in bumped {
             std::fs::write(path, new_body)
                 .with_context(|| format!("writing {}", path.display()))?;

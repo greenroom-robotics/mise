@@ -43,7 +43,7 @@ pub struct RecipesPr {
 }
 
 impl RecipesPr {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         use crate::commands::ci::recipes_upsert;
 
         if self.ros_distro.is_some() {
@@ -58,7 +58,10 @@ impl RecipesPr {
             ReleaseMode::Discovered => {
                 let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
                 if pkgs.is_empty() {
-                    anyhow::bail!("no packages found under {}", self.package_dir.display());
+                    color_eyre::eyre::bail!(
+                        "no packages found under {}",
+                        self.package_dir.display()
+                    );
                 }
                 // Subdir from the source-repo root to each package's
                 // pixi.toml ("" or "." = repo root). Anchored on the git
@@ -138,7 +141,7 @@ impl RecipesPr {
                     println!("skipping {name}: no monorepo pixi.toml and no vendored recipe");
                     continue;
                 }
-                RecipeAction::Error => anyhow::bail!(
+                RecipeAction::Error => color_eyre::eyre::bail!(
                     "package {name} has no monorepo pixi.toml and no vendored recipe \
                      (vendor_recipes/{name}/recipe.yaml or its hyphenated form) in {}",
                     self.recipes_repo
@@ -290,7 +293,7 @@ enum ReleaseMode {
 /// True when a manifest exists at `path` AND declares a `[package]`. A
 /// workspace-only manifest is a dev environment for a package built somewhere
 /// else, so for release purposes it is the same as no manifest at all.
-fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
+fn declares_package_at(path: &std::path::Path) -> color_eyre::eyre::Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
@@ -306,7 +309,7 @@ fn declares_package_at(path: &std::path::Path) -> anyhow::Result<bool> {
 fn release_mode(
     package_dir: &std::path::Path,
     package: Option<&PackageName>,
-) -> anyhow::Result<ReleaseMode> {
+) -> color_eyre::eyre::Result<ReleaseMode> {
     match package {
         Some(pkg)
             if !declares_package_at(&package_dir.join(pkg.as_str()).join(PIXI_TOML))?

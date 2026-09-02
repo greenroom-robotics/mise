@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 
 use crate::consts::PIXI_TOML;
 use crate::manifest::{PackageManifest, ResolvedDep, prepend_channels, resolve_path_deps};
@@ -33,7 +33,7 @@ pub(super) fn resolve_sibling_pins(
     manifest_path: &Path,
     workdir: &Path,
     sibling_subdirs: &BTreeMap<PackageName, PathBuf>,
-) -> anyhow::Result<Vec<ResolvedDep>> {
+) -> color_eyre::eyre::Result<Vec<ResolvedDep>> {
     let text = fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let upstream = PackageManifest::parse(&text)
@@ -107,9 +107,9 @@ fn check_local_build_guard(
     name: &PackageName,
     visiting: &[PackageName],
     local_built: &BTreeSet<PackageName>,
-) -> anyhow::Result<bool> {
+) -> color_eyre::eyre::Result<bool> {
     if visiting.contains(name) {
-        anyhow::bail!(
+        color_eyre::eyre::bail!(
             "path-dep cycle among local fallback builds: {} -> {}",
             visiting
                 .iter()
@@ -151,7 +151,7 @@ pub(super) fn build_local_dep(
     ctx: &LocalBuildCtx<'_>,
     local_built: &mut BTreeSet<PackageName>,
     visiting: &mut Vec<PackageName>,
-) -> anyhow::Result<()> {
+) -> color_eyre::eyre::Result<()> {
     if !check_local_build_guard(&dep.name, visiting, local_built)? {
         return Ok(());
     }

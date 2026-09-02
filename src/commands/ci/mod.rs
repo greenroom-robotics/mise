@@ -38,7 +38,7 @@ pub enum Ci {
 }
 
 impl Ci {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self {
             Self::Test(c) => c.run(),
             Self::Build(c) => c.run(),

@@ -12,7 +12,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use anyhow::bail;
+use color_eyre::eyre::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -74,12 +74,14 @@ impl fmt::Display for Arch {
 }
 
 impl FromStr for Arch {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "linux-64" => Ok(Self::Linux64),
             "linux-aarch64" => Ok(Self::LinuxAarch64),
-            other => anyhow::bail!("unknown arch {other:?}; expected linux-64 or linux-aarch64"),
+            other => color_eyre::eyre::bail!(
+                "unknown arch {other:?}; expected linux-64 or linux-aarch64"
+            ),
         }
     }
 }
@@ -94,12 +96,14 @@ impl fmt::Display for DeepstreamVersion {
 }
 
 impl FromStr for DeepstreamVersion {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "7.1" => Ok(Self::V7_1),
             "8.0" => Ok(Self::V8_0),
-            other => anyhow::bail!("unknown DeepStream version {other:?}; expected 7.1 or 8.0"),
+            other => {
+                color_eyre::eyre::bail!("unknown DeepStream version {other:?}; expected 7.1 or 8.0")
+            }
         }
     }
 }
@@ -138,7 +142,7 @@ impl FromStr for DeepstreamVersion {
 pub struct PackageName(String);
 
 impl PackageName {
-    pub fn new(s: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn new(s: impl Into<String>) -> color_eyre::eyre::Result<Self> {
         let s = s.into();
         let mut chars = s.chars();
         let ok = match chars.next() {
@@ -148,7 +152,7 @@ impl PackageName {
                     && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
             }
         };
-        anyhow::ensure!(
+        color_eyre::eyre::ensure!(
             ok,
             "not a package name: {s:?} (expected alphanumeric, `-`, `_` or `.`, \
              starting with a letter, digit or `_`)"
@@ -169,7 +173,7 @@ impl fmt::Display for PackageName {
 }
 
 impl FromStr for PackageName {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::new(s)
     }
@@ -227,7 +231,7 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> color_eyre::eyre::Result<Self> {
         // `semver::Comparator` is the crate's own lenient parser: it makes
         // the minor and patch components optional. It is a *requirement*
         // parser though, so some of what it accepts must be refused here.
@@ -236,7 +240,7 @@ impl Version {
         // would drop it silently — and to this program build metadata is
         // ordering- and equality-significant (see the type doc), so dropping
         // it would fuse two distinct artifacts into one value.
-        anyhow::ensure!(
+        color_eyre::eyre::ensure!(
             !s.contains('+'),
             "not a semantic version: {s:?} (build metadata is not accepted here; \
              it would have to be dropped, and it is not droppable)"
@@ -246,17 +250,17 @@ impl Version {
         // version `1.0.0` would quietly answer a question nobody asked. A
         // version starts with a digit; a requirement (or a `v` prefix) does
         // not.
-        anyhow::ensure!(
+        color_eyre::eyre::ensure!(
             s.starts_with(|c: char| c.is_ascii_digit()),
             "not a semantic version: {s:?} (expected a version like 1, 1.2 or 1.2.3 — \
              a requirement or a prefix is not a version)"
         );
         let c: semver::Comparator = s
             .parse()
-            .map_err(|e| anyhow::anyhow!("not a semantic version: {s:?} ({e})"))?;
+            .map_err(|e| color_eyre::eyre::eyre!("not a semantic version: {s:?} ({e})"))?;
         // And a wildcard, which starts with a digit and so slips past the check
         // above: `2.5.*` parses as the wildcard comparator `2.5`.
-        anyhow::ensure!(
+        color_eyre::eyre::ensure!(
             c.op == semver::Op::Caret,
             "not a semantic version: {s:?} (expected a version like 1, 1.2 or 1.2.3 — \
              a wildcard is not a version)"
@@ -364,7 +368,7 @@ impl fmt::Display for Version {
 }
 
 impl FromStr for Version {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -392,10 +396,10 @@ impl Serialize for Version {
 pub struct Sha40(String);
 
 impl Sha40 {
-    pub fn new(s: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn new(s: impl Into<String>) -> color_eyre::eyre::Result<Self> {
         let s = s.into();
         if s.len() != 40 || !s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
-            anyhow::bail!("not a 40-char lowercase hex sha: {s:?}");
+            color_eyre::eyre::bail!("not a 40-char lowercase hex sha: {s:?}");
         }
         Ok(Self(s))
     }
@@ -413,7 +417,7 @@ impl fmt::Display for Sha40 {
 }
 
 impl FromStr for Sha40 {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::new(s)
     }
@@ -465,10 +469,10 @@ pub struct GithubRepoUrl {
 
 impl GithubRepoUrl {
     /// Parse an `https://github.com/<owner>/<repo>[.git][/]` URL.
-    pub fn parse(url: &str) -> anyhow::Result<Self> {
+    pub fn parse(url: &str) -> color_eyre::eyre::Result<Self> {
         let rest = url
             .strip_prefix("https://github.com/")
-            .ok_or_else(|| anyhow::anyhow!("not a GitHub https URL: {url:?}"))?;
+            .ok_or_else(|| color_eyre::eyre::eyre!("not a GitHub https URL: {url:?}"))?;
         Self::from_owner_repo(rest, url)
     }
 
@@ -476,7 +480,7 @@ impl GithubRepoUrl {
     /// above, the scp-style `git@github.com:<owner>/<repo>[.git]`, or the full
     /// `ssh://[git@]github.com/<owner>/<repo>[.git]`. All three occur in real
     /// checkouts, and the caller only has whatever git reports.
-    pub fn parse_remote(url: &str) -> anyhow::Result<Self> {
+    pub fn parse_remote(url: &str) -> color_eyre::eyre::Result<Self> {
         const SSH_PREFIXES: [&str; 3] = [
             "git@github.com:",
             "ssh://git@github.com/",
@@ -490,13 +494,13 @@ impl GithubRepoUrl {
 
     /// The shared tail of both parsers: `<owner>/<repo>` with the optional
     /// `.git` and trailing slash removed. `url` is only for the error message.
-    fn from_owner_repo(rest: &str, url: &str) -> anyhow::Result<Self> {
+    fn from_owner_repo(rest: &str, url: &str) -> color_eyre::eyre::Result<Self> {
         let rest = rest.strip_suffix('/').unwrap_or(rest);
         let rest = rest.strip_suffix(".git").unwrap_or(rest);
         let (owner, repo) = rest
             .split_once('/')
-            .ok_or_else(|| anyhow::anyhow!("not a GitHub repo URL: {url:?}"))?;
-        anyhow::ensure!(
+            .ok_or_else(|| color_eyre::eyre::eyre!("not a GitHub repo URL: {url:?}"))?;
+        color_eyre::eyre::ensure!(
             !owner.is_empty() && !repo.is_empty() && !repo.contains('/'),
             "not a GitHub repo URL: {url:?}"
         );
@@ -549,7 +553,7 @@ impl fmt::Display for GithubRepoUrl {
 }
 
 impl FromStr for GithubRepoUrl {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -579,9 +583,10 @@ impl Serialize for GithubRepoUrl {
 pub struct RemoteChannel(Url);
 
 impl RemoteChannel {
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
-        let url = Url::parse(s).map_err(|e| anyhow::anyhow!("not a channel URL: {s:?} ({e})"))?;
-        anyhow::ensure!(
+    pub fn parse(s: &str) -> color_eyre::eyre::Result<Self> {
+        let url =
+            Url::parse(s).map_err(|e| color_eyre::eyre::eyre!("not a channel URL: {s:?} ({e})"))?;
+        color_eyre::eyre::ensure!(
             url.scheme() != "file",
             "{s:?} is a local channel; remote channel URLs are swept once and \
              cached, which is only sound for a channel the build cannot mutate"
@@ -610,7 +615,7 @@ impl fmt::Display for RemoteChannel {
 }
 
 impl FromStr for RemoteChannel {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -649,7 +654,7 @@ pub enum ChannelUrl {
 }
 
 impl ChannelUrl {
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
+    pub fn parse(s: &str) -> color_eyre::eyre::Result<Self> {
         match s.strip_prefix("file://") {
             Some(dir) => Ok(Self::Local(LocalChannel::new(dir))),
             None => Ok(Self::Remote(RemoteChannel::parse(s)?)),
@@ -667,7 +672,7 @@ impl fmt::Display for ChannelUrl {
 }
 
 impl FromStr for ChannelUrl {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
     }
@@ -764,17 +769,17 @@ struct PixiNativeEntryRaw {
 }
 
 impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
-    type Error = anyhow::Error;
+    type Error = color_eyre::eyre::Report;
     fn try_from(raw: PixiNativeEntryRaw) -> Result<Self, Self::Error> {
         if raw.git_ref.is_some() {
-            anyhow::bail!(
+            color_eyre::eyre::bail!(
                 "entry {:?}: `ref:` is no longer supported; use `rev:` with a 40-char SHA. \
                  Replace it with the commit SHA the ref resolves to.",
                 raw.name.as_str()
             );
         }
         let rev = raw.rev.ok_or_else(|| {
-            anyhow::anyhow!(
+            color_eyre::eyre::eyre!(
                 "entry {:?}: missing required `rev:` (40-char SHA)",
                 raw.name.as_str()
             )
@@ -815,13 +820,13 @@ pub struct PixiNativeManifest {
 }
 
 impl PixiNativeManifest {
-    pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
+    pub fn from_yaml_str(yaml: &str) -> color_eyre::eyre::Result<Self> {
         let raw: PixiNativeManifestRaw = serde_yaml_ng::from_str(yaml)?;
         let packages = raw
             .packages
             .into_iter()
             .map(PixiNativeEntry::try_from)
-            .collect::<anyhow::Result<Vec<_>>>()?;
+            .collect::<color_eyre::eyre::Result<Vec<_>>>()?;
 
         let mut names = HashMap::new();
         for pkg in &packages {
@@ -850,7 +855,7 @@ impl PixiNativeManifest {
     /// Parsed through [`PixiNativeNames`]: the answer must not fail because
     /// some *other* entry in the file is malformed. The file's own structure
     /// still has to be valid YAML.
-    pub fn has_entry(yaml: &str, name: &PackageName) -> anyhow::Result<bool> {
+    pub fn has_entry(yaml: &str, name: &PackageName) -> color_eyre::eyre::Result<bool> {
         let names: PixiNativeNames = serde_yaml_ng::from_str(yaml)?;
         Ok(names.packages.iter().any(|p| &p.name == name))
     }
@@ -886,14 +891,14 @@ impl fmt::Display for RunnerSize {
 }
 
 impl FromStr for RunnerSize {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "4cpu" => Ok(Self::Cpu4),
             "8cpu" => Ok(Self::Cpu8),
             "16cpu" => Ok(Self::Cpu16),
             "32cpu" => Ok(Self::Cpu32),
-            other => anyhow::bail!(
+            other => color_eyre::eyre::bail!(
                 "unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"
             ),
         }
@@ -911,7 +916,7 @@ impl fmt::Display for RunnerSpec {
 }
 
 impl FromStr for RunnerSpec {
-    type Err = anyhow::Error;
+    type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (size, himem) = match s.strip_suffix("-himem") {
             Some(base) => (base, true),

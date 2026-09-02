@@ -125,8 +125,11 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
 
 /// Merge a `workspaces` array into the root package.json, creating a minimal
 /// one if absent.
-fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> anyhow::Result<()> {
-    use anyhow::Context;
+fn ensure_root_workspaces(
+    root_pkg_json: &std::path::Path,
+    globs: &[String],
+) -> color_eyre::eyre::Result<()> {
+    use color_eyre::eyre::WrapErr;
     let mut v: serde_json::Value = if root_pkg_json.exists() {
         let text = std::fs::read_to_string(root_pkg_json)
             .with_context(|| format!("reading {}", root_pkg_json.display()))?;
@@ -142,10 +145,10 @@ fn ensure_root_workspaces(root_pkg_json: &std::path::Path, globs: &[String]) -> 
 }
 
 impl Release {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
-            anyhow::bail!("no packages found under {}", self.package_dir.display());
+            color_eyre::eyre::bail!("no packages found under {}", self.package_dir.display());
         }
         let multi = self.package.is_none() && pkgs.len() > 1;
 
@@ -192,7 +195,7 @@ impl Release {
         &self,
         pixi: &std::path::Path,
         pkg_name: &PackageName,
-    ) -> anyhow::Result<String> {
+    ) -> color_eyre::eyre::Result<String> {
         let branches = self
             .release_branches
             .split(',')

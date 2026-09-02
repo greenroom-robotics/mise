@@ -1,5 +1,5 @@
-use anyhow::{Context, Result};
 use clap::Args;
+use color_eyre::eyre::{ContextCompat, Result};
 use std::path::PathBuf;
 
 use crate::types::{PackageName, Version};
@@ -46,7 +46,7 @@ impl VerifySiblings {
             })?;
             let tag = format!("{target}@{version}");
             if !crate::git::is_clean(&self.package_dir, &tag, "HEAD", dir)? {
-                anyhow::bail!(
+                color_eyre::eyre::bail!(
                     "sibling {target} has changed since {tag} and is not releasing in \
                      this run — {consumer}'s derived pin would not match published \
                      content. Remedy: give {target} a releasable commit (fix:/feat:) \

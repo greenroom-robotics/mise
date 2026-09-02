@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Subcommand;
+use color_eyre::eyre::WrapErr;
 
 use crate::repo::Repo;
 
@@ -15,7 +15,7 @@ pub enum Snapshot {
 }
 
 impl Snapshot {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self {
             Self::Refresh { repo_root } => refresh(repo_root),
         }
@@ -26,7 +26,7 @@ const SNAPSHOT_URL: &str =
     "https://raw.githubusercontent.com/RoboStack/ros-kilted/main/rosdistro_snapshot.yaml";
 const SUBDIRS: &[&str] = &["linux-64", "noarch"];
 
-fn refresh(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
+fn refresh(repo_root: Option<PathBuf>) -> color_eyre::eyre::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let root = repo.root();
 
@@ -50,7 +50,7 @@ fn refresh(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn download_to(url: &str, dest: &std::path::Path) -> anyhow::Result<()> {
+fn download_to(url: &str, dest: &std::path::Path) -> color_eyre::eyre::Result<()> {
     let resp = ureq::get(url)
         .call()
         .with_context(|| format!("GET {url}"))?;

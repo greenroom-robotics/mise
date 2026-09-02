@@ -1,5 +1,5 @@
-use anyhow::Context;
 use clap::Args;
+use color_eyre::eyre::WrapErr;
 use std::path::PathBuf;
 
 /// mise-specific prepare callback. Run via `mise ci release --extra-prepare-cmd`
@@ -24,7 +24,7 @@ pub struct SyncCargo {
 }
 
 impl SyncCargo {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let toml = std::fs::read_to_string(&self.cargo_toml)
             .with_context(|| format!("reading {}", self.cargo_toml.display()))?;
         let bumped = crate::manifest::set_package_version(&toml, &self.version)
@@ -49,16 +49,16 @@ fn bump_cargo_lock(
     body: &str,
     package: &str,
     new_version: &crate::types::Version,
-) -> anyhow::Result<String> {
+) -> color_eyre::eyre::Result<String> {
     let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.lock")?;
     let pkgs = doc
         .get_mut("package")
         .and_then(|p| p.as_array_of_tables_mut())
-        .ok_or_else(|| anyhow::anyhow!("no [[package]] entries in Cargo.lock"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("no [[package]] entries in Cargo.lock"))?;
     let entry = pkgs
         .iter_mut()
         .find(|e| e.get("name").and_then(|n| n.as_str()) == Some(package))
-        .ok_or_else(|| anyhow::anyhow!("no [[package]] named {package:?} in Cargo.lock"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("no [[package]] named {package:?} in Cargo.lock"))?;
     entry["version"] = toml_edit::value(new_version.to_string());
     Ok(doc.to_string())
 }

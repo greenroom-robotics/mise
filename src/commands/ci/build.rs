@@ -1,5 +1,5 @@
-use anyhow::Context;
 use clap::Args;
+use color_eyre::eyre::WrapErr;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -17,10 +17,10 @@ pub struct Build {
 }
 
 impl Build {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
-            anyhow::bail!("no packages found under {}", self.package_dir.display());
+            color_eyre::eyre::bail!("no packages found under {}", self.package_dir.display());
         }
         let out_dir = std::env::var("RUNNER_TEMP").map_or_else(
             |_| std::path::PathBuf::from("./output"),

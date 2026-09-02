@@ -1,7 +1,8 @@
 use clap::Parser;
 use mise::cli::Cli;
 
-fn main() -> anyhow::Result<()> {
+fn main() -> color_eyre::eyre::Result<()> {
+    color_eyre::install()?;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

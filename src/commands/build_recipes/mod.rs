@@ -90,7 +90,7 @@ pub enum BuildRecipes {
 }
 
 impl BuildRecipes {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self {
             Self::Vinca {
                 repo_root,

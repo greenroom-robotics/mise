@@ -6,7 +6,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 
 use crate::manifest::PackageManifest;
 use crate::process;
@@ -76,7 +76,7 @@ fn search_channel(
     spec: &str,
     channel_url: &str,
     target_platform: Arch,
-) -> anyhow::Result<Option<BTreeMap<String, Vec<SearchRecord>>>> {
+) -> color_eyre::eyre::Result<Option<BTreeMap<String, Vec<SearchRecord>>>> {
     let arch = target_platform.to_string();
 
     let stdout = match process::capture_probe(
@@ -87,7 +87,7 @@ fn search_channel(
     {
         process::Captured::Output(out) => out,
         process::Captured::Failed { code, stderr } => {
-            anyhow::ensure!(
+            color_eyre::eyre::ensure!(
                 !channel_unreachable(&stderr),
                 "pixi search {spec} could not reach {channel_url} (exit {code:?}): {}",
                 stderr.trim(),
@@ -180,7 +180,7 @@ impl ChannelIndex {
     /// empty index — "nothing is published yet". An *unreachable* one is an
     /// error: an index that wrongly looks empty makes every package look
     /// unpublished.
-    fn sweep(channel: &RemoteChannel, target_platform: Arch) -> anyhow::Result<Self> {
+    fn sweep(channel: &RemoteChannel, target_platform: Arch) -> color_eyre::eyre::Result<Self> {
         let channel_url = channel.to_string();
         let index = Self::from_records(
             &search_channel("*", &channel_url, target_platform)?.unwrap_or_default(),
@@ -263,7 +263,10 @@ impl ChannelIndexCache {
     /// channel the job cannot mutate while holding it. Local channels gain
     /// packages as this job publishes into them and go through
     /// [`version_published`] instead.
-    pub(super) fn get(&self, channel: &RemoteChannel) -> anyhow::Result<Arc<ChannelIndex>> {
+    pub(super) fn get(
+        &self,
+        channel: &RemoteChannel,
+    ) -> color_eyre::eyre::Result<Arc<ChannelIndex>> {
         let mut swept = self.swept.lock().expect("channel index cache poisoned");
         if let Some(index) = swept.get(channel) {
             return Ok(Arc::clone(index));
@@ -286,7 +289,7 @@ pub(super) fn version_published(
     version: &Version,
     channel: &LocalChannel,
     target_platform: Arch,
-) -> anyhow::Result<bool> {
+) -> color_eyre::eyre::Result<bool> {
     let spec = format!("{name}=={version}");
     let Some(parsed) = search_channel(&spec, &channel.to_string(), target_platform)? else {
         return Ok(false);

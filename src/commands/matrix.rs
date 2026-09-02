@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use anyhow::Context;
 use clap::Subcommand;
+use color_eyre::eyre::WrapErr;
 use serde::Serialize;
 
 use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML, ROSDISTRO_RECIPES_YAML};
@@ -80,14 +80,14 @@ pub enum Matrix {
 }
 
 impl Matrix {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self {
             Self::Compute { repo_root } => compute(repo_root),
         }
     }
 }
 
-fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
+fn compute(repo_root: Option<PathBuf>) -> color_eyre::eyre::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let ds = repo.deepstream()?;
     let manifest = repo.pixi_native_manifest()?;
@@ -299,7 +299,7 @@ struct MatrixPlan {
 fn diff_changed_packages(
     base_yaml: Option<&str>,
     head_yaml: &str,
-) -> anyhow::Result<BTreeSet<PackageName>> {
+) -> color_eyre::eyre::Result<BTreeSet<PackageName>> {
     let head = PixiNativeManifest::from_yaml_str(head_yaml)?;
     let Some(base_yaml) = base_yaml else {
         return Ok(head.packages.iter().map(|e| e.name.clone()).collect());
@@ -330,7 +330,7 @@ fn diff_changed_packages(
 
 /// Resolve a `ManifestScoped` state into the concrete set of changed package
 /// names by diffing `pixi_native_packages.yaml` against the base ref.
-fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScope> {
+fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> color_eyre::eyre::Result<PixiScope> {
     let Some(base) = event.base_sha() else {
         // No base ref to diff against — fail safe by building everything.
         return Ok(PixiScope::All);
@@ -346,7 +346,7 @@ fn resolve_pixi_scope(repo: &Repo, event: &gh::Event) -> anyhow::Result<PixiScop
     }
 }
 
-fn resolve(raw: RawState, repo: &Repo, event: &gh::Event) -> anyhow::Result<MatrixPlan> {
+fn resolve(raw: RawState, repo: &Repo, event: &gh::Event) -> color_eyre::eyre::Result<MatrixPlan> {
     let pixi_native = match raw.pixi_native {
         RawScope::None => PixiScope::None,
         RawScope::All => PixiScope::All,

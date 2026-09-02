@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 use serde::Deserialize;
 
 use crate::consts::{PIXI_NATIVE_PACKAGES_YAML, PIXI_TOML};
@@ -16,13 +16,13 @@ pub struct Repo {
 
 impl Repo {
     /// Walk up from cwd looking for `pixi.toml`.
-    pub fn discover() -> anyhow::Result<Self> {
+    pub fn discover() -> color_eyre::eyre::Result<Self> {
         let cwd = env::current_dir().context("get current dir")?;
         Self::discover_from(&cwd)
     }
 
     /// Walk up from `start` looking for `pixi.toml`.
-    pub fn discover_from(start: &Path) -> anyhow::Result<Self> {
+    pub fn discover_from(start: &Path) -> color_eyre::eyre::Result<Self> {
         let mut cur: &Path = start;
         loop {
             if cur.join(PIXI_TOML).is_file() {
@@ -32,15 +32,18 @@ impl Repo {
             }
             match cur.parent() {
                 Some(p) => cur = p,
-                None => anyhow::bail!("no pixi.toml found walking up from {}", start.display()),
+                None => color_eyre::eyre::bail!(
+                    "no pixi.toml found walking up from {}",
+                    start.display()
+                ),
             }
         }
     }
 
     /// Use an explicit path. Must contain `pixi.toml`.
-    pub fn at(root: PathBuf) -> anyhow::Result<Self> {
+    pub fn at(root: PathBuf) -> color_eyre::eyre::Result<Self> {
         if !root.join(PIXI_TOML).is_file() {
-            anyhow::bail!("{} does not contain pixi.toml", root.display());
+            color_eyre::eyre::bail!("{} does not contain pixi.toml", root.display());
         }
         Ok(Self {
             root: root.canonicalize().context("canonicalize repo root")?,
@@ -48,7 +51,7 @@ impl Repo {
     }
 
     /// Use `--repo-root <PATH>` if given, otherwise walk up from cwd looking for `pixi.toml`.
-    pub fn or_discover(root: Option<PathBuf>) -> anyhow::Result<Self> {
+    pub fn or_discover(root: Option<PathBuf>) -> color_eyre::eyre::Result<Self> {
         match root {
             Some(p) => Self::at(p),
             None => Self::discover(),
@@ -60,7 +63,7 @@ impl Repo {
         &self.root
     }
 
-    pub fn deepstream(&self) -> anyhow::Result<DeepstreamCfg> {
+    pub fn deepstream(&self) -> color_eyre::eyre::Result<DeepstreamCfg> {
         let recipes_path = self.root.join(".github").join("deepstream-recipes.yaml");
         let variants_path = self.root.join("variants").join("deepstream.yaml");
 
@@ -80,7 +83,7 @@ impl Repo {
         })
     }
 
-    pub fn pixi_native_manifest(&self) -> anyhow::Result<PixiNativeManifest> {
+    pub fn pixi_native_manifest(&self) -> color_eyre::eyre::Result<PixiNativeManifest> {
         let path = self.root.join(PIXI_NATIVE_PACKAGES_YAML);
         let text = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
         PixiNativeManifest::from_yaml_str(&text)

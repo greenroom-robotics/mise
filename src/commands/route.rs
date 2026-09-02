@@ -35,7 +35,7 @@ pub struct Route {
 
 impl Route {
     /// Run the `route` command
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let repo = Repo::or_discover(self.repo_root)?;
         let routing_file = match self.routing_file {
             Some(p) => RoutingFile::Explicit { routing_file: p },
@@ -62,7 +62,7 @@ impl Route {
                 handles
                     .into_iter()
                     .map(|h| h.join().expect("fetch thread panicked"))
-                    .collect::<anyhow::Result<Vec<_>>>()
+                    .collect::<color_eyre::eyre::Result<Vec<_>>>()
             })?;
             packages
                 .iter()
@@ -85,7 +85,7 @@ impl Route {
     }
 }
 
-fn as_json(pairs: &[(String, Vec<RemoteChannel>)]) -> anyhow::Result<String> {
+fn as_json(pairs: &[(String, Vec<RemoteChannel>)]) -> color_eyre::eyre::Result<String> {
     let map: BTreeMap<_, _> = pairs
         .iter()
         .map(|(name, channels)| {

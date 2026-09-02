@@ -10,7 +10,7 @@
 //! [`Package`] is the two joined at the point of discovery: a manifest parsed
 //! once, carrying the directory that owns it.
 
-use anyhow::{Context, Result};
+use color_eyre::eyre::{Result, WrapErr};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -195,7 +195,7 @@ impl PackageManifest {
     pub fn parse(text: &str) -> Result<Self> {
         match Manifest::parse(text)? {
             Manifest::Package(m) => Ok(m),
-            Manifest::WorkspaceOnly => Err(anyhow::anyhow!(
+            Manifest::WorkspaceOnly => Err(color_eyre::eyre::eyre!(
                 "no [package] section — workspace-only manifests are dev \
                  environments, not releasable packages"
             )),
@@ -321,7 +321,7 @@ impl Package {
     pub fn read(manifest_path: &Path) -> Result<Self> {
         match Manifest::read(manifest_path)? {
             Manifest::Package(manifest) => Ok(Self::new(manifest_path, manifest)),
-            Manifest::WorkspaceOnly => anyhow::bail!(
+            Manifest::WorkspaceOnly => color_eyre::eyre::bail!(
                 "{} has no [package] section — workspace-only manifests are dev \
                  environments, not releasable packages",
                 manifest_path.display()
@@ -360,14 +360,14 @@ enum Candidate {
     /// was ever meant to be a releasable package.
     Unusable {
         path: PathBuf,
-        error: anyhow::Error,
+        error: color_eyre::eyre::Report,
     },
     /// Declares a `[package]` that does not give this tool a readable `name`
     /// and `version` — either key absent, or spelled in a way our newtypes
     /// reject. This *is* a package, so it is fatal even in a tolerant sweep.
     UnreadableIdentity {
         path: PathBuf,
-        error: anyhow::Error,
+        error: color_eyre::eyre::Report,
     },
 }
 
@@ -378,8 +378,8 @@ impl Candidate {
             Err(e) => {
                 return Self::Unusable {
                     path: manifest_path.to_path_buf(),
-                    error: anyhow::Error::new(e)
-                        .context(format!("reading {}", manifest_path.display())),
+                    error: color_eyre::eyre::Report::new(e)
+                        .wrap_err(format!("reading {}", manifest_path.display())),
                 };
             }
         };
@@ -415,7 +415,7 @@ impl Candidate {
                 tracing::warn!("skipping {}: {error:#}", path.display());
                 Ok(None)
             }
-            Self::UnreadableIdentity { path, error } => Err(error.context(format!(
+            Self::UnreadableIdentity { path, error } => Err(error.wrap_err(format!(
                 "{} declares a package this tool cannot identify; it would have been \
                  skipped and never built",
                 path.display()
@@ -473,7 +473,7 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
         let id = pkg.identity();
         match filter {
             Some(name) if *name != id.name => {
-                anyhow::bail!("package {name} not found; root package is {}", id.name)
+                color_eyre::eyre::bail!("package {name} not found; root package is {}", id.name)
             }
             _ => return Ok(vec![pkg]),
         }
@@ -482,11 +482,11 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
     if let Some(name) = filter {
         let pixi = package_dir.join(name.as_str()).join(PIXI_TOML);
         if !pixi.exists() {
-            anyhow::bail!("package {name} not found at {}", pixi.display());
+            color_eyre::eyre::bail!("package {name} not found at {}", pixi.display());
         }
         let manifest = match Manifest::read(&pixi)? {
             Manifest::Package(m) => m,
-            Manifest::WorkspaceOnly => anyhow::bail!(
+            Manifest::WorkspaceOnly => color_eyre::eyre::bail!(
                 "package {name} has no [package] section in {} — workspace-only \
                  manifests are dev environments, not releasable packages",
                 pixi.display()
@@ -559,7 +559,7 @@ pub fn discover_test_targets(
         {
             return Ok(vec![TestTarget::new(&root_pixi)]);
         }
-        anyhow::bail!("package {name} not found at {}", pixi.display());
+        color_eyre::eyre::bail!("package {name} not found at {}", pixi.display());
     }
 
     if root_pixi.exists() && Manifest::read(&root_pixi).is_ok() {
@@ -596,11 +596,11 @@ pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String>
     let mut doc: toml_edit::DocumentMut = toml_text.parse().context("parsing TOML")?;
     let package = doc
         .get_mut("package")
-        .ok_or_else(|| anyhow::anyhow!("no [package] table found"))?
+        .ok_or_else(|| color_eyre::eyre::eyre!("no [package] table found"))?
         .as_table_mut()
-        .ok_or_else(|| anyhow::anyhow!("[package] is not a table"))?;
+        .ok_or_else(|| color_eyre::eyre::eyre!("[package] is not a table"))?;
     if !package.contains_key("version") {
-        anyhow::bail!("no version key in [package] table");
+        color_eyre::eyre::bail!("no version key in [package] table");
     }
     package["version"] = toml_edit::value(version.to_string());
     Ok(doc.to_string())
@@ -618,7 +618,9 @@ pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
     let package = doc
         .get_mut("package")
         .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| anyhow::anyhow!("{}: missing [package] table", manifest_path.display()))?;
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("{}: missing [package] table", manifest_path.display())
+        })?;
 
     if !package.contains_key("build") {
         package.insert("build", toml_edit::table());
@@ -627,7 +629,7 @@ pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
         .get_mut("build")
         .and_then(toml_edit::Item::as_table_like_mut)
         .ok_or_else(|| {
-            anyhow::anyhow!(
+            color_eyre::eyre::eyre!(
                 "{}: [package.build] exists but is not a table",
                 manifest_path.display(),
             )
@@ -640,7 +642,7 @@ pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
         .get_mut("config")
         .and_then(toml_edit::Item::as_table_like_mut)
         .ok_or_else(|| {
-            anyhow::anyhow!(
+            color_eyre::eyre::eyre!(
                 "{}: [package.build.config] exists but is not a table",
                 manifest_path.display(),
             )
@@ -662,7 +664,7 @@ pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result
     let text = std::fs::read_to_string(manifest_path)?;
     let mut doc: toml_edit::DocumentMut = text.parse()?;
     let arr = doc["workspace"]["channels"].as_array_mut().ok_or_else(|| {
-        anyhow::anyhow!("{}: no workspace.channels array", manifest_path.display())
+        color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
     })?;
     for (i, ch) in channels.iter().enumerate() {
         arr.insert(i, ch.to_string());

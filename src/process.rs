@@ -18,7 +18,7 @@ use std::fmt::Display;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 
 use crate::secret;
 
@@ -69,19 +69,23 @@ fn quote_stderr(stderr: &str) -> String {
 
 /// Run `prog` with `args`, inheriting this process's stdout/stderr so
 /// subprocess output is visible in real time. Bails on non-zero exit.
-pub fn run(prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<()> {
+pub fn run(prog: &str, args: &[impl AsRef<OsStr>]) -> color_eyre::eyre::Result<()> {
     run_inner(prog, args, None)
 }
 
-pub fn run_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<()> {
+pub fn run_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> color_eyre::eyre::Result<()> {
     run_inner(prog, args, Some(cwd))
 }
 
-fn run_inner(prog: &str, args: &[impl AsRef<OsStr>], cwd: Option<&Path>) -> anyhow::Result<()> {
+fn run_inner(
+    prog: &str,
+    args: &[impl AsRef<OsStr>],
+    cwd: Option<&Path>,
+) -> color_eyre::eyre::Result<()> {
     let (mut cmd, label) = build(prog, args, cwd);
     let status = cmd.status().with_context(|| format!("spawn `{label}`"))?;
     if !status.success() {
-        anyhow::bail!("{}", failure_message(&label, status, cwd));
+        color_eyre::eyre::bail!("{}", failure_message(&label, status, cwd));
     }
     Ok(())
 }
@@ -124,7 +128,7 @@ impl Captured {
 /// - **Stdout is returned verbatim, never trimmed.** Some callers capture
 ///   *file contents* (`git show <rev>:<path>`), where a trailing newline is
 ///   part of the value. Callers wanting a single-line answer trim it.
-pub fn capture_probe(prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<Captured> {
+pub fn capture_probe(prog: &str, args: &[impl AsRef<OsStr>]) -> color_eyre::eyre::Result<Captured> {
     capture_inner(prog, args, None)
 }
 
@@ -132,7 +136,7 @@ pub fn capture_probe_in(
     cwd: &Path,
     prog: &str,
     args: &[impl AsRef<OsStr>],
-) -> anyhow::Result<Captured> {
+) -> color_eyre::eyre::Result<Captured> {
     capture_inner(prog, args, Some(cwd))
 }
 
@@ -140,7 +144,7 @@ fn capture_inner(
     prog: &str,
     args: &[impl AsRef<OsStr>],
     cwd: Option<&Path>,
-) -> anyhow::Result<Captured> {
+) -> color_eyre::eyre::Result<Captured> {
     let (mut cmd, label) = build(prog, args, cwd);
     let out = cmd.output().with_context(|| format!("spawn `{label}`"))?;
     if !out.status.success() {
@@ -167,7 +171,11 @@ fn capture_inner(
 /// (trimmed and bounded) — an exit status alone says a command failed but not
 /// why, and for these callers the subprocess's own words are the whole
 /// diagnosis. Decoding follows the rules on [`capture_probe`].
-pub fn capture_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<String> {
+pub fn capture_in(
+    cwd: &Path,
+    prog: &str,
+    args: &[impl AsRef<OsStr>],
+) -> color_eyre::eyre::Result<String> {
     match capture_probe_in(cwd, prog, args)? {
         Captured::Output(stdout) => Ok(stdout),
         Captured::Failed { code, stderr } => {
@@ -180,7 +188,7 @@ pub fn capture_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow:
             if !stderr.is_empty() {
                 msg.push_str(&format!(": {stderr}"));
             }
-            Err(anyhow::anyhow!("{msg}"))
+            Err(color_eyre::eyre::eyre!("{msg}"))
         }
     }
 }
@@ -191,7 +199,10 @@ pub fn capture_in(cwd: &Path, prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow:
 /// successful outcomes. `None` means the process was terminated by a signal
 /// and produced no code at all, which the type keeps distinct from every real
 /// code.
-pub fn status_code(prog: &str, args: &[impl AsRef<OsStr>]) -> anyhow::Result<Option<i32>> {
+pub fn status_code(
+    prog: &str,
+    args: &[impl AsRef<OsStr>],
+) -> color_eyre::eyre::Result<Option<i32>> {
     status_code_inner(prog, args, None)
 }
 
@@ -199,7 +210,7 @@ pub fn status_code_in(
     cwd: &Path,
     prog: &str,
     args: &[impl AsRef<OsStr>],
-) -> anyhow::Result<Option<i32>> {
+) -> color_eyre::eyre::Result<Option<i32>> {
     status_code_inner(prog, args, Some(cwd))
 }
 
@@ -207,13 +218,13 @@ fn status_code_inner(
     prog: &str,
     args: &[impl AsRef<OsStr>],
     cwd: Option<&Path>,
-) -> anyhow::Result<Option<i32>> {
+) -> color_eyre::eyre::Result<Option<i32>> {
     let (mut cmd, label) = build(prog, args, cwd);
     let status = cmd.status().with_context(|| format!("spawn `{label}`"))?;
     Ok(status.code())
 }
 
-pub fn git(args: &[impl AsRef<OsStr>]) -> anyhow::Result<()> {
+pub fn git(args: &[impl AsRef<OsStr>]) -> color_eyre::eyre::Result<()> {
     run("git", args)
 }
 

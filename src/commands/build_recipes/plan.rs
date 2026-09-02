@@ -35,7 +35,7 @@ impl<'a> BuildPlan<'a> {
     /// consumers. Path-dep edge: `consumer.subdir/rel_path` (normalized) ==
     /// target.subdir, same url. Pin edge: consumer's `==` pin key == target
     /// `entry.name`, same url. Errors if those edges form a cycle.
-    pub(super) fn new(items: Vec<BuildItem<'a>>) -> anyhow::Result<Self> {
+    pub(super) fn new(items: Vec<BuildItem<'a>>) -> color_eyre::eyre::Result<Self> {
         topo_sort_builds(items).map(Self)
     }
 
@@ -56,7 +56,7 @@ impl<'a> IntoIterator for BuildPlan<'a> {
     }
 }
 
-fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'_>>> {
+fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> color_eyre::eyre::Result<Vec<BuildItem<'_>>> {
     use crate::commands::ci::siblings::normalize;
 
     let key = |e: &PixiNativeEntry| (e.url.slug(), normalize(e.subdir_or_root()));
@@ -111,7 +111,7 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> anyhow::Result<Vec<BuildItem<'
         }
     }
     if order.len() != items.len() {
-        anyhow::bail!("path-dep cycle among pixi-native entries");
+        color_eyre::eyre::bail!("path-dep cycle among pixi-native entries");
     }
     let mut slots: Vec<Option<BuildItem>> = items.into_iter().map(Some).collect();
     Ok(order

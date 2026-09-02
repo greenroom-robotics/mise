@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 use tempfile::NamedTempFile;
 
 use crate::consts::ROBOSTACK_CHANNEL;
@@ -26,7 +26,7 @@ pub(super) fn vinca(
     ds_recipes: Vec<RecipeName>,
     ds_version: Option<DeepstreamVersion>,
     only: Vec<RecipeName>,
-) -> anyhow::Result<()> {
+) -> color_eyre::eyre::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let mode = VincaBuildMode::from_flags(ds_recipes, ds_version, only)?;
 
@@ -133,9 +133,9 @@ impl VincaBuildMode {
         recipes: Vec<RecipeName>,
         version: Option<DeepstreamVersion>,
         only: Vec<RecipeName>,
-    ) -> anyhow::Result<Self> {
+    ) -> color_eyre::eyre::Result<Self> {
         if !only.is_empty() && !recipes.is_empty() {
-            anyhow::bail!("--only and --ds-recipe are mutually exclusive");
+            color_eyre::eyre::bail!("--only and --ds-recipe are mutually exclusive");
         }
         if !only.is_empty() {
             return Ok(Self::Only {
@@ -148,7 +148,9 @@ impl VincaBuildMode {
             (false, None) => Ok(Self::DropDeepstream { recipes }),
             (false, Some(version)) => Ok(Self::DeepstreamOnly { recipes, version }),
             (true, Some(_)) => {
-                anyhow::bail!("--ds-version requires at least one --ds-recipe or --only recipe")
+                color_eyre::eyre::bail!(
+                    "--ds-version requires at least one --ds-recipe or --only recipe"
+                )
             }
         }
     }
@@ -168,7 +170,7 @@ impl VincaBuildMode {
 /// remove `recipes/deepstream-mutex` (a payload-less noarch metapackage
 /// consumed from the channel, never built here), then apply the mode's
 /// filter.
-fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Result<()> {
+fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> color_eyre::eyre::Result<()> {
     let recipes_dir = repo_root.join("recipes");
     let vendor_dir = repo_root.join("vendor_recipes");
 
@@ -228,7 +230,7 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
     Ok(())
 }
 
-fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
+fn copy_dir_all(src: &Path, dst: &Path) -> color_eyre::eyre::Result<()> {
     fs::create_dir_all(dst)?;
     for entry in fs::read_dir(src)? {
         let entry = entry?;
@@ -246,7 +248,7 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
 /// Write a one-off variants YAML pinning the DS axis (and, for DS 7.1, the gcc
 /// version that nvcc accepts). The caller must keep the returned
 /// `NamedTempFile` alive until rattler-build has read the path.
-fn write_variants_pin(version: DeepstreamVersion) -> anyhow::Result<NamedTempFile> {
+fn write_variants_pin(version: DeepstreamVersion) -> color_eyre::eyre::Result<NamedTempFile> {
     // rattler-build's `-m` flag takes file paths, not KEY=VALUE.
     // DS 7.1's CUDA 12.6 nvcc rejects host gcc > 13 as -ccbin; DS 8.0 (CUDA
     // 12.8) accepts gcc 14 — so 7.1 needs an explicit gcc pin alongside.
@@ -274,7 +276,7 @@ pub(super) fn deepstream_container(
     target_platform: Arch,
     ds_recipes: Vec<RecipeName>,
     ds_version: DeepstreamVersion,
-) -> anyhow::Result<()> {
+) -> color_eyre::eyre::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
 
     // The container cannot inherit the runner's git config, so auth for

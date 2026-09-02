@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 
 use crate::consts::PIXI_TOML;
 use crate::gh;
@@ -31,7 +31,7 @@ use super::plan::{BuildItem, BuildPlan};
 
 /// Materialize one commit of an entry's repo in `dest`, initing submodules
 /// and pulling the LFS objects under its subdir when the entry opts in.
-fn fetch_at_rev(entry: &PixiNativeEntry, dest: &Path) -> anyhow::Result<()> {
+fn fetch_at_rev(entry: &PixiNativeEntry, dest: &Path) -> color_eyre::eyre::Result<()> {
     git::fetch_rev(dest, &entry.url.https_url(), &entry.rev)?;
     if entry.submodules {
         git::submodule_update(dest)?;
@@ -76,7 +76,7 @@ fn check_entry(
     routing_rules: &[crate::routing::RoutingRule],
     target_platform: Arch,
     rebuild_epoch: u64,
-) -> anyhow::Result<CheckOutcome> {
+) -> color_eyre::eyre::Result<CheckOutcome> {
     let upstream = gh::fetch_upstream_manifest(entry)?;
     let id = upstream.identity();
 
@@ -150,7 +150,7 @@ pub(super) fn pixi(
     target_platform: Arch,
     runner_size: Option<RunnerSpec>,
     only: &[PackageName],
-) -> anyhow::Result<()> {
+) -> color_eyre::eyre::Result<()> {
     let repo = Repo::or_discover(repo_root)?;
     let manifest = repo.pixi_native_manifest()?;
 
@@ -187,7 +187,7 @@ pub(super) fn pixi(
     let channels = ChannelIndexCache::new(target_platform);
     let channels_ref = &channels;
     let rebuild_epoch = manifest.rebuild_epoch;
-    let outcomes: Vec<(&PixiNativeEntry, anyhow::Result<CheckOutcome>)> =
+    let outcomes: Vec<(&PixiNativeEntry, color_eyre::eyre::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
             let handles: Vec<_> = filtered
                 .iter()
@@ -306,7 +306,7 @@ pub(super) fn pixi(
         let manifest_dir = workdir.join(subdir);
         let manifest_path = manifest_dir.join(PIXI_TOML);
         if !manifest_path.is_file() {
-            anyhow::bail!(
+            color_eyre::eyre::bail!(
                 "entry {}: no pixi.toml at {}/pixi.toml in checkout",
                 entry.name,
                 subdir.display(),

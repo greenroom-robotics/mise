@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use color_eyre::eyre::{Result, WrapErr};
 use std::path::{Path, PathBuf};
 
 use super::yaml_block::{self, item_bounds};
@@ -74,7 +74,7 @@ pub(crate) fn mutate_vendored_recipe(
     text: &str,
     version: &Version,
     rev: &Sha40,
-) -> anyhow::Result<String> {
+) -> color_eyre::eyre::Result<String> {
     let mut out: Vec<String> = Vec::new();
     let mut old_version: Option<String> = None;
     let mut old_rev: Option<String> = None;
@@ -101,14 +101,17 @@ pub(crate) fn mutate_vendored_recipe(
         out.push(replacement.unwrap_or_else(|| line.to_string()));
     }
 
-    let old_version =
-        old_version.ok_or_else(|| anyhow::anyhow!("package.version not found in recipe"))?;
+    let old_version = old_version
+        .ok_or_else(|| color_eyre::eyre::eyre!("package.version not found in recipe"))?;
     if old_version.contains("${{") {
-        anyhow::bail!("package.version is templated ({old_version}); refusing to overwrite");
+        color_eyre::eyre::bail!(
+            "package.version is templated ({old_version}); refusing to overwrite"
+        );
     }
-    let old_rev = old_rev.ok_or_else(|| anyhow::anyhow!("source.rev not found in recipe"))?;
+    let old_rev =
+        old_rev.ok_or_else(|| color_eyre::eyre::eyre!("source.rev not found in recipe"))?;
     let number_idx =
-        number_idx.ok_or_else(|| anyhow::anyhow!("build.number not found in recipe"))?;
+        number_idx.ok_or_else(|| color_eyre::eyre::eyre!("build.number not found in recipe"))?;
 
     let version = version.to_string();
     let rev = rev.as_str();
@@ -149,7 +152,7 @@ pub(crate) fn mutate_pixi_entry(
     rev: &Sha40,
     subdir: Option<&str>,
     lfs: bool,
-) -> anyhow::Result<String> {
+) -> color_eyre::eyre::Result<String> {
     let lines: Vec<&str> = text.lines().collect();
     let url = url.git_url();
     let rev = rev.as_str();
@@ -347,7 +350,7 @@ pub(crate) fn route(
     version: &Version,
     sha: &Sha40,
     pixi: PixiEntryOpts<'_>,
-) -> anyhow::Result<ReleaseTarget> {
+) -> color_eyre::eyre::Result<ReleaseTarget> {
     if let Some(recipe_rel) = vendored_recipe_path(recipes_root, package) {
         return Ok(ReleaseTarget::Vendored {
             recipe_rel,
@@ -380,7 +383,7 @@ pub(crate) fn route(
     }
 
     // The file has to exist to append to; fail here rather than in the write stage.
-    anyhow::ensure!(
+    color_eyre::eyre::ensure!(
         pixi_native_text.is_some(),
         "{} not found in recipes repo; cannot add pixi-native entry for {package}",
         pixi_native_abs.display()
@@ -394,7 +397,7 @@ pub(crate) fn route(
     })
 }
 
-fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
+fn read_if_exists(path: &Path) -> color_eyre::eyre::Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -408,7 +411,10 @@ fn read_if_exists(path: &Path) -> anyhow::Result<Option<String>> {
 /// Returns the ref the package was pinned to *before* this release (for
 /// building a source-repo diff link), or `None` for a brand-new package that
 /// had no prior pin. The file written is [`ReleaseTarget::rel_path`].
-pub(crate) fn apply(recipes_root: &Path, target: &ReleaseTarget) -> anyhow::Result<Option<OldRef>> {
+pub(crate) fn apply(
+    recipes_root: &Path,
+    target: &ReleaseTarget,
+) -> color_eyre::eyre::Result<Option<OldRef>> {
     let abs = recipes_root.join(target.rel_path());
     match target {
         ReleaseTarget::Vendored {

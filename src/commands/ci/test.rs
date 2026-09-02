@@ -1,6 +1,6 @@
 use crate::manifest::TestTarget;
-use anyhow::Context;
 use clap::Args;
+use color_eyre::eyre::{ContextCompat, WrapErr};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -44,7 +44,7 @@ struct Job {
 }
 
 /// Parse `env:task` pairs, defaulting to a single `default:test` job when empty.
-fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
+fn parse_jobs(raw: &[String]) -> color_eyre::eyre::Result<Vec<Job>> {
     if raw.is_empty() {
         return Ok(vec![Job {
             env: "default".into(),
@@ -57,7 +57,9 @@ fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
                 format!("invalid --job {spec:?}: expected `<env>:<task>` (e.g. default:test)")
             })?;
             if env.is_empty() || task.is_empty() {
-                anyhow::bail!("invalid --job {spec:?}: env and task must both be non-empty");
+                color_eyre::eyre::bail!(
+                    "invalid --job {spec:?}: env and task must both be non-empty"
+                );
             }
             Ok(Job {
                 env: env.to_string(),
@@ -68,21 +70,21 @@ fn parse_jobs(raw: &[String]) -> anyhow::Result<Vec<Job>> {
 }
 
 impl Test {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self) -> color_eyre::eyre::Result<()> {
         let jobs = parse_jobs(&self.jobs)?;
         let pkgs =
             crate::manifest::discover_test_targets(&self.package_dir, self.package.as_ref())?;
         if pkgs.is_empty() {
-            anyhow::bail!("no packages found under {}", self.package_dir.display());
+            color_eyre::eyre::bail!("no packages found under {}", self.package_dir.display());
         }
         let failed: Vec<String> = pkgs
             .iter()
             .flat_map(|pkg| jobs.iter().map(move |job| (pkg, job)))
             .map(|(pkg, job)| self.run_job(pkg, job))
             .filter_map(Result::transpose)
-            .collect::<anyhow::Result<_>>()?;
+            .collect::<color_eyre::eyre::Result<_>>()?;
         if !failed.is_empty() {
-            anyhow::bail!("tests failed for: {}", failed.join(", "));
+            color_eyre::eyre::bail!("tests failed for: {}", failed.join(", "));
         }
         Ok(())
     }
@@ -92,7 +94,7 @@ impl Test {
     /// the test result, not an error, so a failing job (including one killed by
     /// a signal, which ROS tests do manage) is reported alongside the others by
     /// the caller rather than abandoning the remaining packages.
-    fn run_job(&self, pkg: &TestTarget, job: &Job) -> anyhow::Result<Option<String>> {
+    fn run_job(&self, pkg: &TestTarget, job: &Job) -> color_eyre::eyre::Result<Option<String>> {
         let pkg_dir = &pkg.dir;
         println!(
             "==> mise ci test :: {} [{}:{}]{}",
@@ -137,7 +139,11 @@ impl Test {
 /// preserving the relative path so filenames never collide across packages or
 /// across environments that share the same `build/` dir. Returns the number of
 /// files copied.
-fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Result<usize> {
+fn collect_reports(
+    pkg_dir: &Path,
+    report_dir: &Path,
+    env: &str,
+) -> color_eyre::eyre::Result<usize> {
     let build = pkg_dir.join("build");
     if !build.is_dir() {
         return Ok(0);
@@ -162,7 +168,7 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
 }
 
 /// Recursively collect `*.xml` files under `dir`.
-fn find_xml(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+fn find_xml(dir: &Path) -> color_eyre::eyre::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let path = entry?.path();

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, bail};
+use color_eyre::eyre::{WrapErr, bail};
 use serde::Deserialize;
 
 use crate::consts::ROUTING_YAML;
@@ -38,7 +38,7 @@ pub enum RoutingFile {
 
 /// Compile a routing.yaml glob pattern to an anchored regex. `*` becomes
 /// `.*`; the literal token `{variant}` becomes a named non-greedy capture
-fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
+fn pattern_to_regex(pattern: &str) -> color_eyre::eyre::Result<regex::Regex> {
     let mut out = String::from("^");
     let mut rest = pattern;
     while !rest.is_empty() {
@@ -63,7 +63,7 @@ fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
 
 /// Load routing rules from `routing`, if the `RepoDefault` is missing no rules are returned,
 /// otherwise an error.
-pub fn load_rules(routing: RoutingFile) -> anyhow::Result<Vec<RoutingRule>> {
+pub fn load_rules(routing: RoutingFile) -> color_eyre::eyre::Result<Vec<RoutingRule>> {
     let (routing_file, missing_ok) = match routing {
         RoutingFile::RepoDefault { repo_root } => (repo_root.join(ROUTING_YAML), true),
         RoutingFile::Explicit { routing_file } => (routing_file, false),
@@ -83,10 +83,10 @@ pub fn load_rules(routing: RoutingFile) -> anyhow::Result<Vec<RoutingRule>> {
     let mut rules = Vec::with_capacity(raw.rules.len());
     for (i, r) in raw.rules.into_iter().enumerate() {
         if r.pattern.is_empty() {
-            anyhow::bail!("routing.yaml rules[{i}].pattern must be a non-empty string");
+            color_eyre::eyre::bail!("routing.yaml rules[{i}].pattern must be a non-empty string");
         }
         if r.channels.is_empty() || r.channels.iter().any(String::is_empty) {
-            anyhow::bail!("routing.yaml rules[{i}].channels must be non-empty strings");
+            color_eyre::eyre::bail!("routing.yaml rules[{i}].channels must be non-empty strings");
         }
         rules.push(RoutingRule {
             regex: pattern_to_regex(&r.pattern)?,

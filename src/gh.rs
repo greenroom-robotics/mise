@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
+use color_eyre::eyre::WrapErr;
 use serde::Deserialize;
 
 use crate::consts::DEFAULT_BRANCH;
@@ -44,7 +44,7 @@ impl Event {
     }
 
     /// Load using `GITHUB_EVENT_NAME` + `GITHUB_EVENT_PATH`.
-    pub fn load() -> anyhow::Result<Self> {
+    pub fn load() -> color_eyre::eyre::Result<Self> {
         let name = env::var("GITHUB_EVENT_NAME").unwrap_or_default();
         if name == "workflow_dispatch" {
             return Ok(Self::WorkflowDispatch);
@@ -53,12 +53,12 @@ impl Event {
         Self::load_from(&name, Path::new(&path))
     }
 
-    pub fn load_from(name: &str, path: &Path) -> anyhow::Result<Self> {
+    pub fn load_from(name: &str, path: &Path) -> color_eyre::eyre::Result<Self> {
         let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         Self::from_str_with_kind(name, &text)
     }
 
-    pub fn from_str_with_kind(name: &str, json: &str) -> anyhow::Result<Self> {
+    pub fn from_str_with_kind(name: &str, json: &str) -> color_eyre::eyre::Result<Self> {
         match name {
             "pull_request" => {
                 #[derive(Deserialize)]
@@ -173,7 +173,7 @@ fn stale_instead_of_keys(get_regexp_output: &str) -> Vec<String> {
 /// config *key*, so a rotated token writes a second key rather than replacing
 /// the first, and on a long-lived runner revoked tokens would accumulate as
 /// competing rules for the same prefix.
-pub fn ensure_git_auth() -> anyhow::Result<()> {
+pub fn ensure_git_auth() -> color_eyre::eyre::Result<()> {
     let existing = process::capture_probe(
         "git",
         &[
@@ -230,7 +230,12 @@ pub fn clone_url(repo: &str) -> String {
 }
 
 /// Fetch one file's content from the raw-content host at a given rev.
-pub fn fetch_raw_file(owner: &str, repo: &str, rev: &str, path: &str) -> anyhow::Result<String> {
+pub fn fetch_raw_file(
+    owner: &str,
+    repo: &str,
+    rev: &str,
+    path: &str,
+) -> color_eyre::eyre::Result<String> {
     let url = format!("{}/{owner}/{repo}/{rev}/{path}", raw_base());
     let token = token();
     let mut req = ureq::get(&url);
@@ -247,14 +252,16 @@ pub fn fetch_raw_file(owner: &str, repo: &str, rev: &str, path: &str) -> anyhow:
             } else {
                 ""
             };
-            anyhow::bail!("failed to fetch {url} ({code}){hint}")
+            color_eyre::eyre::bail!("failed to fetch {url} ({code}){hint}")
         }
-        Err(e) => anyhow::bail!("fetch {url}: {e}"),
+        Err(e) => color_eyre::eyre::bail!("fetch {url}: {e}"),
     }
 }
 
 /// Fetch and parse an entry's `pixi.toml` at its pinned rev without cloning.
-pub fn fetch_upstream_manifest(entry: &PixiNativeEntry) -> anyhow::Result<PackageManifest> {
+pub fn fetch_upstream_manifest(
+    entry: &PixiNativeEntry,
+) -> color_eyre::eyre::Result<PackageManifest> {
     let text = fetch_raw_file(
         entry.url.owner(),
         entry.url.repo(),
@@ -269,7 +276,7 @@ pub fn fetch_upstream_manifest(entry: &PixiNativeEntry) -> anyhow::Result<Packag
 /// Paths the event touched, or [`ChangedFiles::All`] when it carries no base
 /// ref to diff against — or a base that is not present locally (a force-push
 /// rewrote it away), where a full rebuild is the fail-safe.
-pub fn changed_files(repo: &Repo, event: &Event) -> anyhow::Result<ChangedFiles> {
+pub fn changed_files(repo: &Repo, event: &Event) -> color_eyre::eyre::Result<ChangedFiles> {
     if let Some(base) = event.base_sha()
         && !crate::git::rev_exists(repo.root(), base)?
     {
@@ -294,7 +301,7 @@ pub struct PrRef<'a> {
 }
 
 impl<'a> PrRef<'a> {
-    pub fn new(repo: &'a str, branch: &'a str) -> anyhow::Result<Self> {
+    pub fn new(repo: &'a str, branch: &'a str) -> color_eyre::eyre::Result<Self> {
         let mut parts = repo.split('/');
         let ok = matches!(
             (parts.next(), parts.next(), parts.next()),
@@ -303,8 +310,8 @@ impl<'a> PrRef<'a> {
                     && !name.is_empty()
                     && !repo.contains(char::is_whitespace)
         );
-        anyhow::ensure!(ok, "recipes repo must be `owner/repo`, got {repo:?}");
-        anyhow::ensure!(!branch.is_empty(), "PR branch must not be empty");
+        color_eyre::eyre::ensure!(ok, "recipes repo must be `owner/repo`, got {repo:?}");
+        color_eyre::eyre::ensure!(!branch.is_empty(), "PR branch must not be empty");
         Ok(Self { repo, branch })
     }
 
@@ -333,7 +340,7 @@ pub mod pr {
     }
 
     /// Open a PR from the ref's branch onto the default branch.
-    pub fn create(pr: PrRef<'_>, title: &str, body: &str) -> anyhow::Result<()> {
+    pub fn create(pr: PrRef<'_>, title: &str, body: &str) -> color_eyre::eyre::Result<()> {
         process::run(
             "gh",
             &argv(
@@ -354,7 +361,7 @@ pub mod pr {
     }
 
     /// Refresh an existing PR's title and body.
-    pub fn edit(pr: PrRef<'_>, title: &str, body: &str) -> anyhow::Result<()> {
+    pub fn edit(pr: PrRef<'_>, title: &str, body: &str) -> color_eyre::eyre::Result<()> {
         process::run(
             "gh",
             &argv("edit", pr, &[pr.branch(), "--title", title, "--body", body]),
@@ -362,7 +369,7 @@ pub mod pr {
     }
 
     /// Enable GitHub native auto-merge (squash) so the PR lands once CI passes.
-    pub fn merge_auto(pr: PrRef<'_>) -> anyhow::Result<()> {
+    pub fn merge_auto(pr: PrRef<'_>) -> color_eyre::eyre::Result<()> {
         process::run(
             "gh",
             &argv("merge", pr, &[pr.branch(), "--auto", "--squash"]),
@@ -400,15 +407,15 @@ pub mod pr {
 }
 
 pub mod outputs {
-    use super::{Context, Display, Path, Write, env, fs};
+    use super::{Display, Path, WrapErr, Write, env, fs};
 
     /// Append `key=value` to `$GITHUB_OUTPUT`. No-op when unset.
-    pub fn set(key: &str, value: &impl Display) -> anyhow::Result<()> {
+    pub fn set(key: &str, value: &impl Display) -> color_eyre::eyre::Result<()> {
         let Some(path) = env::var_os("GITHUB_OUTPUT") else {
             return Ok(());
         };
         let formatted = format!("{value}");
-        anyhow::ensure!(
+        color_eyre::eyre::ensure!(
             !formatted.contains('\n'),
             "outputs::set value must not contain newlines (multiline values need the heredoc format); key={key}"
         );
