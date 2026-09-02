@@ -102,6 +102,7 @@ pub enum Captured {
 impl Captured {
     /// The stdout, or `None` for any failure — the shape a probe wants when
     /// "it didn't work" and "there is nothing there" are the same answer.
+    #[must_use]
     pub fn output(self) -> Option<String> {
         match self {
             Self::Output(s) => Some(s),

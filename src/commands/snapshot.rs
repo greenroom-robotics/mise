@@ -7,7 +7,7 @@ use crate::repo::Repo;
 
 #[derive(Subcommand, Debug)]
 pub enum Snapshot {
-    /// Refresh rosdistro_snapshot.yaml and the vinca-cache repodata.
+    /// Refresh `rosdistro_snapshot.yaml` and the vinca-cache repodata.
     Refresh {
         #[arg(long)]
         repo_root: Option<PathBuf>,

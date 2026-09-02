@@ -22,9 +22,10 @@ impl Build {
         if pkgs.is_empty() {
             anyhow::bail!("no packages found under {}", self.package_dir.display());
         }
-        let out_dir = std::env::var("RUNNER_TEMP")
-            .map(|t| std::path::PathBuf::from(t).join("conda-bld"))
-            .unwrap_or_else(|_| std::path::PathBuf::from("./output"));
+        let out_dir = std::env::var("RUNNER_TEMP").map_or_else(
+            |_| std::path::PathBuf::from("./output"),
+            |t| std::path::PathBuf::from(t).join("conda-bld"),
+        );
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("creating {}", out_dir.display()))?;
 

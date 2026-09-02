@@ -109,9 +109,7 @@ fn absolute(p: &std::path::Path) -> std::path::PathBuf {
     if p.is_absolute() {
         p.to_owned()
     } else {
-        std::env::current_dir()
-            .map(|cwd| cwd.join(p))
-            .unwrap_or_else(|_| p.to_owned())
+        std::env::current_dir().map_or_else(|_| p.to_owned(), |cwd| cwd.join(p))
     }
 }
 
@@ -122,8 +120,7 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
     std::env::current_dir()
         .ok()
         .and_then(|cwd| p.strip_prefix(&cwd).ok())
-        .map(|r| r.to_owned())
-        .unwrap_or_else(|| p.to_owned())
+        .map_or_else(|| p.to_owned(), std::borrow::ToOwned::to_owned)
 }
 
 /// Merge a `workspaces` array into the root package.json, creating a minimal
@@ -199,7 +196,7 @@ impl Release {
         let branches = self
             .release_branches
             .split(',')
-            .map(|b| b.trim())
+            .map(str::trim)
             .filter(|b| !b.is_empty())
             .map(|b| {
                 if b == "alpha" || b.starts_with("alpha/") {
@@ -258,8 +255,7 @@ impl Release {
         // Names the package in the commit subject; otherwise matches
         // @semantic-release/git's default message.
         let git_message = format!(
-            "chore(release): {name} ${{nextRelease.version}} [skip ci]\n\n${{nextRelease.notes}}",
-            name = pkg_name,
+            "chore(release): {pkg_name} ${{nextRelease.version}} [skip ci]\n\n${{nextRelease.notes}}",
         );
         plugins.push(serde_json::json!([
             "@semantic-release/git",

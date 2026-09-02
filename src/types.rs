@@ -7,12 +7,16 @@
 //! rejection at the file, not at the first use.
 
 use std::borrow::Borrow;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use anyhow::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::consts::PIXI_TOML;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -51,7 +55,7 @@ pub enum RunnerSize {
 /// flavor. Renders as `16cpu` / `16cpu-himem` — the string that rides the
 /// matrix `runner-size` field, artifact names, and `--runner-size`.
 ///
-/// `himem` swaps the RunsOn instance family from the default c-family
+/// `himem` swaps the `RunsOn` instance family from the default c-family
 /// (2GB/cpu) to the m-family (4GB/cpu) for packages whose template-heavy
 /// builds OOM at the default ratio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -152,6 +156,7 @@ impl PackageName {
         Ok(Self(s))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -268,7 +273,8 @@ impl Version {
         })
     }
 
-    pub fn major(&self) -> u64 {
+    #[must_use]
+    pub const fn major(&self) -> u64 {
         self.parsed.major
     }
 
@@ -276,6 +282,7 @@ impl Version {
     /// than leaning on this type filling them out. Callers that write a *pin*
     /// need this: `==1.2` means something wider than `==1.2.0` to the solver,
     /// so it must not be read as an exact pin just because it parses here.
+    #[must_use]
     pub fn is_explicit_triple(&self) -> bool {
         // Build metadata cannot be present, so `-` bounds the numeric core.
         let core = &self.text[..self.text.find('-').unwrap_or(self.text.len())];
@@ -285,11 +292,13 @@ impl Version {
     /// The derived sibling pin `>=<self>,<<major+1>`: floor at this exact
     /// version, cap at the next major. Prerelease floors are fine —
     /// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
+    #[must_use]
     pub fn range_pin(&self) -> String {
         format!(">={self},<{}", self.major() + 1)
     }
 
     /// The exact pin `==<self>`, for lockstep-coupled siblings.
+    #[must_use]
     pub fn exact_pin(&self) -> String {
         format!("=={self}")
     }
@@ -311,6 +320,7 @@ pub enum SiblingPinStyle {
 }
 
 impl SiblingPinStyle {
+    #[must_use]
     pub fn pin(self, version: &Version) -> String {
         match self {
             Self::Range => version.range_pin(),
@@ -390,6 +400,7 @@ impl Sha40 {
         Ok(Self(s))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -427,6 +438,7 @@ impl<'de> Deserialize<'de> for Sha40 {
 pub struct RecipeName(String);
 
 impl RecipeName {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -494,31 +506,37 @@ impl GithubRepoUrl {
         })
     }
 
+    #[must_use]
     pub fn owner(&self) -> &str {
         &self.owner
     }
 
     /// The repository's short name — the `<repo>` of `<owner>/<repo>`.
+    #[must_use]
     pub fn repo(&self) -> &str {
         &self.repo
     }
 
     /// `<owner>/<repo>`, the slug every `gh` subcommand and API path uses.
+    #[must_use]
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
     }
 
     /// Browsable URL, no `.git` suffix. Also what `git` accepts as a remote.
+    #[must_use]
     pub fn https_url(&self) -> String {
         format!("https://github.com/{}/{}", self.owner, self.repo)
     }
 
     /// Clone URL with the `.git` suffix, the form the recipe manifests record.
+    #[must_use]
     pub fn git_url(&self) -> String {
         format!("{}.git", self.https_url())
     }
 
     /// GitHub's two-dot compare page between two refs of this repository.
+    #[must_use]
     pub fn compare_url(&self, old: &str, new: &str) -> String {
         format!("{}/compare/{old}...{new}", self.https_url())
     }
@@ -575,6 +593,7 @@ impl RemoteChannel {
     ///
     /// Routing names destination channels relative to the default one
     /// (`.../default` → `.../foo`), so this replaces the last path segment.
+    #[must_use]
     pub fn sibling(&self, channel: &str) -> Self {
         let mut url = self.0.clone();
         if let Ok(mut segments) = url.path_segments_mut() {
@@ -696,16 +715,28 @@ pub struct PixiNativeEntry {
 impl PixiNativeEntry {
     /// The entry's directory inside its repo checkout: its `subdir`, or the
     /// checkout root when it has none.
+    #[must_use]
     pub fn subdir_or_root(&self) -> &Path {
         self.subdir.as_deref().unwrap_or(Path::new("."))
     }
 
     /// The build bucket this entry belongs to.
-    pub fn runner_spec(&self) -> RunnerSpec {
+    #[must_use]
+    pub const fn runner_spec(&self) -> RunnerSpec {
         RunnerSpec {
             size: self.runner_size,
             himem: self.himem,
         }
+    }
+
+    /// Path of this entry's `pixi.toml` relative to its repo root.
+    #[must_use]
+    pub fn manifest_rel_path(&self) -> String {
+        self.subdir
+            .as_deref()
+            .map(|p| p.to_string_lossy().trim_matches('/').to_string())
+            .filter(|s| !s.is_empty() && s != ".")
+            .map_or_else(|| PIXI_TOML.to_string(), |s| format!("{s}/{PIXI_TOML}"))
     }
 }
 
@@ -791,6 +822,23 @@ impl PixiNativeManifest {
             .into_iter()
             .map(PixiNativeEntry::try_from)
             .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let mut names = HashMap::new();
+        for pkg in &packages {
+            names
+                .entry(pkg.name.as_str())
+                .and_modify(|e| *e += 1)
+                .or_insert(1);
+        }
+
+        let dups = names
+            .iter()
+            .filter_map(|e| if *e.1 > 1 { Some(*e.0) } else { None })
+            .collect::<Vec<_>>();
+        if !dups.is_empty() {
+            bail!("Got duplicate entries: {}", dups.join(", "));
+        }
+
         Ok(Self {
             rebuild_epoch: raw.rebuild_epoch,
             packages,

@@ -13,10 +13,11 @@ use anyhow::Context;
 use serde::Deserialize;
 
 use crate::consts::DEFAULT_BRANCH;
+use crate::manifest::PackageManifest;
 use crate::process;
 use crate::repo::Repo;
 use crate::secret::{ExposeSecret, Secret};
-use crate::types::Sha40;
+use crate::types::{PixiNativeEntry, Sha40};
 
 /// The GitHub "no parent" sentinel for `push` event's `before` field on initial pushes.
 const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
@@ -31,10 +32,11 @@ pub enum Event {
 
 impl Event {
     /// The SHA to diff the working tree against for change detection.
-    pub fn base_sha(&self) -> Option<&Sha40> {
+    #[must_use]
+    pub const fn base_sha(&self) -> Option<&Sha40> {
         match self {
-            Event::PullRequest { base, .. } => Some(base),
-            Event::Push {
+            Self::PullRequest { base, .. } => Some(base),
+            Self::Push {
                 before: Some(b), ..
             } => Some(b),
             _ => None,
@@ -45,7 +47,7 @@ impl Event {
     pub fn load() -> anyhow::Result<Self> {
         let name = env::var("GITHUB_EVENT_NAME").unwrap_or_default();
         if name == "workflow_dispatch" {
-            return Ok(Event::WorkflowDispatch);
+            return Ok(Self::WorkflowDispatch);
         }
         let path = env::var("GITHUB_EVENT_PATH").context("GITHUB_EVENT_PATH must be set")?;
         Self::load_from(&name, Path::new(&path))
@@ -73,7 +75,7 @@ impl Event {
                     sha: Sha40,
                 }
                 let e: E = serde_json::from_str(json)?;
-                Ok(Event::PullRequest {
+                Ok(Self::PullRequest {
                     base: e.pull_request.base.sha,
                     head: e.pull_request.head.sha,
                 })
@@ -90,23 +92,24 @@ impl Event {
                 } else {
                     Some(Sha40::new(e.before)?)
                 };
-                Ok(Event::Push {
+                Ok(Self::Push {
                     before,
                     after: e.after,
                 })
             }
-            "workflow_dispatch" => Ok(Event::WorkflowDispatch),
-            _ => Ok(Event::Other),
+            "workflow_dispatch" => Ok(Self::WorkflowDispatch),
+            _ => Ok(Self::Other),
         }
     }
 
     /// The `git diff` range that expresses "what this event changed", or
     /// `None` when the event carries no base to diff from (which callers read
     /// as "assume everything changed").
+    #[must_use]
     pub fn diff_range(&self) -> Option<String> {
         match self {
-            Event::PullRequest { base, head } => Some(format!("{base}...{head}")),
-            Event::Push {
+            Self::PullRequest { base, head } => Some(format!("{base}...{head}")),
+            Self::Push {
                 before: Some(b),
                 after,
             } => Some(format!("{b}..{after}")),
@@ -132,6 +135,7 @@ const TOKEN_VARS: [&str; 3] = ["API_TOKEN_GITHUB", "GH_TOKEN", "GITHUB_TOKEN"];
 /// The GitHub token: the first of [`TOKEN_VARS`] set to a non-empty value.
 /// An empty variable is skipped, since CI commonly exports a variable with no
 /// value when a secret is unavailable.
+#[must_use]
 pub fn token() -> Option<Secret> {
     token_from(|var| env::var(var).ok())
 }
@@ -214,6 +218,7 @@ fn raw_base() -> String {
 /// The URL to clone `owner/repo` from: tokenized HTTPS when a token is
 /// available, ssh otherwise. The token is registered for log scrubbing, so
 /// the URL is safe to hand to [`crate::process`].
+#[must_use]
 pub fn clone_url(repo: &str) -> String {
     match token() {
         Some(t) => format!(
@@ -246,6 +251,19 @@ pub fn fetch_raw_file(owner: &str, repo: &str, rev: &str, path: &str) -> anyhow:
         }
         Err(e) => anyhow::bail!("fetch {url}: {e}"),
     }
+}
+
+/// Fetch and parse an entry's `pixi.toml` at its pinned rev without cloning.
+pub fn fetch_upstream_manifest(entry: &PixiNativeEntry) -> anyhow::Result<PackageManifest> {
+    let text = fetch_raw_file(
+        entry.url.owner(),
+        entry.url.repo(),
+        entry.rev.as_str(),
+        &entry.manifest_rel_path(),
+    )
+    .with_context(|| format!("entry {}", entry.name))?;
+    PackageManifest::parse(&text)
+        .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))
 }
 
 /// Paths the event touched, or [`ChangedFiles::All`] when it carries no base
@@ -291,11 +309,12 @@ impl<'a> PrRef<'a> {
     }
 
     /// `--repo <owner/repo>`, spliced into every subcommand's argv.
-    fn repo_flag(&self) -> [&'a str; 2] {
+    const fn repo_flag(&self) -> [&'a str; 2] {
         ["--repo", self.repo]
     }
 
-    pub fn branch(&self) -> &'a str {
+    #[must_use]
+    pub const fn branch(&self) -> &'a str {
         self.branch
     }
 }
@@ -303,7 +322,7 @@ impl<'a> PrRef<'a> {
 /// The `gh` CLI wrappers. Every call passes `--repo` explicitly, so `gh`
 /// never infers the target from a checkout.
 pub mod pr {
-    use super::*;
+    use super::{DEFAULT_BRANCH, PrRef, process};
 
     /// `gh pr <verb>` with `--repo` guaranteed present.
     fn argv<'a>(verb: &'a str, pr: PrRef<'a>, rest: &[&'a str]) -> Vec<&'a str> {
@@ -352,6 +371,7 @@ pub mod pr {
 
     /// URL of the PR for this branch. `None` if `gh` fails or prints nothing —
     /// callers treat the link as best-effort.
+    #[must_use]
     pub fn view_url(pr: PrRef<'_>) -> Option<String> {
         // `pr view` takes the branch first, so this one argv is hand-built.
         let mut args = vec!["pr", "view", pr.branch()];
@@ -365,6 +385,7 @@ pub mod pr {
     /// Body of the open PR for this branch, or `None` if there is no such PR.
     /// Doubles as the PR-exists check: `None` means no PR, distinct from a PR
     /// with an empty body.
+    #[must_use]
     pub fn list_body(pr: PrRef<'_>) -> Option<String> {
         let out = process::capture_probe(
             "gh",
@@ -379,7 +400,7 @@ pub mod pr {
 }
 
 pub mod outputs {
-    use super::*;
+    use super::{Context, Display, Path, Write, env, fs};
 
     /// Append `key=value` to `$GITHUB_OUTPUT`. No-op when unset.
     pub fn set(key: &str, value: &impl Display) -> anyhow::Result<()> {
@@ -402,7 +423,7 @@ pub mod outputs {
 }
 
 pub mod summary {
-    use super::*;
+    use super::{Write, env, fs};
 
     /// Append a Markdown section to `$GITHUB_STEP_SUMMARY`. Best-effort and
     /// infallible: a missing variable (local run) or an unwritable file must

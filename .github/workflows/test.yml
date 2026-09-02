@@ -27,26 +27,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - name: Format check
-        run: cargo fmt --all --check
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          run-install: false
 
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Lint
+        # lint auto-fixes; a dirty tree means something needed fixing.
+        run: pixi run -e lint lint && git diff --exit-code
 
       - name: Build
         run: cargo build --all-targets --locked
 
-      - name: Install nextest
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
-        with:
-          tool: nextest
-
       - name: Test
-        # nextest runs each test in its own process, isolating tests that
-        # mutate process-global state (e.g. the $GITHUB_OUTPUT env var).
-        # --color always: CI has no TTY, so force ANSI color in the logs.
-        run: cargo nextest run --locked --color always
-
-      - name: Doc tests
-        # nextest does not run doctests; cover them separately.
-        run: cargo test --doc --locked
+        run: pixi run -e test test

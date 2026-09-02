@@ -1,9 +1,15 @@
+use std::path::Path;
+
 use super::*;
 use crate::types::{PackageName, RemoteChannel, Version};
 
 fn rules_from(yaml: &str, dir: &Path) -> Vec<RoutingRule> {
-    std::fs::write(dir.join("routing.yaml"), yaml).unwrap();
-    load_rules(dir).unwrap()
+    let file = dir.join(ROUTING_YAML);
+    let routing = RoutingFile::Explicit {
+        routing_file: file.clone(),
+    };
+    std::fs::write(file, yaml).unwrap();
+    load_rules(routing).unwrap()
 }
 
 const SAMPLE: &str = r#"
@@ -17,9 +23,20 @@ rules:
 "#;
 
 #[test]
-fn missing_file_means_no_rules() {
+fn missing_file_handled_correctly() {
     let td = tempfile::TempDir::new().unwrap();
-    assert!(load_rules(td.path()).unwrap().is_empty());
+    let file = td.path().join(ROUTING_YAML);
+
+    // should fail
+    let explicit = RoutingFile::Explicit { routing_file: file };
+    assert!(load_rules(explicit).is_err());
+
+    let default = RoutingFile::RepoDefault {
+        repo_root: td.path().to_path_buf(),
+    };
+    let rules = load_rules(default);
+    assert!(rules.is_ok());
+    assert!(rules.unwrap().is_empty());
 }
 
 #[test]
@@ -84,6 +101,18 @@ fn published_urls_swap_last_segment() {
 #[test]
 fn malformed_yaml_errors() {
     let td = tempfile::TempDir::new().unwrap();
-    std::fs::write(td.path().join("routing.yaml"), "rules: notalist").unwrap();
-    assert!(load_rules(td.path()).is_err());
+    let routing = td.path().join(ROUTING_YAML);
+    std::fs::write(&routing, "rules: notalist").unwrap();
+    assert!(
+        load_rules(RoutingFile::Explicit {
+            routing_file: routing
+        })
+        .is_err()
+    );
+    assert!(
+        load_rules(RoutingFile::RepoDefault {
+            repo_root: td.path().to_path_buf()
+        })
+        .is_err()
+    );
 }

@@ -126,8 +126,8 @@ impl Manifest {
         let deps = collect_deps(&value)?;
         let raw: ManifestRaw = value.try_into()?;
         Ok(match raw.package {
-            None => Manifest::WorkspaceOnly,
-            Some(package) => Manifest::Package(PackageManifest {
+            None => Self::WorkspaceOnly,
+            Some(package) => Self::Package(PackageManifest {
                 package: package.try_into().context("[package]")?,
                 workspace: raw.workspace,
                 deps,
@@ -149,12 +149,11 @@ fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
         let mut node = value;
         let mut found = true;
         for seg in *table_path {
-            match node.get(seg) {
-                Some(next) => node = next,
-                None => {
-                    found = false;
-                    break;
-                }
+            if let Some(next) = node.get(seg) {
+                node = next;
+            } else {
+                found = false;
+                break;
             }
         }
         if !found {
@@ -203,14 +202,17 @@ impl PackageManifest {
         }
     }
 
-    pub fn name(&self) -> &PackageName {
+    #[must_use]
+    pub const fn name(&self) -> &PackageName {
         &self.package.name
     }
 
-    pub fn version(&self) -> &Version {
+    #[must_use]
+    pub const fn version(&self) -> &Version {
         &self.package.version
     }
 
+    #[must_use]
     pub fn identity(&self) -> PackageIdentity {
         PackageIdentity {
             name: self.package.name.clone(),
@@ -219,23 +221,25 @@ impl PackageManifest {
     }
 
     /// Every dependency entry, across all of [`DEP_TABLES`].
+    #[must_use]
     pub fn deps(&self) -> &[Dep] {
         &self.deps
     }
 
+    #[must_use]
     pub fn build_number(&self) -> u64 {
         self.package
             .build
             .as_ref()
             .and_then(|b| b.config.as_ref())
-            .map(|c| c.build_number)
-            .unwrap_or(0)
+            .map_or(0, |c| c.build_number)
     }
 
     /// `true` if this package builds a platform-independent (noarch) artifact:
     /// the `pixi-build-python` backend, or an `ament_python` ROS package. Those
     /// produce byte-identical output on every arch, so the buildfarm only
     /// builds them on linux-64.
+    #[must_use]
     pub fn is_noarch(&self) -> bool {
         let Some(build) = &self.package.build else {
             return false;
@@ -255,6 +259,7 @@ impl PackageManifest {
 
     /// `true` if the workspace's `platforms` list is empty or contains `target`.
     /// Empty list is treated as "no explicit restriction" (build everywhere).
+    #[must_use]
     pub fn supports_platform(&self, target: Arch) -> bool {
         let Some(ws) = &self.workspace else {
             return true;
@@ -280,6 +285,7 @@ impl PackageManifest {
     /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string.
     /// These are committed opt-out pins (a released consumer that was decoupled
     /// from its sibling), hand-written or legacy.
+    #[must_use]
     pub fn exact_pins(&self) -> Vec<(PackageName, Version)> {
         self.deps
             .iter()
@@ -336,6 +342,7 @@ impl Package {
         }
     }
 
+    #[must_use]
     pub fn identity(&self) -> PackageIdentity {
         self.manifest.identity()
     }
