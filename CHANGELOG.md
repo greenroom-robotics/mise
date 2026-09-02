@@ -1,3 +1,10 @@
+## [8.18.0](https://github.com/greenroom-robotics/mise/compare/mise@8.17.0...mise@8.18.0) (2026-09-02)
+
+
+### Features
+
+* add route sub command ([#97](https://github.com/greenroom-robotics/mise/issues/97)) ([85efe6a](https://github.com/greenroom-robotics/mise/commit/85efe6a830cd70cc6bf68dc4354c331be2da6b77))
+
 ## [8.17.0](https://github.com/greenroom-robotics/mise/compare/mise@8.16.0...mise@8.17.0) (2026-08-26)
 
 
