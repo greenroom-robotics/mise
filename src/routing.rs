@@ -134,7 +134,16 @@ pub fn published_channels(
     version: &Version,
 ) -> Vec<RemoteChannel> {
     let filename = format!("{name}-{version}-0.conda");
-    let Some(channels) = resolve_channels(rules, &filename) else {
+    published_channels_from_filename(rules, default_channel, &filename)
+}
+
+#[must_use]
+pub fn published_channels_from_filename(
+    rules: &[RoutingRule],
+    default_channel: &RemoteChannel,
+    filename: &str,
+) -> Vec<RemoteChannel> {
+    let Some(channels) = resolve_channels(rules, filename) else {
         return vec![default_channel.clone()];
     };
     channels

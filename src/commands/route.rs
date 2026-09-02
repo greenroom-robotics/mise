@@ -6,13 +6,16 @@ use crate::{
     gh,
     manifest::PackageManifest,
     repo::Repo,
-    routing::{self, RoutingFile, RoutingRule, published_channels},
-    types::{PackageName, RemoteChannel},
+    routing::{self, RoutingFile, published_channels, published_channels_from_filename},
+    types::RemoteChannel,
 };
 
 #[derive(Args, Debug)]
 pub struct Route {
     package: Option<String>,
+
+    #[arg(long, requires = "package")]
+    is_file: bool,
 
     #[arg(long, short)]
     routing_file: Option<PathBuf>,
@@ -34,21 +37,6 @@ impl Route {
     /// Run the `route` command
     pub fn run(self) -> anyhow::Result<()> {
         let repo = Repo::or_discover(self.repo_root)?;
-        let manifest = repo.pixi_native_manifest()?;
-        let package = self.package.as_ref();
-        let packages: Vec<PackageManifest> = std::thread::scope(|scope| {
-            let handles: Vec<_> = manifest
-                .packages
-                .iter()
-                .filter(|pkg| package.is_none_or(|name| pkg.name.as_str() == name))
-                .map(|pkg| scope.spawn(move || gh::fetch_upstream_manifest(pkg)))
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| h.join().expect("fetch thread panicked"))
-                .collect::<anyhow::Result<Vec<_>>>()
-        })?;
-
         let routing_file = match self.routing_file {
             Some(p) => RoutingFile::Explicit { routing_file: p },
             None => RoutingFile::RepoDefault {
@@ -57,71 +45,69 @@ impl Route {
         };
         let rules = routing::load_rules(routing_file)?;
 
-        if self.json {
-            println!(
-                "{}",
-                as_json(packages.as_slice(), rules.as_slice(), &self.channel_url,)?
-            );
+        let pairs: Vec<(String, Vec<RemoteChannel>)> = if self.is_file {
+            let filename = self.package.expect("clap: --is-file requires package");
+            let channels = published_channels_from_filename(&rules, &self.channel_url, &filename);
+            vec![(filename, channels)]
         } else {
-            println!(
-                "{}",
-                as_human_readable(packages.as_slice(), rules.as_slice(), &self.channel_url,)
-            );
+            let manifest = repo.pixi_native_manifest()?;
+            let package = self.package.as_ref();
+            let packages: Vec<PackageManifest> = std::thread::scope(|scope| {
+                let handles: Vec<_> = manifest
+                    .packages
+                    .iter()
+                    .filter(|pkg| package.is_none_or(|name| pkg.name.as_str() == name))
+                    .map(|pkg| scope.spawn(move || gh::fetch_upstream_manifest(pkg)))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("fetch thread panicked"))
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })?;
+            packages
+                .iter()
+                .map(|pkg| {
+                    (
+                        pkg.name().to_string(),
+                        published_channels(&rules, &self.channel_url, pkg.name(), pkg.version()),
+                    )
+                })
+                .collect()
+        };
+
+        if self.json {
+            println!("{}", as_json(&pairs)?);
+        } else {
+            println!("{}", as_human_readable(&pairs));
         }
 
         Ok(())
     }
 }
 
-fn package_channel_pairs<'a>(
-    packages: &'a [PackageManifest],
-    rules: &[RoutingRule],
-    channel: &RemoteChannel,
-) -> Vec<(&'a PackageName, Vec<RemoteChannel>)> {
-    packages
+fn as_json(pairs: &[(String, Vec<RemoteChannel>)]) -> anyhow::Result<String> {
+    let map: BTreeMap<_, _> = pairs
         .iter()
-        .map(|pkg| {
+        .map(|(name, channels)| {
             (
-                pkg.name(),
-                published_channels(rules, channel, pkg.name(), pkg.version()),
-            )
-        })
-        .collect::<Vec<_>>()
-}
-
-fn as_json(
-    packages: &[PackageManifest],
-    rules: &[RoutingRule],
-    channel: &RemoteChannel,
-) -> anyhow::Result<String> {
-    let pairs: BTreeMap<_, _> = package_channel_pairs(packages, rules, channel)
-        .into_iter()
-        .map(|pair| {
-            (
-                pair.0,
-                pair.1
+                name,
+                channels
                     .iter()
-                    .map(|chan| chan.to_string())
+                    .map(RemoteChannel::to_string)
                     .collect::<Vec<_>>(),
             )
         })
         .collect();
-    Ok(serde_json::to_string(&pairs)?)
+    Ok(serde_json::to_string(&map)?)
 }
 
-fn as_human_readable(
-    packages: &[PackageManifest],
-    rules: &[RoutingRule],
-    channel: &RemoteChannel,
-) -> String {
-    let pairs = package_channel_pairs(packages, rules, channel);
+fn as_human_readable(pairs: &[(String, Vec<RemoteChannel>)]) -> String {
     pairs
         .iter()
-        .map(|pair| {
-            let (name, channels) = pair;
+        .map(|(name, channels)| {
             let channels_string = channels
                 .iter()
-                .map(|chan| chan.to_string())
+                .map(RemoteChannel::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{name}: {channels_string}")
