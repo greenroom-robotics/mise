@@ -8,12 +8,12 @@ fn rules_from(yaml: &str, dir: &Path) -> Vec<RoutingRule> {
 
 const SAMPLE: &str = r#"
 rules:
-  - pattern: gama_config_{variant}-*
-    channels: ["gama-variant-{variant}"]
-  - pattern: gama_config-*
-    channels: [gama]
-  - pattern: greenstream_config-*
-    channels: [greenstream, general]
+  - pattern: app_config_{variant}-*
+    channels: ["app-variant-{variant}"]
+  - pattern: app_config-*
+    channels: [app]
+  - pattern: stream_config-*
+    channels: [stream, general]
 "#;
 
 #[test]
@@ -28,20 +28,20 @@ fn first_match_wins_and_variant_substitutes() {
     let rules = rules_from(SAMPLE, td.path());
     // Non-greedy variant capture stops at the version boundary.
     assert_eq!(
-        resolve_channels(&rules, "gama_config_austal_m_usv-5.0.0-py_0.conda"),
-        Some(vec!["gama-variant-austal-m-usv".to_string()]),
+        resolve_channels(&rules, "app_config_some_variant-5.0.0-py_0.conda"),
+        Some(vec!["app-variant-some-variant".to_string()]),
     );
-    // The `-` anchor keeps plain gama_config out of the variant rule.
+    // The `-` anchor keeps plain app_config out of the variant rule.
     assert_eq!(
-        resolve_channels(&rules, "gama_config-7.5.0-py_0.conda"),
-        Some(vec!["gama".to_string()]),
-    );
-    assert_eq!(
-        resolve_channels(&rules, "greenstream_config-4.18.0-py_0.conda"),
-        Some(vec!["greenstream".to_string(), "general".to_string()]),
+        resolve_channels(&rules, "app_config-7.5.0-py_0.conda"),
+        Some(vec!["app".to_string()]),
     );
     assert_eq!(
-        resolve_channels(&rules, "launch_ext-2.0.1-py_0.conda"),
+        resolve_channels(&rules, "stream_config-4.18.0-py_0.conda"),
+        Some(vec!["stream".to_string(), "general".to_string()]),
+    );
+    assert_eq!(
+        resolve_channels(&rules, "launch_utils-2.0.1-py_0.conda"),
         None
     );
 }
@@ -63,22 +63,22 @@ fn published_urls_swap_last_segment() {
         .collect()
     };
     assert_eq!(
-        chans("gama_config", "7.5.0"),
-        vec!["az://stg.blob.core.windows.net/gama"],
+        chans("app_config", "7.5.0"),
+        vec!["az://stg.blob.core.windows.net/app"],
     );
     assert_eq!(
-        chans("gama_config_blue_boat", "7.5.0"),
-        vec!["az://stg.blob.core.windows.net/gama-variant-blue-boat"],
+        chans("app_config_some_boat", "7.5.0"),
+        vec!["az://stg.blob.core.windows.net/app-variant-some-boat"],
     );
     assert_eq!(
-        chans("greenstream_config", "4.18.0"),
+        chans("stream_config", "4.18.0"),
         vec![
-            "az://stg.blob.core.windows.net/greenstream",
+            "az://stg.blob.core.windows.net/stream",
             "az://stg.blob.core.windows.net/general",
         ],
     );
     // Unrouted packages keep the default channel URL untouched.
-    assert_eq!(chans("launch_ext", "2.0.1"), vec![base.to_string()],);
+    assert_eq!(chans("launch_utils", "2.0.1"), vec![base.to_string()],);
 }
 
 #[test]

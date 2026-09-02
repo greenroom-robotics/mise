@@ -110,7 +110,7 @@ packages:
     let msg = format!("{err:#}");
     assert!(msg.contains("pkg_with_ref"), "got: {msg}");
     assert!(msg.contains("no longer supported"), "got: {msg}");
-    assert!(msg.contains("ros-recipes/scripts"), "got: {msg}");
+    assert!(msg.contains("40-char SHA"), "got: {msg}");
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn github_url_compare_link_has_no_git_suffix() {
 fn package_name_accepts_the_shapes_the_manifests_carry() {
     for ok in [
         "mise",
-        "gama_config",
+        "app_config",
         "ros-kilted-rclpy",
         "pixi-build-python",
         "Deepstream",
@@ -422,14 +422,14 @@ fn remote_channel_rejects_local_paths() {
 fn remote_channel_sibling_swaps_the_last_segment() {
     let base = RemoteChannel::parse("az://stg.blob.core.windows.net/general").unwrap();
     assert_eq!(
-        base.sibling("gama").to_string(),
-        "az://stg.blob.core.windows.net/gama"
+        base.sibling("app").to_string(),
+        "az://stg.blob.core.windows.net/app"
     );
     // A trailing slash is not a segment of its own.
     let slashed = RemoteChannel::parse("https://example.invalid/general/").unwrap();
     assert_eq!(
-        slashed.sibling("gama").to_string(),
-        "https://example.invalid/gama"
+        slashed.sibling("app").to_string(),
+        "https://example.invalid/app"
     );
 }
 

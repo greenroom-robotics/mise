@@ -100,7 +100,7 @@ fn run_recipes_pr(
     e2e.respond_if_unset(
         Shim::Gh,
         &["pr", "view"],
-        "https://github.com/greenroom-robotics/ros-recipes/pull/7\n",
+        &format!("https://github.com/{RECIPES_REPO}/pull/7\n"),
     );
     let mut cmd = e2e.mise();
     cmd.env("GITHUB_TOKEN", TOKEN)

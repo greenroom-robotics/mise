@@ -6,7 +6,7 @@ use crate::commands::{build_recipes::BuildRecipes, ci::Ci, matrix::Matrix, snaps
 #[command(
     name = "mise",
     version,
-    about = "Build/matrix automation for ros-recipes"
+    about = "Build/matrix automation for a conda recipes repository"
 )]
 pub struct Cli {
     #[command(subcommand)]

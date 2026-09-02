@@ -45,8 +45,8 @@ jobs:
 See `action.yml` for the full input list (`package-dir`, `recipes-repo` all
 default sensibly).
 
-`lfs-packages` lists packages whose ros-recipes entry should carry `lfs: true`,
+`lfs-packages` lists packages whose recipes entry should carry `lfs: true`,
 so `mise build-recipes pixi` pulls their Git LFS objects (scoped to the
 package's subdir) before building. It is authoritative per release: a released
 package that is not listed has any existing `lfs: true` removed, so keep the
-list complete rather than relying on a hand-edit in ros-recipes.
+list complete rather than relying on a hand-edit in the recipes repo.

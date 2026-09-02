@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 /// A SHA that exists in no fixture repo, for the unreachable-`before` path.
 const FAKE_SHA: &str = "1111111111111111111111111111111111111111";
 
-/// Lay down the fixture ros-recipes-like tree `matrix compute` reads:
+/// Lay down the fixture recipes-repo tree `matrix compute` reads:
 /// root pixi.toml, the pixi-native manifest (alpha@4cpu, bravo@16cpu), two
 /// deepstream recipes and two deepstream versions. The recipes are listed
 /// out of sorted order deliberately: `recipes-csv` joins the `BTreeSet` in

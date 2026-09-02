@@ -738,7 +738,7 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
         if raw.git_ref.is_some() {
             anyhow::bail!(
                 "entry {:?}: `ref:` is no longer supported; use `rev:` with a 40-char SHA. \
-                 See ros-recipes/scripts/ for a one-shot migrator.",
+                 Replace it with the commit SHA the ref resolves to.",
                 raw.name.as_str()
             );
         }

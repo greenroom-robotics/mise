@@ -299,12 +299,12 @@ def selftest():
             '[workspace]\nname = "deep"\n'
             '[dependencies]\n'
             'mars_bringup = { path = "../../src/mars_bringup" }\n'
-            '[feature.vessel.dependencies]\n'
-            'gama_bringup = { path = "../../../src/gama_bringup" }\n'
+            '[feature.robot.dependencies]\n'
+            'beta_bringup = { path = "../../../src/beta_bringup" }\n'
         )
         open(os.path.join(deep, "pixi.lock"), "w").write("")
         two_up = os.path.normpath(os.path.join(deep, "../../src/mars_bringup"))
-        three_up = os.path.normpath(os.path.join(deep, "../../../src/gama_bringup"))
+        three_up = os.path.normpath(os.path.join(deep, "../../../src/beta_bringup"))
         got = workspace_transitive_dep_paths(deep)
         assert two_up in got
         assert three_up in got

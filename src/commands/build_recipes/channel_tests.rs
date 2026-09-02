@@ -39,11 +39,11 @@ fn channel_index_sees_noarch_packages() {
     // `noarch` key and omits `linux-64` entirely.
     let idx = index(
         r#"{"noarch":[
-                 {"name":"gama_scenarios","version":"1.2.0","build_number":3,"subdir":"noarch"}
+                 {"name":"alpha_scenarios","version":"1.2.0","build_number":3,"subdir":"noarch"}
                ]}"#,
     );
-    assert!(idx.has_build(&pkg("gama_scenarios"), &ver("1.2.0"), 3, NOARCH));
-    assert!(idx.has_version(&pkg("gama_scenarios"), &ver("1.2.0")));
+    assert!(idx.has_build(&pkg("alpha_scenarios"), &ver("1.2.0"), 3, NOARCH));
+    assert!(idx.has_version(&pkg("alpha_scenarios"), &ver("1.2.0")));
 }
 
 #[test]
@@ -52,16 +52,16 @@ fn channel_index_does_not_match_a_build_from_another_subdir() {
     // matching on name+version+build alone would cross-match them.
     let idx = index(
         r#"{"linux-64":[
-                 {"name":"vessel_offsets","version":"1.4.0","build_number":1,"subdir":"linux-64"}],
+                 {"name":"beta_offsets","version":"1.4.0","build_number":1,"subdir":"linux-64"}],
                 "noarch":[
-                 {"name":"vessel_offsets","version":"1.4.0","build_number":2,"subdir":"noarch"}]}"#,
+                 {"name":"beta_offsets","version":"1.4.0","build_number":2,"subdir":"noarch"}]}"#,
     );
-    assert!(idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, L64));
-    assert!(idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 2, NOARCH));
-    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 2, L64));
-    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, NOARCH));
-    assert!(!idx.has_build(&pkg("vessel_offsets"), &ver("1.4.0"), 1, AARCH));
-    assert!(idx.has_version(&pkg("vessel_offsets"), &ver("1.4.0")));
+    assert!(idx.has_build(&pkg("beta_offsets"), &ver("1.4.0"), 1, L64));
+    assert!(idx.has_build(&pkg("beta_offsets"), &ver("1.4.0"), 2, NOARCH));
+    assert!(!idx.has_build(&pkg("beta_offsets"), &ver("1.4.0"), 2, L64));
+    assert!(!idx.has_build(&pkg("beta_offsets"), &ver("1.4.0"), 1, NOARCH));
+    assert!(!idx.has_build(&pkg("beta_offsets"), &ver("1.4.0"), 1, AARCH));
+    assert!(idx.has_version(&pkg("beta_offsets"), &ver("1.4.0")));
 }
 
 #[test]

@@ -126,16 +126,16 @@ fn release_title_shapes() {
         "release: mise v1.0.0"
     );
     assert_eq!(
-        release_title("toolbox", &pkgs(&[("gama", "v1.0.0")]), "v1.0.0"),
-        "release: toolbox/gama v1.0.0"
+        release_title("toolbox", &pkgs(&[("beta", "v1.0.0")]), "v1.0.0"),
+        "release: toolbox/beta v1.0.0"
     );
     assert_eq!(
         release_title(
             "toolbox",
-            &pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
+            &pkgs(&[("beta", "v1.0.0"), ("alpha", "v0.4.1")]),
             "v1.0.0"
         ),
-        "release: toolbox/{alpha v0.4.1, gama v1.0.0}"
+        "release: toolbox/{alpha v0.4.1, beta v1.0.0}"
     );
 }
 
@@ -146,8 +146,8 @@ fn release_title_shapes() {
 fn body_packages_round_trips() {
     for names in [
         pkgs(&[]),
-        pkgs(&[("gama", "v1.0.0")]),
-        pkgs(&[("gama", "v1.0.0"), ("alpha", "v0.4.1")]),
+        pkgs(&[("beta", "v1.0.0")]),
+        pkgs(&[("beta", "v1.0.0"), ("alpha", "v0.4.1")]),
     ] {
         let body = pr_body(Some("https://example.com/compare/a...b"), &names);
         assert_eq!(body_packages(&body), names, "{body}");
@@ -157,13 +157,13 @@ fn body_packages_round_trips() {
 #[test]
 fn long_package_list_collapses_in_title_only() {
     let many = pkgs(&[
-        ("gama_bringup", "v1.2.3"),
-        ("gama_msgs", "v0.4.1"),
-        ("gama_navigation", "v2.0.0"),
+        ("beta_bringup", "v1.2.3"),
+        ("beta_msgs", "v0.4.1"),
+        ("beta_navigation", "v2.0.0"),
         ("topic_utils", "v1.26.0"),
     ]);
-    let title = release_title("platform_toolbox", &many, "v1.2.3");
-    assert_eq!(title, "release: platform_toolbox (4 packages)");
+    let title = release_title("toolbox_repo", &many, "v1.2.3");
+    assert_eq!(title, "release: toolbox_repo (4 packages)");
     assert!(title.chars().count() <= MAX_TITLE_CHARS);
     assert_eq!(body_packages(&pr_body(None, &many)), many);
 }
@@ -189,10 +189,7 @@ fn release_branch_is_version_independent() {
 
 #[test]
 fn release_branch_is_per_repo_not_per_package() {
-    assert_eq!(
-        release_branch("platform_toolbox"),
-        "release/platform_toolbox"
-    );
+    assert_eq!(release_branch("toolbox_repo"), "release/toolbox_repo");
     assert_eq!(release_branch("mise"), "release/mise");
 }
 

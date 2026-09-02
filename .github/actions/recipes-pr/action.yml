@@ -40,7 +40,7 @@ inputs:
   lfs-packages:
     description: >-
       Newline- or comma-separated package names whose recipes entry gets
-      `lfs: true`, so the ros-recipes build pulls their Git LFS objects (scoped
+      `lfs: true`, so the recipes build pulls their Git LFS objects (scoped
       to the package's subdir) before building. For packages with LFS-tracked
       build inputs. Authoritative per release: a package released without being
       listed here has any existing `lfs: true` removed from its entry.

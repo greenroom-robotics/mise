@@ -243,7 +243,7 @@ pub(super) struct ChannelIndexCache {
     // ponytail: one lock over the whole map, held across the sweep, so sweeps
     // of *different* channels don't overlap. Deliberate — it also means a
     // channel is never swept twice concurrently, and the totals are small
-    // (~23 channels for ros-recipes, product channels hold 1-2 packages and
+    // (a few dozen channels, product channels hold 1-2 packages and
     // sweep in ~0.5s). Go per-channel locks if the channel count grows enough
     // that serialised cold sweeps start to show.
     swept: Mutex<HashMap<RemoteChannel, Arc<ChannelIndex>>>,

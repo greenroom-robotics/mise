@@ -495,35 +495,31 @@ fn test_target_paths(targets: &[TestTarget]) -> Vec<PathBuf> {
 fn discover_test_targets_includes_workspace_only_manifests() {
     let tmp = TempDir::new().unwrap();
     make_pkg(tmp.path(), "alpha");
-    make_workspace_only(tmp.path(), "gama_vessel_variant");
+    make_workspace_only(tmp.path(), "robot_variant");
     let result = test_target_paths(&discover_test_targets(tmp.path(), None).unwrap());
     assert_eq!(result.len(), 2);
     assert!(result.iter().any(|p| p.ends_with("alpha/pixi.toml")));
     assert!(
         result
             .iter()
-            .any(|p| p.ends_with("gama_vessel_variant/pixi.toml"))
+            .any(|p| p.ends_with("robot_variant/pixi.toml"))
     );
 }
 
 #[test]
 fn discover_test_targets_filter_returns_workspace_only_manifest() {
     let tmp = TempDir::new().unwrap();
-    make_workspace_only(tmp.path(), "gama_vessel_variant");
-    let result = discover_test_targets(tmp.path(), Some(&pn("gama_vessel_variant"))).unwrap();
+    make_workspace_only(tmp.path(), "robot_variant");
+    let result = discover_test_targets(tmp.path(), Some(&pn("robot_variant"))).unwrap();
     assert_eq!(result.len(), 1);
-    assert!(
-        result[0]
-            .manifest_path
-            .ends_with("gama_vessel_variant/pixi.toml")
-    );
-    assert_eq!(result[0].dir, tmp.path().join("gama_vessel_variant"));
+    assert!(result[0].manifest_path.ends_with("robot_variant/pixi.toml"));
+    assert_eq!(result[0].dir, tmp.path().join("robot_variant"));
 }
 
 #[test]
 fn discover_test_targets_filter_unknown_name_errors() {
     let tmp = TempDir::new().unwrap();
-    make_workspace_only(tmp.path(), "gama_vessel_variant");
+    make_workspace_only(tmp.path(), "robot_variant");
     let err = discover_test_targets(tmp.path(), Some(&pn("ghost"))).unwrap_err();
     assert!(err.to_string().contains("ghost"));
 }

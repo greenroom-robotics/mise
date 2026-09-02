@@ -1,6 +1,6 @@
 # Fixture workspace exercised by mise's own CI smoke flow once federation is set
 # up (currently deferred). The structure mirrors the consumer convention from
-# platform_toolbox: a workspace manifest with per-package manifests as path
+# a consumer repo: a workspace manifest with per-package manifests as path
 # deps under packages/.
 [workspace]
 name = "mise-ci-fixture"

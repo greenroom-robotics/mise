@@ -1,5 +1,5 @@
 name: Run mise ci release
-description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `mise ci release`. Replaces the platform_cli release path for pixi-native ROS packages.'
+description: 'Set up the full mise CI environment, install Node + semantic-release deps, run `mise ci release`..'
 author: Greenroom Robotics
 
 inputs:
