@@ -4,7 +4,7 @@
 //! validation) need nothing but a fixture tree. The check/triage phase and the
 //! build loop need two seams, both of which exist:
 //!
-//! - `MISE_GITHUB_RAW_URL` points `fetch_pixi_toml` at a local
+//! - `MISE_GITHUB_RAW_URL` points `fetch_upstream_manifest` at a local
 //!   [`FixtureServer`] instead of raw.githubusercontent.com.
 //! - a git `insteadOf` rule redirects `https://github.com/<owner>/<repo>` to a
 //!   local bare repo, so the per-entry checkout is real git with no network.
@@ -139,9 +139,7 @@ fn publish_paths(e2e: &E2e) -> Vec<String> {
 /// The subpath of `--path` after the temp checkout root, which is the only
 /// stable part (the tempdir name is random).
 fn manifest_subpath(path: &str) -> &str {
-    path.rsplit_once("/src/")
-        .map(|(_, rest)| rest)
-        .unwrap_or(path)
+    path.rsplit_once("/src/").map_or(path, |(_, rest)| rest)
 }
 
 #[test]

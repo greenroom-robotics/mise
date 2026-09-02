@@ -32,18 +32,18 @@ pub(super) struct BuildPlan<'a>(Vec<BuildItem<'a>>);
 
 impl<'a> BuildPlan<'a> {
     /// Order build items so same-repo dependency targets build before
-    /// consumers. Path-dep edge: consumer.subdir/rel_path (normalized) ==
+    /// consumers. Path-dep edge: `consumer.subdir/rel_path` (normalized) ==
     /// target.subdir, same url. Pin edge: consumer's `==` pin key == target
     /// `entry.name`, same url. Errors if those edges form a cycle.
     pub(super) fn new(items: Vec<BuildItem<'a>>) -> anyhow::Result<Self> {
         topo_sort_builds(items).map(Self)
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(super) const fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         self.0.len()
     }
 }

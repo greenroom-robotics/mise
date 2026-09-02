@@ -2,7 +2,7 @@
 //! it down to the requested subset, and hand it to rattler-build.
 //!
 //! Also holds `deepstream-container`, which is that same pipeline preceded by
-//! the prep a DeepStream container needs before it can run one.
+//! the prep a `DeepStream` container needs before it can run one.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,7 +100,7 @@ pub(super) fn vinca(
     Ok(())
 }
 
-/// Selects which subset of recipes to build and whether to pin a DeepStream version.
+/// Selects which subset of recipes to build and whether to pin a `DeepStream` version.
 /// Maps to the valid combinations of `--ds-recipe`, `--ds-version`, and `--only` flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VincaBuildMode {
@@ -153,8 +153,8 @@ impl VincaBuildMode {
         }
     }
 
-    /// The DeepStream version this mode pins the variant axis to, if any.
-    fn version(&self) -> Option<DeepstreamVersion> {
+    /// The `DeepStream` version this mode pins the variant axis to, if any.
+    const fn version(&self) -> Option<DeepstreamVersion> {
         match self {
             Self::DeepstreamOnly { version, .. } => Some(*version),
             Self::Only { version, .. } => *version,
@@ -204,8 +204,10 @@ fn apply_recipe_filter(repo_root: &Path, mode: &VincaBuildMode) -> anyhow::Resul
             }
         }
         VincaBuildMode::DeepstreamOnly { recipes, .. } | VincaBuildMode::Only { recipes, .. } => {
-            let keep: std::collections::HashSet<&str> =
-                recipes.iter().map(|r| r.as_str()).collect();
+            let keep: std::collections::HashSet<&str> = recipes
+                .iter()
+                .map(crate::types::RecipeName::as_str)
+                .collect();
             for entry in fs::read_dir(&recipes_dir)
                 .with_context(|| format!("read {}", recipes_dir.display()))?
             {

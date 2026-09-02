@@ -19,7 +19,7 @@ use mise::consts::RECIPES_REPO;
 const TOKEN: &str = "test-token";
 const RELEASE_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-/// The exact URL `clone_recipes_repo` builds when GITHUB_TOKEN is set — the
+/// The exact URL `clone_recipes_repo` builds when `GITHUB_TOKEN` is set — the
 /// insteadOf rule must match it byte for byte.
 fn tokenized_clone_url() -> String {
     format!("https://x-access-token:{TOKEN}@github.com/{RECIPES_REPO}.git")

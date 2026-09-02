@@ -170,8 +170,7 @@ pub fn section_bounds(text: &str, key: &str) -> Option<ByteSpan> {
     let end = headers[header + 1..]
         .iter()
         .position(|h| *h != Some(header))
-        .map(|p| offsets[header + 1 + p].0)
-        .unwrap_or(text.len());
+        .map_or(text.len(), |p| offsets[header + 1 + p].0);
     Some(ByteSpan(offsets[header].0..end))
 }
 
@@ -214,7 +213,7 @@ pub struct ItemBounds {
 
 impl ItemBounds {
     /// Indent of the item's sub-keys (`url:`, `rev:`, …).
-    pub fn sub_indent(&self) -> usize {
+    pub const fn sub_indent(&self) -> usize {
         self.indent + 2
     }
 
@@ -247,8 +246,7 @@ pub fn item_bounds(lines: &[&str], name: &str) -> Option<ItemBounds> {
     let end = lines[header + 1..]
         .iter()
         .position(|l| !is_blank(l) && l.len() - l.trim_start().len() <= indent)
-        .map(|p| header + 1 + p)
-        .unwrap_or(lines.len());
+        .map_or(lines.len(), |p| header + 1 + p);
 
     let mut content_end = end;
     while content_end > header + 1 && is_blank(lines[content_end - 1]) {

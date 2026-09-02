@@ -6,11 +6,12 @@
 //! channel a package actually publishes to, not just the default, or every
 //! routed package rebuilds on every run.
 
-use std::path::Path;
+use std::path::PathBuf;
 
-use anyhow::Context;
+use anyhow::{Context, bail};
 use serde::Deserialize;
 
+use crate::consts::ROUTING_YAML;
 use crate::types::{PackageName, RemoteChannel, Version};
 
 #[derive(Debug)]
@@ -30,10 +31,13 @@ struct RawRule {
     channels: Vec<String>,
 }
 
+pub enum RoutingFile {
+    RepoDefault { repo_root: PathBuf },
+    Explicit { routing_file: PathBuf },
+}
+
 /// Compile a routing.yaml glob pattern to an anchored regex. `*` becomes
-/// `.*`; the literal token `{variant}` becomes a named non-greedy capture —
-/// non-greedy so `foo_{variant}-*` against `foo_bar_baz-1.2.3-py_0.conda`
-/// captures up to the FIRST `-` (the version boundary).
+/// `.*`; the literal token `{variant}` becomes a named non-greedy capture
 fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
     let mut out = String::from("^");
     let mut rest = pattern;
@@ -48,8 +52,7 @@ fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
             let next = rest
                 .char_indices()
                 .find(|(i, _)| rest[*i..].starts_with("{variant}") || rest[*i..].starts_with('*'))
-                .map(|(i, _)| i)
-                .unwrap_or(rest.len());
+                .map_or(rest.len(), |(i, _)| i);
             out.push_str(&regex::escape(&rest[..next]));
             rest = &rest[next..];
         }
@@ -58,18 +61,25 @@ fn pattern_to_regex(pattern: &str) -> anyhow::Result<regex::Regex> {
     regex::Regex::new(&out).with_context(|| format!("compile routing pattern {pattern}"))
 }
 
-/// Load `routing.yaml` from the repo root. A missing file yields no rules
-/// (everything routes to the default channel); a malformed file errors loudly
-/// rather than silently mis-routing.
-pub fn load_rules(repo_root: &Path) -> anyhow::Result<Vec<RoutingRule>> {
-    let path = repo_root.join("routing.yaml");
-    if !path.is_file() {
-        return Ok(Vec::new());
+/// Load routing rules from `routing`, if the `RepoDefault` is missing no rules are returned,
+/// otherwise an error.
+pub fn load_rules(routing: RoutingFile) -> anyhow::Result<Vec<RoutingRule>> {
+    let (routing_file, missing_ok) = match routing {
+        RoutingFile::RepoDefault { repo_root } => (repo_root.join(ROUTING_YAML), true),
+        RoutingFile::Explicit { routing_file } => (routing_file, false),
+    };
+
+    if !routing_file.is_file() {
+        if missing_ok {
+            return Ok(Vec::new());
+        }
+        bail!("{} is not a file", routing_file.display());
     }
-    let text =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let raw: RoutingYaml =
-        serde_yaml_ng::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+
+    let text = std::fs::read_to_string(&routing_file)
+        .with_context(|| format!("read {}", routing_file.display()))?;
+    let raw: RoutingYaml = serde_yaml_ng::from_str(&text)
+        .with_context(|| format!("parse {}", routing_file.display()))?;
     let mut rules = Vec::with_capacity(raw.rules.len());
     for (i, r) in raw.rules.into_iter().enumerate() {
         if r.pattern.is_empty() {
@@ -87,9 +97,11 @@ pub fn load_rules(repo_root: &Path) -> anyhow::Result<Vec<RoutingRule>> {
 }
 
 /// First-match-wins routing of a .conda filename to destination channel(s).
+///
 /// A `{variant}` capture in the winning rule is substituted (underscores to
 /// hyphens) into each of its channels. No match returns `None` — the caller
 /// supplies the default channel.
+#[must_use]
 pub fn resolve_channels(rules: &[RoutingRule], filename: &str) -> Option<Vec<String>> {
     for rule in rules {
         let Some(m) = rule.regex.captures(filename) else {
@@ -114,6 +126,7 @@ pub fn resolve_channels(rules: &[RoutingRule], filename: &str) -> Option<Vec<Str
 /// built .conda filenames, so a synthetic `name-version-0.conda` stands in —
 /// every rule is name-anchored. No routing match means the package publishes
 /// to the default channel.
+#[must_use]
 pub fn published_channels(
     rules: &[RoutingRule],
     default_channel: &RemoteChannel,

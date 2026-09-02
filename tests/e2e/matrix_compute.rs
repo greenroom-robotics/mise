@@ -77,7 +77,7 @@ fn run_matrix(e2e: &E2e, root: &Path, event_name: &str, event_json: Option<&str>
 }
 
 /// A repo with two commits: `mutate` edits the tree for the head commit.
-/// Returns (root, base_sha, head_sha).
+/// Returns (root, `base_sha`, `head_sha`).
 fn pr_repo(e2e: &E2e, mutate: impl FnOnce(&Path)) -> (PathBuf, String, String) {
     let root = matrix_repo(e2e);
     let base = e2e.git_init_commit(&root, "base");

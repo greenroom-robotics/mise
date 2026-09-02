@@ -159,7 +159,7 @@ pub(crate) fn mutate_pixi_entry(
         let mut out: Vec<String> = item
             .through_header(&lines)
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         let mut url_seen = false;
         let mut rev_seen = false;
@@ -213,7 +213,7 @@ pub(crate) fn mutate_pixi_entry(
         }
         out
     } else {
-        let mut out: Vec<String> = lines.iter().map(|s| s.to_string()).collect();
+        let mut out: Vec<String> = lines.iter().map(std::string::ToString::to_string).collect();
         if out.last().is_some_and(|s| !s.is_empty()) {
             out.push(String::new());
         }
@@ -256,12 +256,12 @@ pub(crate) enum OldRef {
 impl OldRef {
     pub fn value(&self) -> &str {
         match self {
-            OldRef::Rev(s) | OldRef::Tag(s) => s,
+            Self::Rev(s) | Self::Tag(s) => s,
         }
     }
 
-    pub fn is_rev(&self) -> bool {
-        matches!(self, OldRef::Rev(_))
+    pub const fn is_rev(&self) -> bool {
+        matches!(self, Self::Rev(_))
     }
 }
 

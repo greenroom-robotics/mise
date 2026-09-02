@@ -12,7 +12,7 @@ pub struct Test {
     /// Directory containing per-package pixi workspaces.
     #[arg(long, default_value = "packages")]
     pub package_dir: PathBuf,
-    /// Directory to collect JUnit XML test reports into.
+    /// Directory to collect `JUnit` XML test reports into.
     #[arg(long, default_value = "test-reports")]
     pub report_dir: PathBuf,
     /// A `<env>:<task>` pair to run per package, repeatable. Defaults to
@@ -87,7 +87,7 @@ impl Test {
         Ok(())
     }
 
-    /// Run one `<env>:<task>` against one package and collect its JUnit XML.
+    /// Run one `<env>:<task>` against one package and collect its `JUnit` XML.
     /// Returns the failure label when the job did not exit 0 — the exit code is
     /// the test result, not an error, so a failing job (including one killed by
     /// a signal, which ROS tests do manage) is reported alongside the others by
@@ -129,7 +129,7 @@ impl Test {
     }
 }
 
-/// Collect a package's JUnit XML test reports into `report_dir`.
+/// Collect a package's `JUnit` XML test reports into `report_dir`.
 ///
 /// Globs `<pkg_dir>/build/**/*.xml` (the standard colcon `test-result`
 /// location) and copies each file to
@@ -144,8 +144,7 @@ fn collect_reports(pkg_dir: &Path, report_dir: &Path, env: &str) -> anyhow::Resu
     }
     let pkg_name = pkg_dir
         .file_name()
-        .map(|n| n.to_owned())
-        .unwrap_or_else(|| "package".into());
+        .map_or_else(|| "package".into(), std::borrow::ToOwned::to_owned);
     let dest_root = report_dir.join(&pkg_name).join(env);
 
     let xml = find_xml(&build)?;

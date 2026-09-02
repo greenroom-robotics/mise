@@ -44,11 +44,11 @@ pub enum Shim {
 }
 
 impl Shim {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
-            Shim::Gh => "gh",
-            Shim::Pixi => "pixi",
-            Shim::Npx => "npx",
+            Self::Gh => "gh",
+            Self::Pixi => "pixi",
+            Self::Npx => "npx",
         }
     }
 }

@@ -75,7 +75,7 @@ impl RecipesPr {
                         };
                         let parent = abs
                             .strip_prefix(&toplevel)
-                            .map(|r| r.to_owned())
+                            .map(std::borrow::ToOwned::to_owned)
                             .unwrap_or(abs)
                             .to_string_lossy()
                             .into_owned();
@@ -327,7 +327,7 @@ enum RecipeAction {
     Error,
 }
 
-fn recipe_action(mode: &ReleaseMode, has_recipe: bool, allow_missing: bool) -> RecipeAction {
+const fn recipe_action(mode: &ReleaseMode, has_recipe: bool, allow_missing: bool) -> RecipeAction {
     match mode {
         ReleaseMode::VendoredByName(_) if !has_recipe => {
             if allow_missing {
@@ -351,11 +351,11 @@ fn diff_ref<'a>(
         .iter()
         .find(|r| r.is_rev())
         .or_else(|| old_refs.first())
-        .map(|r| r.value())
+        .map(super::recipes_upsert::OldRef::value)
         .filter(|v| *v != sha.as_str())
 }
 
-/// Commit identity: GIT_AUTHOR_NAME/EMAIL when set, else the greenroom-bot
+/// Commit identity: `GIT_AUTHOR_NAME/EMAIL` when set, else the greenroom-bot
 /// label so a standalone run still has a usable identity.
 fn git_identity() -> (String, String) {
     fn env_or(var: &str, fallback: &str) -> String {
@@ -403,8 +403,7 @@ fn pr_body(
     // ponytail: nanos-modulo pick, no rng dep needed for flavor text
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos() as usize)
-        .unwrap_or(0)
+        .map_or(0, |d| d.subsec_nanos() as usize)
         % GREMLINS.len();
     let mut body = GREMLINS[idx].to_string();
     body.push_str("\n\n**Releasing:**\n");
@@ -431,7 +430,7 @@ enum NoopOutcome {
     EarlyReturn,
 }
 
-fn classify_noop(nothing_staged: bool, pr_open: bool) -> NoopOutcome {
+const fn classify_noop(nothing_staged: bool, pr_open: bool) -> NoopOutcome {
     match (nothing_staged, pr_open) {
         (false, _) => NoopOutcome::Commit,
         (true, true) => NoopOutcome::SkipCommitKeepPush,

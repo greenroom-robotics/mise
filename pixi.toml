@@ -10,6 +10,19 @@ mise = { path = "." }
 [tasks]
 mise = "mise"
 
+[feature.lint.tasks]
+lint = "cargo fmt --all && cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings"
+
+[feature.test.dependencies]
+cargo-nextest = ">=0.9.143,<0.10"
+
+[feature.test.tasks]
+test = "cargo nextest run --locked --color always && cargo test --doc --locked"
+
+[environments]
+lint = { features = ["lint"], no-default-feature = true }
+test = { features = ["test"], no-default-feature = true }
+
 [package]
 name = "mise"
 version = "8.17.0"

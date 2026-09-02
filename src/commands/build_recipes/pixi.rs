@@ -17,6 +17,7 @@ use crate::git;
 use crate::manifest::{PackageManifest, prepend_channels, resolve_path_deps, set_build_number};
 use crate::process;
 use crate::repo::Repo;
+use crate::routing::RoutingFile;
 use crate::types::{
     Arch, ChannelUrl, LocalChannel, PackageName, PixiNativeEntry, RemoteChannel, RunnerSpec,
     Version,
@@ -27,29 +28,6 @@ use super::local_deps::{
     LocalBuildCtx, build_local_dep, push_unique, resolve_sibling_pins, sibling_subdirs,
 };
 use super::plan::{BuildItem, BuildPlan};
-
-/// The manifest path of an entry relative to its repo root: the entry's subdir
-/// (when it has a meaningful one) plus `pixi.toml`.
-fn entry_manifest_rel_path(entry: &PixiNativeEntry) -> String {
-    entry
-        .subdir
-        .as_deref()
-        .map(|p| p.to_string_lossy().trim_matches('/').to_string())
-        .filter(|s| !s.is_empty() && s != ".")
-        .map(|s| format!("{s}/{PIXI_TOML}"))
-        .unwrap_or_else(|| PIXI_TOML.to_string())
-}
-
-/// Fetch an entry's `pixi.toml` at its pinned rev without cloning.
-fn fetch_pixi_toml(entry: &PixiNativeEntry) -> anyhow::Result<String> {
-    gh::fetch_raw_file(
-        entry.url.owner(),
-        entry.url.repo(),
-        entry.rev.as_str(),
-        &entry_manifest_rel_path(entry),
-    )
-    .with_context(|| format!("entry {}", entry.name))
-}
 
 /// Materialize one commit of an entry's repo in `dest`, initing submodules
 /// and pulling the LFS objects under its subdir when the entry opts in.
@@ -99,9 +77,7 @@ fn check_entry(
     target_platform: Arch,
     rebuild_epoch: u64,
 ) -> anyhow::Result<CheckOutcome> {
-    let pixi_toml_text = fetch_pixi_toml(entry)?;
-    let upstream = PackageManifest::parse(&pixi_toml_text)
-        .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))?;
+    let upstream = gh::fetch_upstream_manifest(entry)?;
     let id = upstream.identity();
 
     if !upstream.supports_platform(target_platform) {
@@ -203,8 +179,10 @@ pub(super) fn pixi(
         return Ok(());
     }
 
-    let channel_ref = &channel;
-    let routing_rules = crate::routing::load_rules(repo.root())?;
+    let default_channel_ref = &channel;
+    let routing_rules = crate::routing::load_rules(RoutingFile::RepoDefault {
+        repo_root: repo.root().to_path_buf(),
+    })?;
     let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
     let channels = ChannelIndexCache::new(target_platform);
     let channels_ref = &channels;
@@ -219,7 +197,7 @@ pub(super) fn pixi(
                         check_entry(
                             entry,
                             channels_ref,
-                            channel_ref,
+                            default_channel_ref,
                             routing_rules_ref,
                             target_platform,
                             rebuild_epoch,

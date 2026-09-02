@@ -22,7 +22,7 @@ const GLOBAL_VINCA: &[&str] = &[
     "rosdistro_snapshot.yaml",
 ];
 
-/// Vinca + DeepStream: variant pins feed both pipelines' build hashes.
+/// Vinca + `DeepStream`: variant pins feed both pipelines' build hashes.
 const GLOBAL_VINCA_DS: &[&str] = &["conda_build_config.yaml"];
 
 const DEEPSTREAM_ONLY: &[&str] = &["docker-compose.yml", "variants/deepstream.yaml"];
@@ -40,7 +40,7 @@ const ARCHS: &[(Arch, &str)] = &[
     ),
 ];
 
-fn ds_runner_family(arch: Arch) -> &'static str {
+const fn ds_runner_family(arch: Arch) -> &'static str {
     match arch {
         Arch::Linux64 => "c6id.xlarge",
         Arch::LinuxAarch64 => "c7gd.xlarge",
@@ -49,21 +49,21 @@ fn ds_runner_family(arch: Arch) -> &'static str {
 
 /// m-family (4GB/cpu) override for himem buckets; the named runners default
 /// to the c-family's 2GB/cpu.
-fn himem_family(arch: Arch) -> &'static str {
+const fn himem_family(arch: Arch) -> &'static str {
     match arch {
         Arch::Linux64 => "m7a+m7i",
         Arch::LinuxAarch64 => "m8g+m7g",
     }
 }
 
-fn ds_arch_tag(arch: Arch) -> &'static str {
+const fn ds_arch_tag(arch: Arch) -> &'static str {
     match arch {
         Arch::Linux64 => "x64",
         Arch::LinuxAarch64 => "arm64",
     }
 }
 
-fn ds_image_for(version: DeepstreamVersion) -> &'static str {
+const fn ds_image_for(version: DeepstreamVersion) -> &'static str {
     match version {
         DeepstreamVersion::V7_1 => "nvcr.io/nvidia/deepstream:7.1-triton-multiarch",
         DeepstreamVersion::V8_0 => "nvcr.io/nvidia/deepstream:8.0-triton-multiarch",
@@ -109,7 +109,7 @@ fn compute(repo_root: Option<PathBuf>) -> anyhow::Result<()> {
     let recipes_csv = ds
         .recipes
         .iter()
-        .map(|r| r.as_str())
+        .map(super::super::types::RecipeName::as_str)
         .collect::<Vec<_>>()
         .join(",");
 
@@ -150,7 +150,7 @@ enum RowKind {
     Vinca,
     /// A pixi-native build job, which handles every entry of one runner spec.
     PixiNative { runner: RunnerSpec },
-    /// A vinca build of the DeepStream recipes against one DS version.
+    /// A vinca build of the `DeepStream` recipes against one DS version.
     Deepstream { version: DeepstreamVersion },
     /// No work: one placeholder row, because an empty matrix is an error to
     /// GitHub Actions.
@@ -158,7 +158,7 @@ enum RowKind {
 }
 
 impl RowKind {
-    fn pipeline(&self) -> Pipeline {
+    const fn pipeline(&self) -> Pipeline {
         match self {
             // A DeepStream row runs the vinca pipeline.
             Self::Vinca | Self::Deepstream { .. } => Pipeline::Vinca,
@@ -442,12 +442,16 @@ fn build_matrix(plan: &MatrixPlan, manifest: &PixiNativeManifest, run_id: &str) 
 
     // One job per distinct runner spec; each job builds every entry of its spec.
     let pixi_sizes: BTreeSet<RunnerSpec> = match &plan.pixi_native {
-        PixiScope::All => manifest.packages.iter().map(|e| e.runner_spec()).collect(),
+        PixiScope::All => manifest
+            .packages
+            .iter()
+            .map(super::super::types::PixiNativeEntry::runner_spec)
+            .collect(),
         PixiScope::Only(names) => manifest
             .packages
             .iter()
             .filter(|e| names.contains(&e.name))
-            .map(|e| e.runner_spec())
+            .map(super::super::types::PixiNativeEntry::runner_spec)
             .collect(),
         PixiScope::None => BTreeSet::new(),
     };

@@ -17,6 +17,7 @@ pub struct SiblingGraph {
 
 /// Build the sibling graph from packages already parsed by discovery. Every
 /// dependency table in [`crate::manifest::DEP_TABLES`] is scanned.
+#[must_use]
 pub fn analyze(packages: &[Package]) -> SiblingGraph {
     let mut g = SiblingGraph {
         dirs: packages

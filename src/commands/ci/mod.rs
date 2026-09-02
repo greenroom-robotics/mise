@@ -40,13 +40,13 @@ pub enum Ci {
 impl Ci {
     pub fn run(self) -> anyhow::Result<()> {
         match self {
-            Ci::Test(c) => c.run(),
-            Ci::Build(c) => c.run(),
-            Ci::Release(c) => c.run(),
-            Ci::BumpPixi(c) => c.run(),
-            Ci::RecipesPr(c) => c.run(),
-            Ci::SyncCargo(c) => c.run(),
-            Ci::VerifySiblings(c) => c.run(),
+            Self::Test(c) => c.run(),
+            Self::Build(c) => c.run(),
+            Self::Release(c) => c.run(),
+            Self::BumpPixi(c) => c.run(),
+            Self::RecipesPr(c) => c.run(),
+            Self::SyncCargo(c) => c.run(),
+            Self::VerifySiblings(c) => c.run(),
         }
     }
 }

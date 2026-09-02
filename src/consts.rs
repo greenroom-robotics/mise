@@ -25,6 +25,9 @@ pub const PIXI_TOML: &str = "pixi.toml";
 /// `repo`, diffed by `matrix`, upserted into by `recipes_upsert`.
 pub const PIXI_NATIVE_PACKAGES_YAML: &str = "pixi_native_packages.yaml";
 
+/// Channel routing rules for published pixi-native packages.
+pub const ROUTING_YAML: &str = "routing.yaml";
+
 /// Manifest of extra rosdistro-sourced recipes. Diffed by `matrix`, upserted
 /// into by `recipes_upsert`.
 pub const ROSDISTRO_RECIPES_YAML: &str = "rosdistro_additional_recipes.yaml";

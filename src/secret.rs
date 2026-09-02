@@ -85,15 +85,20 @@ fn register(value: &str) {
     // A poisoned registry must not take down the program: the worst case of
     // recovering the inner value is a duplicate entry, and failing to scrub
     // would be far worse than that.
-    let mut guard = registry().write().unwrap_or_else(|e| e.into_inner());
+    let mut guard = registry()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if !guard.iter().any(|v| v.as_str() == value) {
         guard.push(Zeroizing::new(value.to_string()));
     }
 }
 
 /// Replace every registered secret in `text` with [`REDACTED`].
+#[must_use]
 pub fn scrub(text: &str) -> String {
-    let guard = registry().read().unwrap_or_else(|e| e.into_inner());
+    let guard = registry()
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if guard.is_empty() {
         return text.to_string();
     }

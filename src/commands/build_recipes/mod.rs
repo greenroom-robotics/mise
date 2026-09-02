@@ -45,7 +45,7 @@ pub enum BuildRecipes {
         ds_version: Option<DeepstreamVersion>,
         /// Build only the listed recipe(s) — for local debugging. Mutually
         /// exclusive with --ds-recipe. Combine with --ds-version to pin the
-        /// DS axis when debugging a DeepStream recipe.
+        /// DS axis when debugging a `DeepStream` recipe.
         #[arg(long = "only")]
         only: Vec<RecipeName>,
     },
@@ -70,7 +70,7 @@ pub enum BuildRecipes {
         #[arg(long = "only")]
         only: Vec<PackageName>,
     },
-    /// Run a vinca build inside a DeepStream container. Does container-side prep
+    /// Run a vinca build inside a `DeepStream` container. Does container-side prep
     /// (git auth, cache cleanup, `pixi install`) and delegates to `build vinca`
     /// with `--ds-version` and the recipe list pinned.
     DeepstreamContainer {
