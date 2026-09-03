@@ -273,7 +273,6 @@ impl ChannelIndexCache {
         }
         let index = Arc::new(ChannelIndex::sweep(channel, self.target_platform)?);
         swept.insert(channel.clone(), Arc::clone(&index));
-        drop(swept);
         Ok(index)
     }
 }

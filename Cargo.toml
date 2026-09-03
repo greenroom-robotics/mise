@@ -29,6 +29,7 @@ predicates = "3"
 pedantic = { level = "deny", priority = -1 }   # UM, ACTUALLY
 nursery = { level = "deny", priority = -1 }    # BETA LINTS
 missing_errors_doc = "allow"
+significant_drop_tightening = "allow"
 # DENY PANICS
 unwrap_used = "deny"
 expect_used = "deny"
