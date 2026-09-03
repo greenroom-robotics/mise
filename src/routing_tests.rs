@@ -76,7 +76,7 @@ fn published_urls_swap_last_segment() {
             &Version::parse(version).unwrap(),
         )
         .iter()
-        .map(|c| c.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
     };
     assert_eq!(

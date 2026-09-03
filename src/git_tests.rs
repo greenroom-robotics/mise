@@ -10,7 +10,7 @@ fn temp_repo() -> tempfile::TempDir {
 }
 
 fn commit(repo: &Path, args: &[&str]) {
-    let mut argv = vec![
+    let mut full_args = vec![
         "-c",
         "user.name=t",
         "-c",
@@ -18,8 +18,8 @@ fn commit(repo: &Path, args: &[&str]) {
         "commit",
         "--quiet",
     ];
-    argv.extend_from_slice(args);
-    process::run_in(repo, "git", &argv).unwrap();
+    full_args.extend_from_slice(args);
+    process::run_in(repo, "git", &full_args).unwrap();
 }
 
 #[test]

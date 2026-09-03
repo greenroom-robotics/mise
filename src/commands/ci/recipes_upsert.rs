@@ -1,7 +1,7 @@
 use color_eyre::eyre::{Result, WrapErr};
 use std::path::{Path, PathBuf};
 
-use super::yaml_block::{self, item_bounds};
+use super::yaml_block::{self, ItemBounds, indent_of, item_bounds};
 use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
 
 /// An entry in `rosdistro_additional_recipes.yaml`, emitted as url, tag, version.
@@ -23,8 +23,7 @@ pub fn upsert(recipes_yaml: &Path, entry: &Entry) -> Result<()> {
         String::new()
     };
 
-    let new_body = upsert_text(&body, entry)?;
-    std::fs::write(recipes_yaml, new_body)
+    std::fs::write(recipes_yaml, upsert_text(&body, entry))
         .with_context(|| format!("writing {}", recipes_yaml.display()))?;
     Ok(())
 }
@@ -39,15 +38,15 @@ fn render(entry: &Entry, nl: &str) -> String {
     )
 }
 
-fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
+fn upsert_text(body: &str, entry: &Entry) -> String {
     let nl = yaml_block::line_ending(body);
 
     if let Some(block) = yaml_block::section_bounds(body, entry.package.as_str()) {
         let mut out = String::with_capacity(body.len());
-        out.push_str(block.before(body));
+        out.push_str(block.before());
         out.push_str(&render(entry, nl));
-        out.push_str(block.after(body));
-        return Ok(out);
+        out.push_str(block.after());
+        return out;
     }
 
     let mut out = body.to_string();
@@ -59,7 +58,7 @@ fn upsert_text(body: &str, entry: &Entry) -> Result<String> {
         out.push_str(nl);
     }
     out.push_str(&render(entry, nl));
-    Ok(out)
+    out
 }
 
 /// Mutate a hand-authored `vendor_recipes/<pkg>/recipe.yaml`, returning the
@@ -82,16 +81,16 @@ pub(crate) fn mutate_vendored_recipe(
 
     for (section, line) in yaml_block::with_sections(text) {
         let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
+        let indent = indent_of(line);
         let replacement = match section {
-            Some("package") if indent > 0 && trimmed.starts_with("version:") => {
-                old_version = Some(trimmed["version:".len()..].trim().to_string());
-                Some(format!("{}version: {}", " ".repeat(indent), version))
-            }
-            Some("source") if indent > 0 && trimmed.starts_with("rev:") => {
-                old_rev = Some(trimmed["rev:".len()..].trim().to_string());
-                Some(format!("{}rev: {}", " ".repeat(indent), rev))
-            }
+            Some("package") if indent > 0 => trimmed.strip_prefix("version:").map(|old| {
+                old_version = Some(old.trim().to_string());
+                format!("{}version: {}", " ".repeat(indent), version)
+            }),
+            Some("source") if indent > 0 => trimmed.strip_prefix("rev:").map(|old| {
+                old_rev = Some(old.trim().to_string());
+                format!("{}rev: {}", " ".repeat(indent), rev)
+            }),
             Some("build") if indent > 0 && trimmed.starts_with("number:") => {
                 number_idx = Some(out.len());
                 None
@@ -118,9 +117,10 @@ pub(crate) fn mutate_vendored_recipe(
     if old_version == version && old_rev == rev {
         return Ok(text.to_string());
     }
-    if old_version != version {
-        let indent = out[number_idx].len() - out[number_idx].trim_start().len();
-        out[number_idx] = format!("{}number: 0", " ".repeat(indent));
+    if old_version != version
+        && let Some(number) = out.get_mut(number_idx)
+    {
+        *number = format!("{}number: 0", " ".repeat(indent_of(number)));
     }
 
     let nl = yaml_block::line_ending(text);
@@ -131,17 +131,11 @@ pub(crate) fn mutate_vendored_recipe(
     Ok(result)
 }
 
-/// Mutate `pixi_native_packages.yaml` in place.
+/// Rewrite one `- name:` item of `pixi_native_packages.yaml`, appending it if
+/// absent, and return the new text.
 ///
 /// File shape: top-level `packages:` followed by `- name: <name>` items at
 /// column-2 indent (two-space indent for the dash, and sub-keys at column 4).
-///
-/// Behavior:
-/// - If an item with the given `name` exists: update `url:` and `rev:`, set
-///   `subdir:` and `lfs:` to match the arguments (inserting or removing the
-///   lines as needed), and delete `ref:` if present.
-/// - If absent: append a new item at the end of the file with the same
-///   indentation conventions.
 ///
 /// `subdir` and `lfs` are authoritative facts about the package, not overlays:
 /// `None`/`false` remove an existing `subdir:`/`lfs:` line.
@@ -152,92 +146,111 @@ pub(crate) fn mutate_pixi_entry(
     rev: &Sha40,
     subdir: Option<&str>,
     lfs: bool,
-) -> color_eyre::eyre::Result<String> {
+) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let url = url.git_url();
-    let rev = rev.as_str();
-
-    let result = if let Some(item) = item_bounds(&lines, name.as_str()) {
-        let sub_indent = item.sub_indent();
-        let mut out: Vec<String> = item
-            .through_header(&lines)
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
-        let mut url_seen = false;
-        let mut rev_seen = false;
-        let mut subdir_seen = false;
-        let mut lfs_seen = false;
-        for line in item.body(&lines) {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("ref:") {
-                continue;
-            }
-            if trimmed.starts_with("url:") {
-                url_seen = true;
-                out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
-                continue;
-            }
-            if trimmed.starts_with("rev:") {
-                rev_seen = true;
-                out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
-                continue;
-            }
-            if trimmed.starts_with("subdir:") {
-                if let Some(s) = subdir {
-                    subdir_seen = true;
-                    out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
-                }
-                continue;
-            }
-            if trimmed.starts_with("lfs:") {
-                if lfs {
-                    lfs_seen = true;
-                    out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
-                }
-                continue;
-            }
-            out.push(line.to_string());
-        }
-        if !url_seen {
-            out.push(format!("{}url: {}", " ".repeat(sub_indent), url));
-        }
-        if !rev_seen {
-            out.push(format!("{}rev: {}", " ".repeat(sub_indent), rev));
-        }
-        if !subdir_seen && let Some(s) = subdir {
-            out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
-        }
-        if !lfs_seen && lfs {
-            out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
-        }
-        for line in item.trailing(&lines) {
-            out.push(line.to_string());
-        }
-        out
-    } else {
-        let mut out: Vec<String> = lines.iter().map(std::string::ToString::to_string).collect();
-        if out.last().is_some_and(|s| !s.is_empty()) {
-            out.push(String::new());
-        }
-        out.push(format!("  - name: {name}"));
-        out.push(format!("    url: {url}"));
-        out.push(format!("    rev: {rev}"));
-        if let Some(s) = subdir {
-            out.push(format!("    subdir: {s}"));
-        }
-        if lfs {
-            out.push("    lfs: true".to_string());
-        }
-        out
+    let fields = PixiFields {
+        url: &url,
+        rev: rev.as_str(),
+        subdir,
+        lfs,
     };
+
+    let result = item_bounds(&lines, name.as_str()).map_or_else(
+        || appended_pixi_item(&lines, name, &fields),
+        |item| updated_pixi_item(&item, &fields),
+    );
 
     let nl = yaml_block::line_ending(text);
     let mut result_str = result.join(nl);
     if text.ends_with('\n') {
         result_str.push_str(nl);
     }
-    Ok(result_str)
+    result_str
+}
+
+struct PixiFields<'a> {
+    url: &'a str,
+    rev: &'a str,
+    subdir: Option<&'a str>,
+    lfs: bool,
+}
+
+fn updated_pixi_item(item: &ItemBounds, fields: &PixiFields) -> Vec<String> {
+    let sub_indent = item.sub_indent();
+    let mut out: Vec<String> = item
+        .through_header()
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
+    let mut url_seen = false;
+    let mut rev_seen = false;
+    let mut subdir_seen = false;
+    let mut lfs_seen = false;
+    for line in item.body() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("ref:") {
+            continue;
+        }
+        if trimmed.starts_with("url:") {
+            url_seen = true;
+            out.push(format!("{}url: {}", " ".repeat(sub_indent), fields.url));
+            continue;
+        }
+        if trimmed.starts_with("rev:") {
+            rev_seen = true;
+            out.push(format!("{}rev: {}", " ".repeat(sub_indent), fields.rev));
+            continue;
+        }
+        if trimmed.starts_with("subdir:") {
+            if let Some(s) = fields.subdir {
+                subdir_seen = true;
+                out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+            }
+            continue;
+        }
+        if trimmed.starts_with("lfs:") {
+            if fields.lfs {
+                lfs_seen = true;
+                out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
+            }
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    if !url_seen {
+        out.push(format!("{}url: {}", " ".repeat(sub_indent), fields.url));
+    }
+    if !rev_seen {
+        out.push(format!("{}rev: {}", " ".repeat(sub_indent), fields.rev));
+    }
+    if !subdir_seen && let Some(s) = fields.subdir {
+        out.push(format!("{}subdir: {}", " ".repeat(sub_indent), s));
+    }
+    if !lfs_seen && fields.lfs {
+        out.push(format!("{}lfs: true", " ".repeat(sub_indent)));
+    }
+    for line in item.trailing() {
+        out.push(line.to_string());
+    }
+    out
+}
+
+fn appended_pixi_item(lines: &[&str], name: &PackageName, fields: &PixiFields) -> Vec<String> {
+    let mut out: Vec<String> = lines.iter().map(std::string::ToString::to_string).collect();
+    if out.last().is_some_and(|s| !s.is_empty()) {
+        out.push(String::new());
+    }
+    out.push(format!("  - name: {name}"));
+    out.push(format!("    url: {}", fields.url));
+    out.push(format!("    rev: {}", fields.rev));
+    if let Some(s) = fields.subdir {
+        out.push(format!("    subdir: {s}"));
+    }
+    if fields.lfs {
+        out.push("    lfs: true".to_string());
+    }
+    out
 }
 
 /// True if `rosdistro_additional_recipes.yaml` text has a top-level
@@ -463,7 +476,7 @@ pub(crate) fn apply(
             let text = std::fs::read_to_string(&abs)
                 .with_context(|| format!("reading {}", abs.display()))?;
             let old_ref = pixi_entry_rev(&text, package);
-            let updated = mutate_pixi_entry(&text, package, url, sha, subdir.as_deref(), *lfs)?;
+            let updated = mutate_pixi_entry(&text, package, url, sha, subdir.as_deref(), *lfs);
             std::fs::write(&abs, updated).with_context(|| format!("writing {}", abs.display()))?;
             Ok(old_ref)
         }
@@ -476,7 +489,7 @@ pub(crate) fn apply(
 fn pixi_entry_rev(text: &str, name: &PackageName) -> Option<OldRef> {
     let lines: Vec<&str> = text.lines().collect();
     let item = item_bounds(&lines, name.as_str())?;
-    item.body(&lines).iter().find_map(|l| {
+    item.body().iter().find_map(|l| {
         let t = l.trim_start();
         if let Some(v) = t.strip_prefix("rev:") {
             return Some(OldRef::Rev(v.trim().to_string()));

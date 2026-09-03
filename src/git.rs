@@ -21,10 +21,11 @@ pub fn shallow_clone(url: &str, branch: &str, dest: &Path) -> color_eyre::eyre::
     ])
 }
 
-/// Materialize exactly one commit of `url` in `dest`: init a fresh repo, point
-/// it at the remote, fetch the single rev, check it out. The rev is usually a
-/// tagged release commit no branch tip points at, which `clone --branch`
-/// cannot fetch.
+/// Materialize exactly one commit of `url` in `dest`.
+///
+/// Init a fresh repo, point it at the remote, fetch the single rev, check it
+/// out. The rev is usually a tagged release commit no branch tip points at,
+/// which `clone --branch` cannot fetch.
 pub fn fetch_rev(dest: &Path, url: &str, rev: &Sha40) -> color_eyre::eyre::Result<()> {
     std::fs::create_dir_all(dest)?;
     process::run_in(dest, "git", &["init", "--quiet"])?;
@@ -82,10 +83,10 @@ fn diff_quiet(cwd: &Path, args: &[&OsStr]) -> color_eyre::eyre::Result<bool> {
                 .collect::<Vec<_>>()
                 .join(" "),
             cwd.display(),
-            match other {
-                Some(code) => format!("exit code {code}"),
-                None => "terminated by a signal".to_string(),
-            }
+            other.map_or_else(
+                || "terminated by a signal".to_string(),
+                |code| format!("exit code {code}")
+            )
         ),
     }
 }

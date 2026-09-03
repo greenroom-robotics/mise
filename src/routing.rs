@@ -14,6 +14,8 @@ use serde::Deserialize;
 use crate::consts::ROUTING_YAML;
 use crate::types::{PackageName, RemoteChannel, Version};
 
+const VARIANT_TOKEN: &str = "{variant}";
+
 #[derive(Debug)]
 pub struct RoutingRule {
     regex: regex::Regex,
@@ -42,19 +44,21 @@ fn pattern_to_regex(pattern: &str) -> color_eyre::eyre::Result<regex::Regex> {
     let mut out = String::from("^");
     let mut rest = pattern;
     while !rest.is_empty() {
-        if let Some(tail) = rest.strip_prefix("{variant}") {
+        if let Some(tail) = rest.strip_prefix(VARIANT_TOKEN) {
             out.push_str("(?P<variant>.+?)");
             rest = tail;
         } else if let Some(tail) = rest.strip_prefix('*') {
             out.push_str(".*");
             rest = tail;
         } else {
-            let next = rest
-                .char_indices()
-                .find(|(i, _)| rest[*i..].starts_with("{variant}") || rest[*i..].starts_with('*'))
-                .map_or(rest.len(), |(i, _)| i);
-            out.push_str(&regex::escape(&rest[..next]));
-            rest = &rest[next..];
+            let next = [rest.find(VARIANT_TOKEN), rest.find('*')]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(rest.len());
+            let (literal, tail) = rest.split_at(next);
+            out.push_str(&regex::escape(literal));
+            rest = tail;
         }
     }
     out.push('$');
@@ -112,7 +116,7 @@ pub fn resolve_channels(rules: &[RoutingRule], filename: &str) -> Option<Vec<Str
             return Some(
                 rule.channels
                     .iter()
-                    .map(|c| c.replace("{variant}", &variant))
+                    .map(|c| c.replace(VARIANT_TOKEN, &variant))
                     .collect(),
             );
         }
@@ -121,11 +125,12 @@ pub fn resolve_channels(rules: &[RoutingRule], filename: &str) -> Option<Vec<Str
     None
 }
 
-/// The channels the package `name` (at `version`) publishes to, each a sibling
-/// of `default_channel` (see [`RemoteChannel::sibling`]). Routing rules match
-/// built .conda filenames, so a synthetic `name-version-0.conda` stands in —
-/// every rule is name-anchored. No routing match means the package publishes
-/// to the default channel.
+/// The channels the package `name` (at `version`) publishes to.
+///
+/// Each is a sibling of `default_channel` (see [`RemoteChannel::sibling`]).
+/// Routing rules match built .conda filenames, so a synthetic
+/// `name-version-0.conda` stands in — every rule is name-anchored. No routing
+/// match means the package publishes to the default channel.
 #[must_use]
 pub fn published_channels(
     rules: &[RoutingRule],

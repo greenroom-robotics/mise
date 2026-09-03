@@ -88,7 +88,11 @@ fn release_argv(multi: bool, tag_format: &str) -> Vec<String> {
 /// Deliberately NOT `private: true`: msr's default `ignorePrivate` skips
 /// private workspace packages entirely (observed as "Queued 0 packages").
 /// Nothing npm-publishes these — the .releaserc has no @semantic-release/npm.
-fn package_json_for(name: &PackageName, version: &Version, deps: &BTreeSet<PackageName>) -> String {
+fn package_json_for(
+    name: &PackageName,
+    version: &Version,
+    deps: &BTreeSet<PackageName>,
+) -> serde_json::Result<String> {
     let deps_obj: serde_json::Map<String, serde_json::Value> = deps
         .iter()
         .map(|d| (d.to_string(), serde_json::Value::String("*".into())))
@@ -98,7 +102,6 @@ fn package_json_for(name: &PackageName, version: &Version, deps: &BTreeSet<Packa
         "version": version.to_string(),
         "dependencies": deps_obj,
     }))
-    .expect("static json")
 }
 
 /// Absolutize a path against cwd. multi-semantic-release runs each package's
@@ -129,7 +132,7 @@ fn ensure_root_workspaces(
     root_pkg_json: &std::path::Path,
     globs: &[String],
 ) -> color_eyre::eyre::Result<()> {
-    use color_eyre::eyre::WrapErr;
+    use color_eyre::eyre::{ContextCompat, WrapErr};
     let mut v: serde_json::Value = if root_pkg_json.exists() {
         let text = std::fs::read_to_string(root_pkg_json)
             .with_context(|| format!("reading {}", root_pkg_json.display()))?;
@@ -138,7 +141,9 @@ fn ensure_root_workspaces(
     } else {
         serde_json::json!({ "name": "mise-release-root", "private": true })
     };
-    v["workspaces"] = serde_json::json!(globs);
+    v.as_object_mut()
+        .with_context(|| format!("{} is not a JSON object", root_pkg_json.display()))?
+        .insert("workspaces".to_string(), serde_json::json!(globs));
     std::fs::write(root_pkg_json, serde_json::to_string_pretty(&v)?)
         .with_context(|| format!("writing {}", root_pkg_json.display()))?;
     Ok(())
@@ -147,9 +152,9 @@ fn ensure_root_workspaces(
 impl Release {
     pub fn run(self) -> color_eyre::eyre::Result<()> {
         let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
-        if pkgs.is_empty() {
+        let Some(first) = pkgs.first() else {
             color_eyre::eyre::bail!("no packages found under {}", self.package_dir.display());
-        }
+        };
         let multi = self.package.is_none() && pkgs.len() > 1;
 
         let graph = crate::commands::ci::siblings::analyze(&pkgs);
@@ -164,7 +169,7 @@ impl Release {
                 let deps = msr_ordering_deps(&graph, &id.name);
                 std::fs::write(
                     pkg_dir.join("package.json"),
-                    package_json_for(&id.name, &id.version, &deps),
+                    package_json_for(&id.name, &id.version, &deps)?,
                 )?;
                 let rel_pkg_dir = cwd_relative(pkg_dir);
                 workspace_globs.push(rel_pkg_dir.to_string_lossy().into_owned());
@@ -177,13 +182,12 @@ impl Release {
         // down in the package dir is invisible to it, and its own defaults
         // have no `main` branch (ERELEASEBRANCHES).
         if !multi {
-            let pkg = &pkgs[0];
-            let releaserc = self.releaserc_json(&pkg.manifest_path, &pkg.identity().name)?;
+            let releaserc = self.releaserc_json(&first.manifest_path, &first.identity().name)?;
             std::fs::write(".releaserc", releaserc)?;
         }
 
-        // Multi mode ignores the name; single mode's pkgs[0] is the one package.
-        let tag_format = tag_format(multi, &pkgs[0].identity().name);
+        // Multi mode ignores the name; in single mode `first` is the only package.
+        let tag_format = tag_format(multi, &first.identity().name);
 
         let argv = release_argv(multi, &tag_format);
         crate::process::run("npx", &argv)

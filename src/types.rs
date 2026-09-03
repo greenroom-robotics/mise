@@ -7,7 +7,6 @@
 //! rejection at the file, not at the first use.
 
 use std::borrow::Borrow;
-use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -51,9 +50,10 @@ pub enum RunnerSize {
     Cpu32,
 }
 
-/// A pixi-native build bucket: a runner size plus an optional high-memory
-/// flavor. Renders as `16cpu` / `16cpu-himem` — the string that rides the
-/// matrix `runner-size` field, artifact names, and `--runner-size`.
+/// A pixi-native build bucket: a runner size plus an optional high-memory flavor.
+///
+/// Renders as `16cpu` / `16cpu-himem` — the string that rides the matrix
+/// `runner-size` field, artifact names, and `--runner-size`.
 ///
 /// `himem` swaps the `RunsOn` instance family from the default c-family
 /// (2GB/cpu) to the m-family (4GB/cpu) for packages whose template-heavy
@@ -145,13 +145,10 @@ impl PackageName {
     pub fn new(s: impl Into<String>) -> color_eyre::eyre::Result<Self> {
         let s = s.into();
         let mut chars = s.chars();
-        let ok = match chars.next() {
-            None => false,
-            Some(first) => {
-                (first.is_ascii_alphanumeric() || first == '_')
-                    && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-            }
-        };
+        let ok = chars.next().is_some_and(|first| {
+            (first.is_ascii_alphanumeric() || first == '_')
+                && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        });
         color_eyre::eyre::ensure!(
             ok,
             "not a package name: {s:?} (expected alphanumeric, `-`, `_` or `.`, \
@@ -289,7 +286,10 @@ impl Version {
     #[must_use]
     pub fn is_explicit_triple(&self) -> bool {
         // Build metadata cannot be present, so `-` bounds the numeric core.
-        let core = &self.text[..self.text.find('-').unwrap_or(self.text.len())];
+        let core = self
+            .text
+            .split_once('-')
+            .map_or(self.text.as_str(), |(core, _)| core);
         core.matches('.').count() == 2
     }
 
@@ -298,7 +298,7 @@ impl Version {
     /// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
     #[must_use]
     pub fn range_pin(&self) -> String {
-        format!(">={self},<{}", self.major() + 1)
+        format!(">={self},<{}", self.major().saturating_add(1))
     }
 
     /// The exact pin `==<self>`, for lockstep-coupled siblings.
@@ -308,10 +308,11 @@ impl Version {
     }
 }
 
-/// How the farm pins a rewritten sibling `path =` dep in the published
-/// artifact. Per consumer entry (`exact-pins:` in `pixi_native_packages.yaml`),
-/// never per dep: a consumer either rides sibling releases within the major or
-/// is version-locked to its siblings wholesale.
+/// How the farm pins a rewritten sibling `path =` dep in the published artifact.
+///
+/// Per consumer entry (`exact-pins:` in `pixi_native_packages.yaml`), never per
+/// dep: a consumer either rides sibling releases within the major or is
+/// version-locked to its siblings wholesale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SiblingPinStyle {
     /// `>=<version>,<major+1>` — published consumers accept future sibling
@@ -486,10 +487,10 @@ impl GithubRepoUrl {
             "ssh://git@github.com/",
             "ssh://github.com/",
         ];
-        match SSH_PREFIXES.iter().find_map(|p| url.strip_prefix(p)) {
-            Some(rest) => Self::from_owner_repo(rest, url),
-            None => Self::parse(url),
-        }
+        SSH_PREFIXES
+            .iter()
+            .find_map(|p| url.strip_prefix(p))
+            .map_or_else(|| Self::parse(url), |rest| Self::from_owner_repo(rest, url))
     }
 
     /// The shared tail of both parsers: `<owner>/<repo>` with the optional
@@ -576,9 +577,11 @@ impl Serialize for GithubRepoUrl {
 // Channels
 // ---------------------------------------------------------------------------
 
-/// A conda channel served over the network. It cannot change while a build
-/// job runs (builds publish into a local output channel and are drained to
-/// the real ones afterwards), so its index may be swept once and cached.
+/// A conda channel served over the network.
+///
+/// It cannot change while a build job runs (builds publish into a local output
+/// channel and are drained to the real ones afterwards), so its index may be
+/// swept once and cached.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RemoteChannel(Url);
 
@@ -722,7 +725,7 @@ impl PixiNativeEntry {
     /// checkout root when it has none.
     #[must_use]
     pub fn subdir_or_root(&self) -> &Path {
-        self.subdir.as_deref().unwrap_or(Path::new("."))
+        self.subdir.as_deref().unwrap_or_else(|| Path::new("."))
     }
 
     /// The build bucket this entry belongs to.
@@ -746,6 +749,10 @@ impl PixiNativeEntry {
 }
 
 #[derive(Deserialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the yaml's independent flags"
+)]
 struct PixiNativeEntryRaw {
     name: PackageName,
     url: GithubRepoUrl,
@@ -828,17 +835,11 @@ impl PixiNativeManifest {
             .map(PixiNativeEntry::try_from)
             .collect::<color_eyre::eyre::Result<Vec<_>>>()?;
 
-        let mut names = HashMap::new();
-        for pkg in &packages {
-            names
-                .entry(pkg.name.as_str())
-                .and_modify(|e| *e += 1)
-                .or_insert(1);
-        }
-
-        let dups = names
+        let mut seen = std::collections::HashSet::new();
+        let dups = packages
             .iter()
-            .filter_map(|e| if *e.1 > 1 { Some(*e.0) } else { None })
+            .map(|pkg| pkg.name.as_str())
+            .filter(|name| !seen.insert(*name))
             .collect::<Vec<_>>();
         if !dups.is_empty() {
             bail!("Got duplicate entries: {}", dups.join(", "));
@@ -918,10 +919,9 @@ impl fmt::Display for RunnerSpec {
 impl FromStr for RunnerSpec {
     type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (size, himem) = match s.strip_suffix("-himem") {
-            Some(base) => (base, true),
-            None => (s, false),
-        };
+        let (size, himem) = s
+            .strip_suffix("-himem")
+            .map_or((s, false), |base| (base, true));
         Ok(Self {
             size: size.parse()?,
             himem,

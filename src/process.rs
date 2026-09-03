@@ -52,19 +52,20 @@ fn build(prog: &str, args: &[impl AsRef<OsStr>], cwd: Option<&Path>) -> (Command
 /// A non-zero exit, reported with the working directory when one was set —
 /// a failure inside a temp checkout is undiagnosable without it.
 fn failure_message(label: &str, status: impl Display, cwd: Option<&Path>) -> String {
-    match cwd {
-        Some(d) => format!("`{label}` exited with {status} (in {})", d.display()),
-        None => format!("`{label}` exited with {status}"),
-    }
+    cwd.map_or_else(
+        || format!("`{label}` exited with {status}"),
+        |d| format!("`{label}` exited with {status} (in {})", d.display()),
+    )
 }
 
 /// Trim and bound a captured stderr for inclusion in an error message.
 fn quote_stderr(stderr: &str) -> String {
-    let trimmed = secret::scrub(stderr.trim());
-    match trimmed.char_indices().nth(STDERR_LIMIT) {
-        Some((cut, _)) => format!("{}…", &trimmed[..cut]),
-        None => trimmed,
+    let mut trimmed = secret::scrub(stderr.trim());
+    if let Some((cut, _)) = trimmed.char_indices().nth(STDERR_LIMIT) {
+        trimmed.truncate(cut);
+        trimmed.push('…');
     }
+    trimmed
 }
 
 /// Run `prog` with `args`, inheriting this process's stdout/stderr so
@@ -179,22 +180,21 @@ pub fn capture_in(
     match capture_probe_in(cwd, prog, args)? {
         Captured::Output(stdout) => Ok(stdout),
         Captured::Failed { code, stderr } => {
-            let status = match code {
-                Some(c) => format!("code {c}"),
-                None => "a signal".to_string(),
-            };
+            let status = code.map_or_else(|| "a signal".to_string(), |c| format!("code {c}"));
             let mut msg = failure_message(&label(prog, args), status, Some(cwd));
             let stderr = quote_stderr(&stderr);
             if !stderr.is_empty() {
-                msg.push_str(&format!(": {stderr}"));
+                msg.push_str(": ");
+                msg.push_str(&stderr);
             }
             Err(color_eyre::eyre::eyre!("{msg}"))
         }
     }
 }
 
-/// Run `prog` and return its exit code, inheriting stdout/stderr. For the
-/// commands whose *code* is the answer rather than an error — `git diff
+/// Run `prog` and return its exit code, inheriting stdout/stderr.
+///
+/// For the commands whose *code* is the answer rather than an error — `git diff
 /// --quiet` reports "no difference" as 0 and "difference" as 1, and both are
 /// successful outcomes. `None` means the process was terminated by a signal
 /// and produced no code at all, which the type keeps distinct from every real

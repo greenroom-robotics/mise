@@ -2,7 +2,9 @@ use clap::Args;
 use color_eyre::eyre::WrapErr;
 use std::path::PathBuf;
 
-/// mise-specific prepare callback. Run via `mise ci release --extra-prepare-cmd`
+/// mise-specific prepare callback.
+///
+/// Run via `mise ci release --extra-prepare-cmd`
 /// after bump-pixi and before the @semantic-release/git commit, so Cargo.toml
 /// and Cargo.lock land in the same `chore(release)` commit (and tag) as
 /// pixi.toml — keeping `mise --version` (`CARGO_PKG_VERSION`) in step with the

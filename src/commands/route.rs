@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use clap::Args;
+use color_eyre::eyre::eyre;
 
 use crate::{
     gh,
@@ -34,19 +35,20 @@ pub struct Route {
 }
 
 impl Route {
-    /// Run the `route` command
     pub fn run(self) -> color_eyre::eyre::Result<()> {
         let repo = Repo::or_discover(self.repo_root)?;
-        let routing_file = match self.routing_file {
-            Some(p) => RoutingFile::Explicit { routing_file: p },
-            None => RoutingFile::RepoDefault {
+        let routing_file = self.routing_file.map_or_else(
+            || RoutingFile::RepoDefault {
                 repo_root: repo.root().to_path_buf(),
             },
-        };
+            |routing_file| RoutingFile::Explicit { routing_file },
+        );
         let rules = routing::load_rules(routing_file)?;
 
         let pairs: Vec<(String, Vec<RemoteChannel>)> = if self.is_file {
-            let filename = self.package.expect("clap: --is-file requires package");
+            let filename = self
+                .package
+                .ok_or_else(|| eyre!("--is-file requires a package"))?;
             let channels = published_channels_from_filename(&rules, &self.channel_url, &filename);
             vec![(filename, channels)]
         } else {
@@ -59,10 +61,15 @@ impl Route {
                     .filter(|pkg| package.is_none_or(|name| pkg.name.as_str() == name))
                     .map(|pkg| scope.spawn(move || gh::fetch_upstream_manifest(pkg)))
                     .collect();
-                handles
-                    .into_iter()
-                    .map(|h| h.join().expect("fetch thread panicked"))
-                    .collect::<color_eyre::eyre::Result<Vec<_>>>()
+                let mut packages = Vec::with_capacity(handles.len());
+                for handle in handles {
+                    packages.push(
+                        handle
+                            .join()
+                            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))?,
+                    );
+                }
+                Ok::<_, color_eyre::eyre::Report>(packages)
             })?;
             packages
                 .iter()

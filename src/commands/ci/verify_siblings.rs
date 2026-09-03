@@ -6,6 +6,7 @@ use crate::types::{PackageName, Version};
 
 /// semantic-release prepare-step guard: every sibling referenced via a
 /// `path =` dep must be byte-identical to its latest `<pkg>@<ver>` tag.
+///
 /// Runs before bump-pixi; releases in the same run are already tagged by
 /// the time a dependent's prepare fires (topo order), so this single check
 /// covers all safe cases. Not for direct use.

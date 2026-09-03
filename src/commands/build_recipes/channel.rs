@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use color_eyre::eyre::WrapErr;
 
@@ -267,7 +267,7 @@ impl ChannelIndexCache {
         &self,
         channel: &RemoteChannel,
     ) -> color_eyre::eyre::Result<Arc<ChannelIndex>> {
-        let mut swept = self.swept.lock().expect("channel index cache poisoned");
+        let mut swept = self.swept.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(index) = swept.get(channel) {
             return Ok(Arc::clone(index));
         }

@@ -1,6 +1,8 @@
 use clap::Args;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use crate::consts::{ORIGIN, PIXI_TOML, RECIPES_REPO};
 use crate::gh::{self, PrRef};
@@ -56,39 +58,7 @@ impl RecipesPr {
         let targets: Vec<(PackageName, Option<String>)> = match &mode {
             ReleaseMode::VendoredByName(name) => vec![(name.clone(), None)],
             ReleaseMode::Discovered => {
-                let pkgs = crate::manifest::discover(&self.package_dir, self.package.as_ref())?;
-                if pkgs.is_empty() {
-                    color_eyre::eyre::bail!(
-                        "no packages found under {}",
-                        self.package_dir.display()
-                    );
-                }
-                // Subdir from the source-repo root to each package's
-                // pixi.toml ("" or "." = repo root). Anchored on the git
-                // toplevel: the publish step's cwd is the package dir and
-                // --package-dir arrives absolute, so cwd-stripping would
-                // leak an absolute subdir.
-                let toplevel = git::toplevel(&cwd)?;
-                pkgs.iter()
-                    .map(|pkg| {
-                        let abs = if pkg.dir.is_absolute() {
-                            pkg.dir.clone()
-                        } else {
-                            cwd.join(&pkg.dir)
-                        };
-                        let parent = abs
-                            .strip_prefix(&toplevel)
-                            .map(std::borrow::ToOwned::to_owned)
-                            .unwrap_or(abs)
-                            .to_string_lossy()
-                            .into_owned();
-                        let subdir = match parent.as_str() {
-                            "" | "." => None,
-                            s => Some(s.to_string()),
-                        };
-                        (pkg.identity().name, subdir)
-                    })
-                    .collect()
+                discovered_targets(&cwd, &self.package_dir, self.package.as_ref())?
             }
         };
 
@@ -112,22 +82,12 @@ impl RecipesPr {
         let pr = PrRef::new(&self.recipes_repo, &branch)?;
         let existing_body = gh::pr::list_body(pr);
         let pr_open = existing_body.is_some();
-        if pr_open {
-            git::fetch_branch(&recipes_root, &branch)?;
-            process::run_in(
-                &recipes_root,
-                "git",
-                &["checkout", "-b", &branch, "FETCH_HEAD"],
-            )?;
-        } else {
-            process::run_in(&recipes_root, "git", &["checkout", "-b", &branch])?;
-        }
+        checkout_release_branch(&recipes_root, &branch, pr_open)?;
 
-        use std::collections::BTreeSet;
-        let mut changed: BTreeSet<std::path::PathBuf> = BTreeSet::new();
+        let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
         // Seeded from the open PR's body so siblings already on the rolling
         // PR keep their entries at their own versions.
-        let mut released: std::collections::BTreeMap<PackageName, String> = existing_body
+        let mut released: BTreeMap<PackageName, String> = existing_body
             .as_deref()
             .map(body_packages)
             .unwrap_or_default();
@@ -183,28 +143,7 @@ impl RecipesPr {
             NoopOutcome::SkipCommitKeepPush => {
                 tracing::info!("recipe for {title} already up to date; skipping commit");
             }
-            NoopOutcome::Commit => {
-                let (git_name, git_email) = git_identity();
-                let name_cfg = format!("user.name={git_name}");
-                let email_cfg = format!("user.email={git_email}");
-                let mut commit_msg = title.clone();
-                if let Some(id) = &run_id {
-                    commit_msg.push_str(&format!("\n\n{}", run_marker(id)));
-                }
-                process::run_in(
-                    &recipes_root,
-                    "git",
-                    &[
-                        "-c",
-                        &name_cfg,
-                        "-c",
-                        &email_cfg,
-                        "commit",
-                        "-m",
-                        &commit_msg,
-                    ],
-                )?;
-            }
+            NoopOutcome::Commit => commit(&recipes_root, &title, run_id.as_deref())?,
         }
         // The clone is shallow on `main` only: the rolling branch has no
         // remote-tracking ref, so --force-with-lease would reject the push.
@@ -217,24 +156,113 @@ impl RecipesPr {
             &released,
         );
 
-        if pr_open {
-            gh::pr::edit(pr, &title, &body)?;
-            println!("PR already exists for {branch}; branch, title and body updated.");
-        } else {
-            gh::pr::create(pr, &title, &body)?;
-        }
-
-        gh::pr::merge_auto(pr)?;
-
-        // Best-effort: a missing URL or no $GITHUB_STEP_SUMMARY (local run)
-        // must not fail the release.
-        if let Some(url) = gh::pr::view_url(pr) {
-            println!("recipes PR: {url}");
-            gh::summary::append(&format!("### Recipes PR\n\n[{title}]({url})\n"));
-        }
-
-        Ok(())
+        publish_pr(pr, pr_open, &title, &body)
     }
+}
+
+fn checkout_release_branch(
+    recipes_root: &Path,
+    branch: &str,
+    pr_open: bool,
+) -> color_eyre::eyre::Result<()> {
+    if pr_open {
+        git::fetch_branch(recipes_root, branch)?;
+        process::run_in(
+            recipes_root,
+            "git",
+            &["checkout", "-b", branch, "FETCH_HEAD"],
+        )
+    } else {
+        process::run_in(recipes_root, "git", &["checkout", "-b", branch])
+    }
+}
+
+fn publish_pr(
+    pr: PrRef<'_>,
+    pr_open: bool,
+    title: &str,
+    body: &str,
+) -> color_eyre::eyre::Result<()> {
+    if pr_open {
+        gh::pr::edit(pr, title, body)?;
+        println!(
+            "PR already exists for {}; branch, title and body updated.",
+            pr.branch()
+        );
+    } else {
+        gh::pr::create(pr, title, body)?;
+    }
+
+    gh::pr::merge_auto(pr)?;
+
+    // Best-effort: a missing URL or no $GITHUB_STEP_SUMMARY (local run)
+    // must not fail the release.
+    if let Some(url) = gh::pr::view_url(pr) {
+        println!("recipes PR: {url}");
+        gh::summary::append(&format!("### Recipes PR\n\n[{title}]({url})\n"));
+    }
+
+    Ok(())
+}
+
+/// Discovered packages paired with the subdir from the source-repo root to
+/// each package's pixi.toml (`None` = repo root). Anchored on the git
+/// toplevel: the publish step's cwd is the package dir and --package-dir
+/// arrives absolute, so cwd-stripping would leak an absolute subdir.
+fn discovered_targets(
+    cwd: &Path,
+    package_dir: &Path,
+    package: Option<&PackageName>,
+) -> color_eyre::eyre::Result<Vec<(PackageName, Option<String>)>> {
+    let pkgs = crate::manifest::discover(package_dir, package)?;
+    if pkgs.is_empty() {
+        color_eyre::eyre::bail!("no packages found under {}", package_dir.display());
+    }
+    let toplevel = git::toplevel(cwd)?;
+    Ok(pkgs
+        .iter()
+        .map(|pkg| {
+            let abs = if pkg.dir.is_absolute() {
+                pkg.dir.clone()
+            } else {
+                cwd.join(&pkg.dir)
+            };
+            let parent = abs
+                .strip_prefix(&toplevel)
+                .map(std::borrow::ToOwned::to_owned)
+                .unwrap_or(abs)
+                .to_string_lossy()
+                .into_owned();
+            let subdir = match parent.as_str() {
+                "" | "." => None,
+                s => Some(s.to_string()),
+            };
+            (pkg.identity().name, subdir)
+        })
+        .collect())
+}
+
+fn commit(recipes_root: &Path, title: &str, run_id: Option<&str>) -> color_eyre::eyre::Result<()> {
+    let (git_name, git_email) = git_identity();
+    let name_cfg = format!("user.name={git_name}");
+    let email_cfg = format!("user.email={git_email}");
+    let mut commit_msg = title.to_string();
+    if let Some(id) = run_id {
+        let _ = write!(commit_msg, "\n\n{}", run_marker(id));
+    }
+    process::run_in(
+        recipes_root,
+        "git",
+        &[
+            "-c",
+            &name_cfg,
+            "-c",
+            &email_cfg,
+            "commit",
+            "-m",
+            &commit_msg,
+        ],
+    )
 }
 
 /// Version-independent rolling branch, one per source repo, so coupled
@@ -251,11 +279,7 @@ fn run_marker(run_id: &str) -> String {
 /// or `release: <repo>/{a v1, b v2}`. A list too long for the title collapses
 /// to a count — the full list lives in the PR body, which is what the next
 /// append reads back.
-fn release_title(
-    src_short: &str,
-    packages: &std::collections::BTreeMap<PackageName, String>,
-    tag: &str,
-) -> String {
+fn release_title(src_short: &str, packages: &BTreeMap<PackageName, String>, tag: &str) -> String {
     let pkgs: Vec<(&str, &str)> = packages
         .iter()
         .filter(|(name, _)| name.as_str() != src_short)
@@ -387,7 +411,7 @@ const GREMLINS: &[&str] = &[
 /// carries: the title is display-only and gets shortened once it has too many
 /// packages to fit, so it can't be read back. Inverse of the `- <pkg> <tag>`
 /// lines `pr_body` writes.
-fn body_packages(body: &str) -> std::collections::BTreeMap<PackageName, String> {
+fn body_packages(body: &str) -> BTreeMap<PackageName, String> {
     // ponytail: any `- <word> <word>` bullet whose first word parses as a
     // package name reads as a package, so a hand-added bullet can still put a
     // bogus name in the title (nothing else). Use a fenced/HTML-comment block
@@ -399,22 +423,21 @@ fn body_packages(body: &str) -> std::collections::BTreeMap<PackageName, String> 
         .collect()
 }
 
-fn pr_body(
-    diff: Option<&str>,
-    packages: &std::collections::BTreeMap<PackageName, String>,
-) -> String {
+fn pr_body(diff: Option<&str>, packages: &BTreeMap<PackageName, String>) -> String {
     // ponytail: nanos-modulo pick, no rng dep needed for flavor text
     let idx = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.subsec_nanos() as usize)
-        % GREMLINS.len();
-    let mut body = GREMLINS[idx].to_string();
+        .ok()
+        .and_then(|d| usize::try_from(d.subsec_nanos()).ok())
+        .and_then(|n| n.checked_rem(GREMLINS.len()))
+        .unwrap_or(0);
+    let mut body = GREMLINS.get(idx).copied().unwrap_or_default().to_string();
     body.push_str("\n\n**Releasing:**\n");
     for (name, tag) in packages {
-        body.push_str(&format!("- {name} {tag}\n"));
+        let _ = writeln!(body, "- {name} {tag}");
     }
     if let Some(url) = diff {
-        body.push_str(&format!("\n\n**Diff since last release:** {url}"));
+        let _ = write!(body, "\n\n**Diff since last release:** {url}");
     }
     body.push_str("\n\nAutomated by `mise ci recipes-pr`.");
     body

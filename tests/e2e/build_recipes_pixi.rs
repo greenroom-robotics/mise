@@ -16,6 +16,7 @@
 use crate::harness::{E2e, FixtureServer, write_file};
 use predicates::prelude::*;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -97,11 +98,9 @@ const MONO_URL: &str = "https://github.com/example/mono.git";
 fn manifest_yaml(entries: &[(&str, &str, &str, Option<&str>)]) -> String {
     let mut out = String::from("packages:\n");
     for (name, url, rev, subdir) in entries {
-        out.push_str(&format!("  - name: {name}\n"));
-        out.push_str(&format!("    url: {url}\n"));
-        out.push_str(&format!("    rev: {rev}\n"));
+        let _ = writeln!(out, "  - name: {name}\n    url: {url}\n    rev: {rev}");
         if let Some(sub) = subdir {
-            out.push_str(&format!("    subdir: {sub}\n"));
+            let _ = writeln!(out, "    subdir: {sub}");
         }
     }
     out

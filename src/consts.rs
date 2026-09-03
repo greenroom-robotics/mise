@@ -1,6 +1,8 @@
-//! Literals that more than one module has to agree on. A constant earns a
-//! place here only when it appears at two or more sites and a divergence
-//! between them would be a bug; single-use literals stay where they are used.
+//! Literals that more than one module has to agree on.
+//!
+//! A constant earns a place here only when it appears at two or more sites and
+//! a divergence between them would be a bug; single-use literals stay where
+//! they are used.
 
 /// Default `owner/repo` of the conda recipes repository.
 /// (`ci release --recipes-repo`, `ci recipes-pr --recipes-repo`.)

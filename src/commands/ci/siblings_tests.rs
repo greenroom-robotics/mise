@@ -24,7 +24,11 @@ fn detects_path_dep_between_siblings() {
     );
     let g = analyze(&[a, b]);
     assert!(g.path_deps["geolocation_node"].contains("geolocation"));
-    assert!(g.path_deps.get("geolocation").is_none_or(|s| s.is_empty()));
+    assert!(
+        g.path_deps
+            .get("geolocation")
+            .is_none_or(std::collections::BTreeSet::is_empty)
+    );
 }
 
 #[test]
@@ -32,7 +36,11 @@ fn self_path_dep_idiom_is_ignored() {
     let tmp = TempDir::new().unwrap();
     let a = write_pkg(tmp.path(), "solo", "");
     let g = analyze(&[a]);
-    assert!(g.path_deps.get("solo").is_none_or(|s| s.is_empty()));
+    assert!(
+        g.path_deps
+            .get("solo")
+            .is_none_or(std::collections::BTreeSet::is_empty)
+    );
 }
 
 #[test]
@@ -70,5 +78,9 @@ fn external_deps_produce_no_edges() {
         "[package.run-dependencies]\nros-kilted-rclpy = \"*\"\npydantic = \">=2,<3\"\n",
     );
     let g = analyze(&[a]);
-    assert!(g.pin_deps.get("geolocation").is_none_or(|s| s.is_empty()));
+    assert!(
+        g.pin_deps
+            .get("geolocation")
+            .is_none_or(std::collections::BTreeSet::is_empty)
+    );
 }

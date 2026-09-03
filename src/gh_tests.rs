@@ -97,12 +97,7 @@ fn lookup_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> 
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    move |var: &str| {
-        table
-            .iter()
-            .find(|(k, _)| k == var)
-            .map(|(_, v)| v.to_string())
-    }
+    move |var: &str| table.iter().find(|(k, _)| k == var).map(|(_, v)| v.clone())
 }
 
 /// Fixture tokens are deliberately distinctive strings rather than words like

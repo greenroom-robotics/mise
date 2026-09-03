@@ -1,9 +1,7 @@
 use super::*;
 
-/// The span's own text. Tests only — production callers splice with
-/// [`ByteSpan::before`] / [`ByteSpan::after`] and never need the middle.
-fn spanned<'a>(span: &ByteSpan, text: &'a str) -> &'a str {
-    &text[span.0.clone()]
+fn spanned<'a>(section: &Section<'a>) -> &'a str {
+    section.inner
 }
 
 const ROSDISTRO: &str = "\
@@ -20,21 +18,18 @@ bar_pkg:
 fn section_bounds_covers_the_key_line_and_its_indented_body() {
     let r = section_bounds(ROSDISTRO, "foo_pkg").unwrap();
     assert_eq!(
-        spanned(&r, ROSDISTRO),
+        spanned(&r),
         "foo_pkg:\n  url: https://example.invalid/foo\n  tag: 1.0.0\n\n"
     );
     // The blank line before the next key belongs to the block, and the next
     // key starts exactly where it ends.
-    assert_eq!(
-        r.after(ROSDISTRO),
-        "bar_pkg:\n  url: https://example.invalid/bar\n"
-    );
+    assert_eq!(r.after(), "bar_pkg:\n  url: https://example.invalid/bar\n");
 }
 
 #[test]
 fn section_bounds_runs_to_eof_for_the_last_block() {
     let r = section_bounds(ROSDISTRO, "bar_pkg").unwrap();
-    assert_eq!(r.after(ROSDISTRO), "");
+    assert_eq!(r.after(), "");
 }
 
 #[test]
@@ -54,7 +49,7 @@ const CAPTION: &str = "pkg:\n  url: u\n# unrelated\nother:\n  url: v\n";
 #[test]
 fn a_captioning_comment_ends_the_block() {
     let r = section_bounds(CAPTION, "pkg").unwrap();
-    assert_eq!(spanned(&r, CAPTION), "pkg:\n  url: u\n");
+    assert_eq!(spanned(&r), "pkg:\n  url: u\n");
     // …and the reader agrees: the comment and everything after it are outside.
     assert_eq!(field_of(CAPTION, "pkg", "url"), Some("u"));
     assert_eq!(field_of(CAPTION, "other", "url"), Some("v"));
@@ -64,7 +59,7 @@ fn a_captioning_comment_ends_the_block() {
 fn a_trailing_comment_run_at_eof_ends_the_block() {
     let text = "pkg:\n  url: u\n# trailing note\n";
     let r = section_bounds(text, "pkg").unwrap();
-    assert_eq!(spanned(&r, text), "pkg:\n  url: u\n");
+    assert_eq!(spanned(&r), "pkg:\n  url: u\n");
 }
 
 /// The same comment, but the block's body resumes under it — so it is interior
@@ -82,13 +77,10 @@ bar_pkg:
 fn an_interior_comment_does_not_end_the_block() {
     let r = section_bounds(INTERIOR, "foo_pkg").unwrap();
     assert_eq!(
-        spanned(&r, INTERIOR),
+        spanned(&r),
         "foo_pkg:\n  url: https://example.invalid/foo\n# a note\n  tag: 1.0.0\n"
     );
-    assert_eq!(
-        r.after(INTERIOR),
-        "bar_pkg:\n  url: https://example.invalid/bar\n"
-    );
+    assert_eq!(r.after(), "bar_pkg:\n  url: https://example.invalid/bar\n");
 }
 
 #[test]
@@ -103,7 +95,7 @@ fn the_reader_sees_a_key_below_an_interior_comment() {
 fn blank_lines_inside_a_comment_run_do_not_split_it() {
     let text = "pkg:\n  url: u\n# a\n\n# b\n  tag: t\nother:\n";
     let r = section_bounds(text, "pkg").unwrap();
-    assert_eq!(spanned(&r, text), "pkg:\n  url: u\n# a\n\n# b\n  tag: t\n");
+    assert_eq!(spanned(&r), "pkg:\n  url: u\n# a\n\n# b\n  tag: t\n");
     assert_eq!(field_of(text, "pkg", "tag"), Some("t"));
 }
 
@@ -135,12 +127,11 @@ fn line_ending_is_the_files_first_terminator() {
 }
 
 #[test]
-fn section_bounds_offsets_survive_crlf() {
+fn section_bounds_keeps_crlf_inside_the_block() {
     let text = "foo:\r\n  url: u\r\n\r\nbar:\r\n  url: v\r\n";
     let r = section_bounds(text, "foo").unwrap();
-    // Byte offsets, so the CR is inside the span rather than lost.
-    assert_eq!(spanned(&r, text), "foo:\r\n  url: u\r\n\r\n");
-    assert_eq!(r.after(text), "bar:\r\n  url: v\r\n");
+    assert_eq!(spanned(&r), "foo:\r\n  url: u\r\n\r\n");
+    assert_eq!(r.after(), "bar:\r\n  url: v\r\n");
     assert_eq!(field_of(text, "bar", "url"), Some("v"));
 }
 
@@ -148,8 +139,8 @@ fn section_bounds_offsets_survive_crlf() {
 fn section_bounds_handles_a_file_with_no_trailing_newline() {
     let text = "foo:\n  url: u\nbar:\n  url: v";
     let r = section_bounds(text, "bar").unwrap();
-    assert_eq!(spanned(&r, text), "bar:\n  url: v");
-    assert_eq!(r.after(text), "");
+    assert_eq!(spanned(&r), "bar:\n  url: v");
+    assert_eq!(r.after(), "");
     assert_eq!(field_of(text, "bar", "url"), Some("v"));
 }
 
@@ -157,12 +148,12 @@ fn section_bounds_handles_a_file_with_no_trailing_newline() {
 fn tab_indented_content_stays_inside_its_block() {
     let text = "foo:\n\turl: u\n\ttag: 1.0.0\nbar:\n";
     let r = section_bounds(text, "foo").unwrap();
-    assert_eq!(spanned(&r, text), "foo:\n\turl: u\n\ttag: 1.0.0\n");
+    assert_eq!(spanned(&r), "foo:\n\turl: u\n\ttag: 1.0.0\n");
     assert_eq!(field_of(text, "foo", "tag"), Some("1.0.0"));
 }
 
 #[test]
-fn splicing_a_span_back_in_reproduces_the_file_byte_for_byte() {
+fn splicing_a_section_back_in_reproduces_the_file_byte_for_byte() {
     for text in [
         ROSDISTRO,
         INTERIOR,
@@ -174,7 +165,7 @@ fn splicing_a_span_back_in_reproduces_the_file_byte_for_byte() {
             let Some(r) = section_bounds(text, key) else {
                 continue;
             };
-            let rebuilt = format!("{}{}{}", r.before(text), spanned(&r, text), r.after(text));
+            let rebuilt = format!("{}{}{}", r.before(), spanned(&r), r.after());
             assert_eq!(rebuilt, text, "key {key} in {text:?}");
         }
     }
@@ -196,22 +187,26 @@ packages:
 fn item_bounds_stops_at_the_next_item_and_excludes_the_gap() {
     let lines: Vec<&str> = PIXI_NATIVE.lines().collect();
     let b = item_bounds(&lines, "alpha").unwrap();
-    assert_eq!(*b.through_header(&lines).last().unwrap(), "  - name: alpha");
+    assert_eq!(*b.through_header().last().unwrap(), "  - name: alpha");
     assert_eq!(b.indent, 2);
     assert_eq!(b.sub_indent(), 4);
-    // The blank separator line is inside `end` but outside `content_end`.
-    assert_eq!(b.body(&lines), &lines[4..6]);
-    assert_eq!(b.trailing(&lines)[0], "");
-    assert_eq!(lines[b.end.0], "  - name: beta");
+    // The blank separator line belongs to the gap, not to the body.
+    assert_eq!(b.body(), &lines[4..6]);
+    assert_eq!(
+        b.trailing(),
+        &[
+            "",
+            "  - name: beta",
+            "    url: https://example.invalid/beta"
+        ]
+    );
 }
 
 #[test]
 fn item_bounds_runs_to_eof_for_the_last_item() {
     let lines: Vec<&str> = PIXI_NATIVE.lines().collect();
     let b = item_bounds(&lines, "beta").unwrap();
-    assert_eq!(b.end.0, lines.len());
-    assert_eq!(b.content_end.0, lines.len());
-    assert!(b.trailing(&lines).is_empty());
+    assert!(b.trailing().is_empty());
 }
 
 #[test]

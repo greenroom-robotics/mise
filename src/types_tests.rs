@@ -100,12 +100,12 @@ fn github_url_rejects_http() {
 
 #[test]
 fn rejects_ref_entry_with_migration_pointer() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: pkg_with_ref
     url: https://github.com/example/repo.git
     ref: main
-"#;
+";
     let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("pkg_with_ref"), "got: {msg}");
@@ -115,11 +115,11 @@ packages:
 
 #[test]
 fn rejects_missing_rev() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: pkg_without_rev
     url: https://github.com/example/repo.git
-"#;
+";
     let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
     let msg = format!("{err:#}");
     assert!(msg.contains("pkg_without_rev"), "got: {msg}");
@@ -128,7 +128,7 @@ packages:
 
 #[test]
 fn parses_valid_entries() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: pkg_with_rev
     url: https://github.com/example/repo.git
@@ -138,7 +138,7 @@ packages:
     rev: 4110a9a40736b555c7419119ef6c607951563745
     subdir: packages/inner
     runner-size: 8cpu
-"#;
+";
     let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
     assert_eq!(m.packages.len(), 2);
     assert_eq!(m.packages[0].name.as_str(), "pkg_with_rev");
@@ -156,7 +156,7 @@ packages:
 
 #[test]
 fn entry_pin_style_defaults_to_range_and_parses_exact_pins() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: plain
     url: https://github.com/example/repo.git
@@ -165,7 +165,7 @@ packages:
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
     exact-pins: true
-"#;
+";
     let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
     assert_eq!(m.packages[0].pin_style, SiblingPinStyle::Range);
     assert_eq!(m.packages[1].pin_style, SiblingPinStyle::Exact);
@@ -173,7 +173,7 @@ packages:
 
 #[test]
 fn entry_submodules_defaults_to_false_and_parses_when_set() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: plain
     url: https://github.com/example/repo.git
@@ -182,7 +182,7 @@ packages:
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
     submodules: true
-"#;
+";
     let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
     assert!(!m.packages[0].submodules);
     assert!(m.packages[1].submodules);
@@ -190,38 +190,38 @@ packages:
 
 #[test]
 fn rebuild_epoch_defaults_to_zero() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: pkg
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
-"#;
+";
     let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
     assert_eq!(m.rebuild_epoch, 0);
 }
 
 #[test]
 fn rebuild_epoch_parses_when_present() {
-    let yaml = r#"
+    let yaml = r"
 rebuild_epoch: 3
 packages:
   - name: pkg
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
-"#;
+";
     let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
     assert_eq!(m.rebuild_epoch, 3);
 }
 
 #[test]
 fn rebuild_epoch_rejects_negative() {
-    let yaml = r#"
+    let yaml = r"
 rebuild_epoch: -1
 packages:
   - name: pkg
     url: https://github.com/example/repo.git
     rev: 4110a9a40736b555c7419119ef6c607951563745
-"#;
+";
     assert!(PixiNativeManifest::from_yaml_str(yaml).is_err());
 }
 

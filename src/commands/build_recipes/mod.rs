@@ -103,7 +103,7 @@ impl BuildRecipes {
                 only,
             } => vinca::vinca(
                 repo_root,
-                channel_url,
+                &channel_url,
                 overrides_channel_url,
                 output_dir,
                 target_platform,
@@ -120,7 +120,7 @@ impl BuildRecipes {
                 only,
             } => pixi::pixi(
                 repo_root,
-                channel_url,
+                &channel_url,
                 output_dir,
                 target_platform,
                 runner_size,
@@ -135,7 +135,7 @@ impl BuildRecipes {
                 ds_version,
             } => vinca::deepstream_container(
                 repo_root,
-                channel_url,
+                &channel_url,
                 output_dir,
                 target_platform,
                 ds_recipes,
