@@ -1,3 +1,10 @@
+## [8.19.2](https://github.com/greenroom-robotics/mise/compare/mise@8.19.1...mise@8.19.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* enable pedantic clippy lints and fix all findings ([#99](https://github.com/greenroom-robotics/mise/issues/99)) ([1331aa4](https://github.com/greenroom-robotics/mise/commit/1331aa4f1da70e3c56fa4af5c3de7a138eadbc35))
+
 ## [8.19.1](https://github.com/greenroom-robotics/mise/compare/mise@8.19.0...mise@8.19.1) (2026-09-02)
 
 
