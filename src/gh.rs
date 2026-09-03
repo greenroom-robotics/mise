@@ -220,13 +220,15 @@ fn raw_base() -> String {
 /// the URL is safe to hand to [`crate::process`].
 #[must_use]
 pub fn clone_url(repo: &str) -> String {
-    match token() {
-        Some(t) => format!(
-            "https://x-access-token:{}@github.com/{repo}.git",
-            t.expose_secret()
-        ),
-        None => format!("git@github.com:{repo}.git"),
-    }
+    token().map_or_else(
+        || format!("git@github.com:{repo}.git"),
+        |t| {
+            format!(
+                "https://x-access-token:{}@github.com/{repo}.git",
+                t.expose_secret()
+            )
+        },
+    )
 }
 
 /// Fetch one file's content from the raw-content host at a given rev.
@@ -273,9 +275,11 @@ pub fn fetch_upstream_manifest(
         .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))
 }
 
-/// Paths the event touched, or [`ChangedFiles::All`] when it carries no base
-/// ref to diff against — or a base that is not present locally (a force-push
-/// rewrote it away), where a full rebuild is the fail-safe.
+/// Paths the event touched, or [`ChangedFiles::All`] when nothing can be diffed.
+///
+/// That is the case when the event carries no base ref, or a base that is not
+/// present locally (a force-push rewrote it away); a full rebuild is the
+/// fail-safe.
 pub fn changed_files(repo: &Repo, event: &Event) -> color_eyre::eyre::Result<ChangedFiles> {
     if let Some(base) = event.base_sha()
         && !crate::git::rev_exists(repo.root(), base)?

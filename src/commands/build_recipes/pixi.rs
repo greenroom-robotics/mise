@@ -23,7 +23,9 @@ use crate::types::{
     Version,
 };
 
-use super::channel::{BuildSubdir, ChannelIndexCache, publish_argv, version_published};
+use super::channel::{
+    BuildSubdir, ChannelIndex, ChannelIndexCache, publish_argv, version_published,
+};
 use super::local_deps::{
     LocalBuildCtx, build_local_dep, push_unique, resolve_sibling_pins, sibling_subdirs,
 };
@@ -37,10 +39,10 @@ fn fetch_at_rev(entry: &PixiNativeEntry, dest: &Path) -> color_eyre::eyre::Resul
         git::submodule_update(dest)?;
     }
     if entry.lfs {
-        let include = match &entry.subdir {
-            Some(s) => format!("{}/**", s.display()),
-            None => "**".to_string(),
-        };
+        let include = entry
+            .subdir
+            .as_ref()
+            .map_or_else(|| "**".to_string(), |s| format!("{}/**", s.display()));
         git::lfs_pull(dest, &include)?;
     }
     Ok(())
@@ -96,7 +98,9 @@ fn check_entry(
     }
 
     let upstream_build = upstream.build_number();
-    let effective_build = upstream_build + rebuild_epoch;
+    let effective_build = upstream_build.checked_add(rebuild_epoch).ok_or_else(|| {
+        color_eyre::eyre::eyre!("build number {upstream_build} + epoch {rebuild_epoch} overflows")
+    })?;
 
     // Routed packages publish to product channels, never to the default
     // channel — search where they actually land. Skip only when every routed
@@ -143,50 +147,15 @@ fn select_entries<'a>(
         .collect()
 }
 
-pub(super) fn pixi(
-    repo_root: Option<PathBuf>,
-    channel: RemoteChannel,
-    output_dir: PathBuf,
+/// The entries in `filtered` that need building, with a log label for each.
+fn check_entries<'a>(
+    filtered: &[&'a PixiNativeEntry],
+    channels: &ChannelIndexCache,
+    channel: &RemoteChannel,
+    routing_rules: &[crate::routing::RoutingRule],
     target_platform: Arch,
-    runner_size: Option<RunnerSpec>,
-    only: &[PackageName],
-) -> color_eyre::eyre::Result<()> {
-    let repo = Repo::or_discover(repo_root)?;
-    let manifest = repo.pixi_native_manifest()?;
-
-    // Entry checkouts (`fetch_at_rev`) and their sibling path deps come from
-    // private repos over HTTPS; mise owns that auth setup.
-    gh::ensure_git_auth()?;
-
-    let abs_output = if output_dir.is_absolute() {
-        output_dir
-    } else {
-        repo.root().join(&output_dir)
-    };
-    fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
-
-    if manifest.packages.is_empty() {
-        tracing::info!(
-            "{} has no entries; nothing to build",
-            crate::consts::PIXI_NATIVE_PACKAGES_YAML
-        );
-        return Ok(());
-    }
-
-    let filtered = select_entries(&manifest.packages, runner_size, only);
-
-    if filtered.is_empty() {
-        return Ok(());
-    }
-
-    let default_channel_ref = &channel;
-    let routing_rules = crate::routing::load_rules(RoutingFile::RepoDefault {
-        repo_root: repo.root().to_path_buf(),
-    })?;
-    let routing_rules_ref: &[crate::routing::RoutingRule] = &routing_rules;
-    let channels = ChannelIndexCache::new(target_platform);
-    let channels_ref = &channels;
-    let rebuild_epoch = manifest.rebuild_epoch;
+    rebuild_epoch: u64,
+) -> color_eyre::eyre::Result<(Vec<BuildItem<'a>>, Vec<String>)> {
     let outcomes: Vec<(&PixiNativeEntry, color_eyre::eyre::Result<CheckOutcome>)> =
         std::thread::scope(|scope| {
             let handles: Vec<_> = filtered
@@ -196,9 +165,9 @@ pub(super) fn pixi(
                     scope.spawn(move || {
                         check_entry(
                             entry,
-                            channels_ref,
-                            default_channel_ref,
-                            routing_rules_ref,
+                            channels,
+                            channel,
+                            routing_rules,
                             target_platform,
                             rebuild_epoch,
                         )
@@ -209,7 +178,13 @@ pub(super) fn pixi(
                 .iter()
                 .copied()
                 .zip(handles)
-                .map(|(entry, h)| (entry, h.join().expect("check thread panicked")))
+                .map(|(entry, h)| {
+                    (
+                        entry,
+                        h.join()
+                            .unwrap_or_else(|payload| std::panic::resume_unwind(payload)),
+                    )
+                })
                 .collect()
         });
 
@@ -267,6 +242,58 @@ pub(super) fn pixi(
             }
         }
     }
+    Ok((to_build, build_labels))
+}
+
+pub(super) fn pixi(
+    repo_root: Option<PathBuf>,
+    channel: &RemoteChannel,
+    output_dir: PathBuf,
+    target_platform: Arch,
+    runner_size: Option<RunnerSpec>,
+    only: &[PackageName],
+) -> color_eyre::eyre::Result<()> {
+    let repo = Repo::or_discover(repo_root)?;
+    let manifest = repo.pixi_native_manifest()?;
+
+    // Entry checkouts (`fetch_at_rev`) and their sibling path deps come from
+    // private repos over HTTPS; mise owns that auth setup.
+    gh::ensure_git_auth()?;
+
+    let abs_output = if output_dir.is_absolute() {
+        output_dir
+    } else {
+        repo.root().join(&output_dir)
+    };
+    fs::create_dir_all(&abs_output).with_context(|| format!("mkdir {}", abs_output.display()))?;
+
+    if manifest.packages.is_empty() {
+        tracing::info!(
+            "{} has no entries; nothing to build",
+            crate::consts::PIXI_NATIVE_PACKAGES_YAML
+        );
+        return Ok(());
+    }
+
+    let filtered = select_entries(&manifest.packages, runner_size, only);
+
+    if filtered.is_empty() {
+        return Ok(());
+    }
+
+    let routing_rules = crate::routing::load_rules(RoutingFile::RepoDefault {
+        repo_root: repo.root().to_path_buf(),
+    })?;
+    let channels = ChannelIndexCache::new(target_platform);
+    let rebuild_epoch = manifest.rebuild_epoch;
+    let (to_build, build_labels) = check_entries(
+        &filtered,
+        &channels,
+        channel,
+        &routing_rules,
+        target_platform,
+        rebuild_epoch,
+    )?;
 
     // A cycle is reported with the entries being ordered — it is undiagnosable
     // otherwise, and the "building N entries" line below is never reached.
@@ -286,104 +313,134 @@ pub(super) fn pixi(
 
     // Dep satisfaction consults only the default channel: routing decides
     // where an artifact is *published*, not what a consumer solves against.
-    let default_channel = channels.get(&channel)?;
+    let default_channel = channels.get(channel)?;
 
-    let output_channel = LocalChannel::new(&abs_output);
+    let build_ctx = BuildCtx {
+        all_entries: &manifest.packages,
+        rebuild_epoch,
+        default_channel: &default_channel,
+        output_channel: LocalChannel::new(&abs_output),
+        target_platform,
+    };
     let mut built_this_job: BTreeSet<PackageName> = BTreeSet::new();
     for item in plan {
-        let entry = item.entry;
-        let effective_build = item.effective_build;
-        tracing::debug!("building {} (build order name: {})", entry.name, item.name);
-        let tmp = tempfile::Builder::new()
-            .prefix(&format!("pixi-native-{}-", entry.name))
-            .tempdir()
-            .context("create temp workdir")?;
-        let workdir = tmp.path().join("src");
-        fs::create_dir(&workdir)?;
-        fetch_at_rev(entry, &workdir)?;
-
-        let subdir = entry.subdir_or_root();
-        let manifest_dir = workdir.join(subdir);
-        let manifest_path = manifest_dir.join(PIXI_TOML);
-        if !manifest_path.is_file() {
-            color_eyre::eyre::bail!(
-                "entry {}: no pixi.toml at {}/pixi.toml in checkout",
-                entry.name,
-                subdir.display(),
-            );
-        }
-
-        if rebuild_epoch > 0 {
-            set_build_number(&manifest_path, effective_build).with_context(|| {
-                format!(
-                    "entry {}: rewrite build-number to {effective_build}",
-                    entry.name
-                )
-            })?;
-        }
-
-        let local_deps_dir = tmp.path().join("local-deps");
-        let sib_subdirs = sibling_subdirs(entry, &manifest.packages);
-        // Read committed `==` pins before resolve_path_deps rewrites path deps
-        // into pins, which would be re-detected here.
-        let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
-        let mut resolved = resolve_path_deps(&manifest_path, entry.pin_style)?;
-        resolved.extend(sibling_pins);
-        let mut extra_channels: Vec<ChannelUrl> = Vec::new();
-        let mut local_built: BTreeSet<PackageName> = BTreeSet::new();
-        let mut visiting: Vec<PackageName> = Vec::new();
-        let local_ctx = LocalBuildCtx {
-            local_deps_dir: &local_deps_dir,
-            channel: &default_channel,
-            target_platform,
-            workdir: &workdir,
-            sibling_subdirs: &sib_subdirs,
-        };
-        for dep in &resolved {
-            let in_output_channel = built_this_job.contains(&dep.name)
-                || version_published(&dep.name, &dep.version, &output_channel, target_platform)?;
-            if in_output_channel {
-                push_unique(&mut extra_channels, output_channel.clone().into());
-            } else if default_channel.has_version(&dep.name, &dep.version) {
-                // Satisfied by the real channel; nothing to do.
-            } else {
-                // Build the sibling from this same checkout (correct rev by
-                // construction) into a local-only channel that is never drained.
-                tracing::info!(
-                    "entry {}: sibling {} floor {} not in channel and not built this job; fallback local build",
-                    entry.name,
-                    dep.name,
-                    dep.version,
-                );
-                build_local_dep(dep, &local_ctx, &mut local_built, &mut visiting)?;
-                push_unique(
-                    &mut extra_channels,
-                    LocalChannel::new(&local_deps_dir).into(),
-                );
-            }
-        }
-        if !extra_channels.is_empty() {
-            prepend_channels(&manifest_path, &extra_channels)?;
-        }
-
-        // No `--locked` gate before publish: `pixi publish` re-resolves from
-        // the manifest + channels regardless, and the backend re-derives
-        // package metadata at build time, so a pixi.lock written by an older
-        // backend would fail spuriously. The manifest is the source of truth
-        // for the published artifact.
-
-        // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
-        // the upload-artifact glob.
-        let target_channel = output_channel.to_string();
-        let arch = target_platform.to_string();
-        process::run(
-            "pixi",
-            &publish_argv(&manifest_path, &target_channel, &arch),
-        )?;
-        built_this_job.insert(item.name.clone());
+        build_item(&item, &build_ctx, &built_this_job)?;
+        built_this_job.insert(item.name);
     }
 
     Ok(())
+}
+
+struct BuildCtx<'a> {
+    all_entries: &'a [PixiNativeEntry],
+    rebuild_epoch: u64,
+    default_channel: &'a ChannelIndex,
+    output_channel: LocalChannel,
+    target_platform: Arch,
+}
+
+/// Check out `item`, satisfy its path deps and `pixi publish` it into the
+/// output channel.
+fn build_item(
+    item: &BuildItem<'_>,
+    ctx: &BuildCtx<'_>,
+    built_this_job: &BTreeSet<PackageName>,
+) -> color_eyre::eyre::Result<()> {
+    let entry = item.entry;
+    let effective_build = item.effective_build;
+    let target_platform = ctx.target_platform;
+    tracing::debug!("building {} (build order name: {})", entry.name, item.name);
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("pixi-native-{}-", entry.name))
+        .tempdir()
+        .context("create temp workdir")?;
+    let workdir = tmp.path().join("src");
+    fs::create_dir(&workdir)?;
+    fetch_at_rev(entry, &workdir)?;
+
+    let subdir = entry.subdir_or_root();
+    let manifest_dir = workdir.join(subdir);
+    let manifest_path = manifest_dir.join(PIXI_TOML);
+    if !manifest_path.is_file() {
+        color_eyre::eyre::bail!(
+            "entry {}: no pixi.toml at {}/pixi.toml in checkout",
+            entry.name,
+            subdir.display(),
+        );
+    }
+
+    if ctx.rebuild_epoch > 0 {
+        set_build_number(&manifest_path, effective_build).with_context(|| {
+            format!(
+                "entry {}: rewrite build-number to {effective_build}",
+                entry.name
+            )
+        })?;
+    }
+
+    let local_deps_dir = tmp.path().join("local-deps");
+    let sib_subdirs = sibling_subdirs(entry, ctx.all_entries);
+    // Read committed `==` pins before resolve_path_deps rewrites path deps
+    // into pins, which would be re-detected here.
+    let sibling_pins = resolve_sibling_pins(&manifest_path, &workdir, &sib_subdirs)?;
+    let mut resolved = resolve_path_deps(&manifest_path, entry.pin_style)?;
+    resolved.extend(sibling_pins);
+    let mut extra_channels: Vec<ChannelUrl> = Vec::new();
+    let mut local_built: BTreeSet<PackageName> = BTreeSet::new();
+    let mut visiting: Vec<PackageName> = Vec::new();
+    let local_ctx = LocalBuildCtx {
+        local_deps_dir: &local_deps_dir,
+        channel: ctx.default_channel,
+        target_platform,
+        workdir: &workdir,
+        sibling_subdirs: &sib_subdirs,
+    };
+    for dep in &resolved {
+        let in_output_channel = built_this_job.contains(&dep.name)
+            || version_published(
+                &dep.name,
+                &dep.version,
+                &ctx.output_channel,
+                target_platform,
+            )?;
+        if in_output_channel {
+            push_unique(&mut extra_channels, ctx.output_channel.clone().into());
+        } else if ctx.default_channel.has_version(&dep.name, &dep.version) {
+            // Satisfied by the real channel; nothing to do.
+        } else {
+            // Build the sibling from this same checkout (correct rev by
+            // construction) into a local-only channel that is never drained.
+            tracing::info!(
+                "entry {}: sibling {} floor {} not in channel and not built this job; fallback local build",
+                entry.name,
+                dep.name,
+                dep.version,
+            );
+            build_local_dep(dep, &local_ctx, &mut local_built, &mut visiting)?;
+            push_unique(
+                &mut extra_channels,
+                LocalChannel::new(&local_deps_dir).into(),
+            );
+        }
+    }
+    if !extra_channels.is_empty() {
+        prepend_channels(&manifest_path, &extra_channels)?;
+    }
+
+    // No `--locked` gate before publish: `pixi publish` re-resolves from
+    // the manifest + channels regardless, and the backend re-derives
+    // package metadata at build time, so a pixi.lock written by an older
+    // backend would fail spuriously. The manifest is the source of truth
+    // for the published artifact.
+
+    // --target-channel (not --to): pixi v0.68's `--to` flat-copies and breaks
+    // the upload-artifact glob.
+    let target_channel = ctx.output_channel.to_string();
+    let arch = target_platform.to_string();
+    process::run(
+        "pixi",
+        &publish_argv(&manifest_path, &target_channel, &arch),
+    )
 }
 
 #[cfg(test)]

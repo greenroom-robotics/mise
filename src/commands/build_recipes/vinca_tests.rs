@@ -100,7 +100,7 @@ fn make_repo_with_recipes(recipe_names: &[&str], vendor_names: &[&str]) -> TempD
 fn recipe_names_in(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().unwrap().is_dir())
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();

@@ -22,6 +22,7 @@
 //! config overrides and per-test vars are present, so host git config
 //! (including insteadOf rules) and stray GITHUB_*/GH_* tokens cannot leak in.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -91,8 +92,11 @@ exit 127
 
 impl E2e {
     pub fn new() -> Self {
-        let temp = TempDir::new().expect("create e2e temp dir");
-        let root = temp.path().canonicalize().expect("canonicalize temp dir");
+        let tempdir = TempDir::new().expect("create e2e temp dir");
+        let root = tempdir
+            .path()
+            .canonicalize()
+            .expect("canonicalize temp dir");
         let bin = root.join("bin");
         let responses = root.join("responses");
         let home = root.join("home");
@@ -120,7 +124,7 @@ impl E2e {
         .unwrap();
 
         let e2e = Self {
-            _temp: temp,
+            _temp: tempdir,
             root,
             bin,
             log,
@@ -288,10 +292,11 @@ impl E2e {
     /// clone/fetch/push over the network hit a local repo instead.
     pub fn git_redirect(&self, url: &str, local: &Path) {
         let mut cfg = fs::read_to_string(&self.gitconfig).unwrap();
-        cfg.push_str(&format!(
+        let _ = write!(
+            cfg,
             "[url \"file://{}\"]\n\tinsteadOf = {url}\n",
             local.display()
-        ));
+        );
         fs::write(&self.gitconfig, cfg).unwrap();
     }
 }
@@ -337,10 +342,9 @@ impl FixtureServer {
                 loop {
                     let mut line = String::new();
                     match reader.read_line(&mut line) {
-                        Ok(0) => break,
+                        Ok(0) | Err(_) => break,
                         Ok(_) if line.trim().is_empty() => break,
                         Ok(_) => {}
-                        Err(_) => break,
                     }
                 }
                 let path = request_line
@@ -351,17 +355,21 @@ impl FixtureServer {
                     .next()
                     .unwrap_or("/")
                     .to_string();
-                let response = match routes.get(&path) {
-                    Some(body) => format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\
-                         Content-Type: text/plain; charset=utf-8\r\n\
-                         Connection: close\r\n\r\n{body}",
-                        body.len()
-                    ),
-                    None => "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
-                             Connection: close\r\n\r\n"
-                        .to_string(),
-                };
+                let response = routes.get(&path).map_or_else(
+                    || {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
+                         Connection: close\r\n\r\n"
+                            .to_string()
+                    },
+                    |body| {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\
+                             Content-Type: text/plain; charset=utf-8\r\n\
+                             Connection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    },
+                );
                 let _ = stream.write_all(response.as_bytes());
                 let _ = stream.flush();
             }
@@ -443,7 +451,7 @@ pub fn package_pixi_toml(name: &str, extra: &str) -> String {
 /// The value following `flag` in a recorded argv, if present.
 pub fn flag_value<'a>(call: &'a [String], flag: &str) -> Option<&'a str> {
     call.iter()
-        .position(|a| a == flag)
-        .and_then(|i| call.get(i + 1))
+        .skip_while(|a| *a != flag)
+        .nth(1)
         .map(String::as_str)
 }

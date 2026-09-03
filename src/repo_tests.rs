@@ -5,7 +5,7 @@ use tempfile::TempDir;
 fn make_repo() -> (TempDir, Repo) {
     let td = TempDir::new().unwrap();
     fs::write(td.path().join("pixi.toml"), "[project]\n").unwrap();
-    let repo = Repo::at(td.path().to_path_buf()).unwrap();
+    let repo = Repo::at(td.path()).unwrap();
     (td, repo)
 }
 
@@ -21,7 +21,7 @@ fn discover_walks_up() {
 #[test]
 fn at_rejects_dir_without_pixi_toml() {
     let td = TempDir::new().unwrap();
-    assert!(Repo::at(td.path().to_path_buf()).is_err());
+    assert!(Repo::at(td.path()).is_err());
 }
 
 #[test]

@@ -41,7 +41,8 @@ impl Repo {
     }
 
     /// Use an explicit path. Must contain `pixi.toml`.
-    pub fn at(root: PathBuf) -> color_eyre::eyre::Result<Self> {
+    pub fn at(root: impl AsRef<Path>) -> color_eyre::eyre::Result<Self> {
+        let root = root.as_ref();
         if !root.join(PIXI_TOML).is_file() {
             color_eyre::eyre::bail!("{} does not contain pixi.toml", root.display());
         }
@@ -52,10 +53,7 @@ impl Repo {
 
     /// Use `--repo-root <PATH>` if given, otherwise walk up from cwd looking for `pixi.toml`.
     pub fn or_discover(root: Option<PathBuf>) -> color_eyre::eyre::Result<Self> {
-        match root {
-            Some(p) => Self::at(p),
-            None => Self::discover(),
-        }
+        root.map_or_else(Self::discover, Self::at)
     }
 
     #[must_use]

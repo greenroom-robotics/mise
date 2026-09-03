@@ -6,7 +6,7 @@ fn pkg(name: &str) -> PackageName {
 
 #[test]
 fn select_entries_filters_by_only_and_size() {
-    let yaml = r#"
+    let yaml = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
@@ -20,7 +20,7 @@ packages:
     url: https://github.com/org/gamma
     rev: 3333333333333333333333333333333333333333
     runner-size: 4cpu
-"#;
+";
     let m = crate::types::PixiNativeManifest::from_yaml_str(yaml).unwrap();
 
     let sel = select_entries(&m.packages, None, &[pkg("alpha"), pkg("beta")]);

@@ -336,8 +336,7 @@ impl Package {
             // the empty path, which joins and displays as the cwd-relative dir.
             dir: manifest_path
                 .parent()
-                .unwrap_or(Path::new(""))
-                .to_path_buf(),
+                .map_or_else(PathBuf::new, Path::to_path_buf),
             manifest,
         }
     }
@@ -512,9 +511,10 @@ pub fn discover(package_dir: &Path, filter: Option<&PackageName>) -> Result<Vec<
     Ok(out)
 }
 
-/// A pixi manifest `mise ci test` can run pixi commands against — either a
-/// releasable [`Package`] or a workspace-only manifest. Running tests never
-/// reads package identity, only the manifest path and the directory pixi
+/// A pixi manifest `mise ci test` can run pixi commands against.
+///
+/// Either a releasable [`Package`] or a workspace-only manifest. Running tests
+/// never reads package identity, only the manifest path and the directory pixi
 /// commands run in.
 #[derive(Debug)]
 pub struct TestTarget {
@@ -528,17 +528,17 @@ impl TestTarget {
             manifest_path: manifest_path.to_path_buf(),
             dir: manifest_path
                 .parent()
-                .unwrap_or(Path::new(""))
-                .to_path_buf(),
+                .map_or_else(PathBuf::new, Path::to_path_buf),
         }
     }
 }
 
-/// Discover pixi manifests to test under `package_dir` — like [`discover`],
-/// but also includes workspace-only manifests alongside releasable packages,
-/// since `mise ci test` runs `pixi install`/`pixi run` against any pixi
-/// manifest and has no use for package identity. Same root-package-layout
-/// fallback and filter semantics as [`discover`] otherwise.
+/// Discover pixi manifests to test under `package_dir`.
+///
+/// Like [`discover`], but also includes workspace-only manifests alongside
+/// releasable packages, since `mise ci test` runs `pixi install`/`pixi run`
+/// against any pixi manifest and has no use for package identity. Same
+/// root-package-layout fallback and filter semantics as [`discover`] otherwise.
 pub fn discover_test_targets(
     package_dir: &Path,
     filter: Option<&PackageName>,
@@ -588,10 +588,11 @@ pub fn discover_test_targets(
 // Edit view (format-preserving)
 // ---------------------------------------------------------------------------
 
-/// Set `[package].version`, preserving every comment, key order and blank line
-/// in the rest of the document. Not pixi-specific: Cargo.toml has the same
-/// `[package] version` shape. Errors if there is no `[package]` table or it
-/// has no `version` key.
+/// Set `[package].version`, preserving the rest of the document verbatim.
+///
+/// Not pixi-specific:
+/// Cargo.toml has the same `[package] version` shape. Errors if there is no
+/// `[package]` table or it has no `version` key.
 pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = toml_text.parse().context("parsing TOML")?;
     let package = doc
@@ -663,9 +664,13 @@ pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
 pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result<()> {
     let text = std::fs::read_to_string(manifest_path)?;
     let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let arr = doc["workspace"]["channels"].as_array_mut().ok_or_else(|| {
-        color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
-    })?;
+    let arr = doc
+        .get_mut("workspace")
+        .and_then(|w| w.get_mut("channels"))
+        .and_then(toml_edit::Item::as_array_mut)
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
+        })?;
     for (i, ch) in channels.iter().enumerate() {
         arr.insert(i, ch.to_string());
     }
@@ -673,9 +678,10 @@ pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result
     Ok(())
 }
 
-/// A sibling package whose `path =` dep was rewritten to a derived
-/// `>=version,<major+1` pin in the temp checkout. `version` is the exact
-/// floor — availability checks and fallback builds key on it, never on
+/// A sibling package whose `path =` dep was rewritten to a derived pin.
+///
+/// The pin is `>=version,<major+1` in the temp checkout. `version` is the
+/// exact floor — availability checks and fallback builds key on it, never on
 /// "anything in range", so a coupled release always builds against the
 /// fresh sibling.
 #[derive(Debug)]
@@ -688,8 +694,9 @@ pub struct ResolvedDep {
     pub manifest: PathBuf,
 }
 
-/// Rewrite every non-self `path =` dep in the manifest to a version pin in
-/// `style`, reading the version from the sibling manifest at the same rev. The
+/// Rewrite every non-self `path =` dep in the manifest to a version pin in `style`.
+///
+/// The version is read from the sibling manifest at the same rev, so the
 /// derived pin is deterministic: same rev -> same sibling manifest -> same
 /// pin. The default [`SiblingPinStyle::Range`] lets already-published
 /// consumers accept future sibling releases within the major without a
@@ -698,7 +705,7 @@ pub struct ResolvedDep {
 /// For ephemeral temp checkouts only; the committed manifest keeps its path
 /// deps.
 pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result<Vec<ResolvedDep>> {
-    let manifest_dir = manifest_path.parent().unwrap_or(Path::new(""));
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new(""));
     let text = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let mut doc: toml_edit::DocumentMut = text

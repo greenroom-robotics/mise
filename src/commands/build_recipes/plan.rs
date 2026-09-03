@@ -4,7 +4,7 @@
 //! needs building; [`BuildPlan`] is the topological sort of those items, so the
 //! build loop there can iterate without re-deciding anything.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::types::{PackageName, PixiNativeEntry};
 
@@ -73,39 +73,35 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> color_eyre::eyre::Result<Vec<B
         .map(|(i, it)| ((repo_of(it.entry), it.entry.name.clone()), i))
         .collect();
 
-    let mut indegree = vec![0usize; items.len()];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); items.len()];
-    for (i, it) in items.iter().enumerate() {
-        let (repo, subdir) = key(it.entry);
-        for rel in &it.rel_path_deps {
-            let target = normalize(&subdir.join(rel));
-            if let Some(&j) = index.get(&(repo.clone(), target)) {
-                dependents[j].push(i);
-                indegree[i] += 1;
-            }
-        }
-        for pin in &it.pin_dep_names {
-            if let Some(&j) = name_index.get(&(repo.clone(), pin.clone()))
-                && j != i
-            {
-                dependents[j].push(i);
-                indegree[i] += 1;
-            }
-        }
-    }
-    let mut ready: std::collections::BTreeSet<usize> = indegree
+    let mut waits_on: Vec<BTreeSet<usize>> = items
         .iter()
         .enumerate()
-        .filter(|(_, d)| **d == 0)
+        .map(|(i, it)| {
+            let (repo, subdir) = key(it.entry);
+            let path_targets = it.rel_path_deps.iter().filter_map(|rel| {
+                let target = normalize(&subdir.join(rel));
+                index.get(&(repo.clone(), target)).copied()
+            });
+            let pin_targets = it.pin_dep_names.iter().filter_map(|pin| {
+                name_index
+                    .get(&(repo.clone(), pin.clone()))
+                    .copied()
+                    .filter(|&j| j != i)
+            });
+            path_targets.chain(pin_targets).collect()
+        })
+        .collect();
+    let mut ready: BTreeSet<usize> = waits_on
+        .iter()
+        .enumerate()
+        .filter(|(_, deps)| deps.is_empty())
         .map(|(i, _)| i)
         .collect();
     let mut order = Vec::new();
-    while let Some(&i) = ready.iter().next() {
-        ready.remove(&i);
+    while let Some(i) = ready.pop_first() {
         order.push(i);
-        for &d in &dependents[i] {
-            indegree[d] -= 1;
-            if indegree[d] == 0 {
+        for (d, deps) in waits_on.iter_mut().enumerate() {
+            if deps.remove(&i) && deps.is_empty() {
                 ready.insert(d);
             }
         }
@@ -113,11 +109,8 @@ fn topo_sort_builds(items: Vec<BuildItem<'_>>) -> color_eyre::eyre::Result<Vec<B
     if order.len() != items.len() {
         color_eyre::eyre::bail!("path-dep cycle among pixi-native entries");
     }
-    let mut slots: Vec<Option<BuildItem>> = items.into_iter().map(Some).collect();
-    Ok(order
-        .into_iter()
-        .map(|i| slots[i].take().unwrap())
-        .collect())
+    let mut slots: BTreeMap<usize, BuildItem> = items.into_iter().enumerate().collect();
+    Ok(order.into_iter().filter_map(|i| slots.remove(&i)).collect())
 }
 
 #[cfg(test)]

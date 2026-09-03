@@ -29,15 +29,13 @@
 //!
 //! # Line endings
 //!
-//! [`section_bounds`] returns byte offsets into the original text, so the
-//! splice around it is byte-exact whatever the terminators are. The traversals
+//! [`section_bounds`] returns slices of the original text, so the splice
+//! around it is byte-exact whatever the terminators are. The traversals
 //! that rebuild a file line by line ([`with_sections`], [`item_bounds`]) hand
 //! back lines stripped of their terminator; callers re-emit [`line_ending`],
 //! which is the file's *first* terminator. A file with uniform endings
 //! therefore round-trips exactly; a file that mixes CRLF and LF is normalized
 //! to whichever it starts with. Nothing here preserves mixed endings.
-
-use std::ops::Range;
 
 /// The key of a top-level (`indent == 0`) block header line, e.g. `source:`.
 ///
@@ -63,12 +61,16 @@ fn is_blank(line: &str) -> bool {
     line.trim().is_empty()
 }
 
+pub fn indent_of(line: &str) -> usize {
+    line.len().saturating_sub(line.trim_start().len())
+}
+
 /// Lines of `s` with their byte offsets, without line terminators.
 fn lines_with_offsets(s: &str) -> impl Iterator<Item = (usize, &str)> {
     let mut offset = 0usize;
     s.split_inclusive('\n').map(move |line| {
         let start = offset;
-        offset += line.len();
+        offset = offset.saturating_add(line.len());
         (start, line.trim_end_matches('\n').trim_end_matches('\r'))
     })
 }
@@ -76,8 +78,8 @@ fn lines_with_offsets(s: &str) -> impl Iterator<Item = (usize, &str)> {
 /// The terminator to re-emit when rebuilding `text` from its lines: the first
 /// one the file uses, or LF for a file with no line break at all.
 pub fn line_ending(text: &str) -> &'static str {
-    match text.find('\n') {
-        Some(i) if text[..i].ends_with('\r') => "\r\n",
+    match text.split_once('\n') {
+        Some((before, _)) if before.ends_with('\r') => "\r\n",
         _ => "\n",
     }
 }
@@ -90,33 +92,29 @@ pub fn line_ending(text: &str) -> &'static str {
 fn section_headers(lines: &[&str]) -> Vec<Option<usize>> {
     let mut out: Vec<Option<usize>> = Vec::with_capacity(lines.len());
     let mut current: Option<usize> = None;
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
+    let mut rest = lines.iter().enumerate().peekable();
+    while let Some((i, line)) = rest.next() {
         if is_indented(line) || is_blank(line) {
             out.push(current);
-            i += 1;
         } else if line.trim_start().starts_with('#') {
             // A column-0 comment run (blank lines inside it included) belongs
             // to the block above only if that block's body resumes after it.
-            let mut run_end = i;
-            while run_end < lines.len()
-                && !is_indented(lines[run_end])
-                && (is_blank(lines[run_end]) || lines[run_end].trim_start().starts_with('#'))
-            {
-                run_end += 1;
-            }
-            if !lines.get(run_end).is_some_and(|l| is_indented(l)) {
+            while rest
+                .next_if(|(_, l)| {
+                    !is_indented(l) && (is_blank(l) || l.trim_start().starts_with('#'))
+                })
+                .is_some()
+            {}
+            if !rest.peek().is_some_and(|(_, l)| is_indented(l)) {
                 current = None;
             }
+            let run_end = rest.peek().map_or(lines.len(), |(j, _)| *j);
             out.resize(run_end, current);
-            i = run_end;
         } else {
             // Either a new `<key>:` header, or a top-level scalar that closes
             // whatever block preceded it.
             current = top_level_key(line).map(|_| i);
             out.push(current);
-            i += 1;
         }
     }
     out
@@ -133,45 +131,53 @@ pub fn with_sections(text: &str) -> impl Iterator<Item = (Option<&str>, &str)> {
         .clone()
         .into_iter()
         .zip(headers)
-        .map(move |(line, header)| (header.and_then(|h| top_level_key(lines[h])), line))
+        .map(move |(line, header)| {
+            let key = header
+                .and_then(|h| lines.get(h))
+                .and_then(|l| top_level_key(l));
+            (key, line)
+        })
 }
 
-/// A byte range into the text it was measured from.
-///
-/// Distinct from [`LineIndex`] so that a range of one cannot be used to slice
-/// the other: this module hands out both, and they are not interchangeable.
-/// The range stays private for the same reason — callers splice through the
-/// accessors rather than re-deriving offsets.
+/// A text split around one top-level `<key>:` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ByteSpan(Range<usize>);
+pub struct Section<'a> {
+    before: &'a str,
+    inner: &'a str,
+    after: &'a str,
+}
 
-impl ByteSpan {
-    /// Everything before the span.
-    pub fn before<'a>(&self, text: &'a str) -> &'a str {
-        &text[..self.0.start]
+impl<'a> Section<'a> {
+    pub const fn before(&self) -> &'a str {
+        self.before
     }
 
-    /// Everything after the span.
-    pub fn after<'a>(&self, text: &'a str) -> &'a str {
-        &text[self.0.end..]
+    pub const fn after(&self) -> &'a str {
+        self.after
     }
 }
 
-/// Byte span of the top-level `<key>:` block named `key`, header line included.
+/// The top-level `<key>:` block named `key`, header line included.
 ///
 /// See the module docs for where the block ends.
-pub fn section_bounds(text: &str, key: &str) -> Option<ByteSpan> {
+pub fn section_bounds<'a>(text: &'a str, key: &str) -> Option<Section<'a>> {
     let offsets: Vec<(usize, &str)> = lines_with_offsets(text).collect();
     let lines: Vec<&str> = offsets.iter().map(|(_, l)| *l).collect();
     let header = lines
         .iter()
         .position(|line| top_level_key(line) == Some(key))?;
-    let headers = section_headers(&lines);
-    let end = headers[header + 1..]
+    let (start, _) = *offsets.get(header)?;
+    let end = section_headers(&lines)
         .iter()
-        .position(|h| *h != Some(header))
-        .map_or(text.len(), |p| offsets[header + 1 + p].0);
-    Some(ByteSpan(offsets[header].0..end))
+        .zip(&offsets)
+        .skip(header)
+        .find(|(h, _)| **h != Some(header))
+        .map_or(text.len(), |(_, (offset, _))| *offset);
+    Some(Section {
+        before: text.get(..start)?,
+        inner: text.get(start..end)?,
+        after: text.get(end..)?,
+    })
 }
 
 /// The value of the `<key>:` line inside the top-level `<section>:` block, or
@@ -180,57 +186,42 @@ pub fn field_of<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> 
     let prefix = format!("{key}:");
     with_sections(text).find_map(|(cur, line)| {
         let trimmed = line.trim_start();
-        let indent = line.len() - trimmed.len();
-        (cur == Some(section) && indent > 0)
+        (cur == Some(section) && indent_of(line) > 0)
             .then(|| trimmed.strip_prefix(&prefix))
             .flatten()
             .map(str::trim)
     })
 }
 
-/// An index into a `&[&str]` of lines.
-///
-/// Distinct from [`ByteSpan`] so that a line index cannot be used to slice the
-/// text those lines came from.
-/// The index stays private: slicing goes through the [`ItemBounds`] accessors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LineIndex(usize);
-
-/// Line-index extents of a `- name: <name>` list item.
+/// The lines of a file split around one `- name: <name>` list item.
 #[derive(Debug, PartialEq, Eq)]
-pub struct ItemBounds {
-    /// Index of the `- name: <name>` line.
-    pub header: LineIndex,
-    /// Column the `-` sits at; sub-keys sit two columns further in. A column
-    /// count, neither a line index nor a byte offset.
+pub struct ItemBounds<'a> {
+    /// Column the `-` sits at; sub-keys sit two columns further in.
     pub indent: usize,
-    /// One past the item's last non-blank line — where a rewritten body ends.
-    pub content_end: LineIndex,
-    /// One past the item's last line including the blank lines that separate
-    /// it from the next item, which belong to the gap, not to either item.
-    pub end: LineIndex,
+    through_header: &'a [&'a str],
+    body: &'a [&'a str],
+    trailing: &'a [&'a str],
 }
 
-impl ItemBounds {
+impl<'a> ItemBounds<'a> {
     /// Indent of the item's sub-keys (`url:`, `rev:`, …).
     pub const fn sub_indent(&self) -> usize {
-        self.indent + 2
+        self.indent.saturating_add(2)
     }
 
     /// Everything up to and including the `- name:` header line.
-    pub fn through_header<'a>(&self, lines: &'a [&'a str]) -> &'a [&'a str] {
-        &lines[..=self.header.0]
+    pub const fn through_header(&self) -> &'a [&'a str] {
+        self.through_header
     }
 
-    /// The item's sub-key lines: after the header, up to `content_end`.
-    pub fn body<'a>(&self, lines: &'a [&'a str]) -> &'a [&'a str] {
-        &lines[self.header.0 + 1..self.content_end.0]
+    /// The item's sub-key lines: after the header, up to its last non-blank line.
+    pub const fn body(&self) -> &'a [&'a str] {
+        self.body
     }
 
-    /// The gap after the item plus the rest of the file — passed through
-    /// untouched by any rewrite.
-    pub fn trailing<'a>(&self, lines: &'a [&'a str]) -> &'a [&'a str] {
-        &lines[self.content_end.0..]
+    /// The blank lines after the item plus the rest of the file.
+    pub const fn trailing(&self) -> &'a [&'a str] {
+        self.trailing
     }
 }
 
@@ -238,26 +229,31 @@ impl ItemBounds {
 ///
 /// The item ends at the first following non-blank line indented no further than
 /// the `-` itself; blank lines inside the item do not end it.
-pub fn item_bounds(lines: &[&str], name: &str) -> Option<ItemBounds> {
+pub fn item_bounds<'a>(lines: &'a [&'a str], name: &str) -> Option<ItemBounds<'a>> {
     let header_text = format!("- name: {name}");
-    let header = lines.iter().position(|l| l.trim_start() == header_text)?;
-    let indent = lines[header].len() - lines[header].trim_start().len();
-
-    let end = lines[header + 1..]
+    let (header, header_line) = lines
         .iter()
-        .position(|l| !is_blank(l) && l.len() - l.trim_start().len() <= indent)
-        .map_or(lines.len(), |p| header + 1 + p);
+        .enumerate()
+        .find(|(_, l)| l.trim_start() == header_text)?;
+    let indent = indent_of(header_line);
+    let after_header = header.checked_add(1)?;
 
-    let mut content_end = end;
-    while content_end > header + 1 && is_blank(lines[content_end - 1]) {
-        content_end -= 1;
-    }
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(after_header)
+        .find(|(_, l)| !is_blank(l) && indent_of(l) <= indent)
+        .map_or(lines.len(), |(i, _)| i);
+
+    let content_end = (after_header..end)
+        .rfind(|&i| lines.get(i).is_some_and(|l| !is_blank(l)))
+        .map_or(after_header, |i| i.saturating_add(1));
 
     Some(ItemBounds {
-        header: LineIndex(header),
         indent,
-        content_end: LineIndex(content_end),
-        end: LineIndex(end),
+        through_header: lines.get(..after_header)?,
+        body: lines.get(after_header..content_end)?,
+        trailing: lines.get(content_end..)?,
     })
 }
 

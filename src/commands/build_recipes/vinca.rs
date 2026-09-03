@@ -5,6 +5,7 @@
 //! the prep a `DeepStream` container needs before it can run one.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::WrapErr;
@@ -19,7 +20,7 @@ use crate::types::{Arch, ChannelUrl, DeepstreamVersion, RecipeName};
 #[allow(clippy::too_many_arguments)]
 pub(super) fn vinca(
     repo_root: Option<PathBuf>,
-    channel_url: ChannelUrl,
+    channel_url: &ChannelUrl,
     overrides_channel_url: Option<ChannelUrl>,
     output_dir: PathBuf,
     target_platform: Arch,
@@ -262,7 +263,6 @@ fn write_variants_pin(version: DeepstreamVersion) -> color_eyre::eyre::Result<Na
         .suffix(".yaml")
         .tempfile()
         .context("create temp variants file")?;
-    use std::io::Write;
     tf.write_all(content.as_bytes())
         .context("write temp variants file")?;
     tf.flush().context("flush temp variants file")?;
@@ -271,7 +271,7 @@ fn write_variants_pin(version: DeepstreamVersion) -> color_eyre::eyre::Result<Na
 
 pub(super) fn deepstream_container(
     repo_root: Option<PathBuf>,
-    channel_url: ChannelUrl,
+    channel_url: &ChannelUrl,
     output_dir: PathBuf,
     target_platform: Arch,
     ds_recipes: Vec<RecipeName>,

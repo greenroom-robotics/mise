@@ -6,6 +6,7 @@
 //! canned stdout replayed) and real `git` operating on local temp repos only.
 //! No network is touched anywhere. Golden files live under
 //! `tests/e2e/fixtures/`; regenerate with `UPDATE_GOLDENS=1 cargo test`.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 // A root test target resolves bare `mod` declarations against tests/, hence
 // the explicit paths.

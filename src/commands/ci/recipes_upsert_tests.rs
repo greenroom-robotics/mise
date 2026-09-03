@@ -37,7 +37,7 @@ fn foo_entry() -> (PackageName, GithubRepoUrl, Version) {
 #[test]
 fn upsert_into_empty_yields_fresh_block() {
     let (p, u, v) = foo_entry();
-    let out = upsert_text("", &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text("", &entry(&p, &u, &v));
     assert_eq!(
         out,
         "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
@@ -48,7 +48,7 @@ fn upsert_into_empty_yields_fresh_block() {
 fn upsert_appends_new_entry_with_blank_line_separator() {
     let (p, u, v) = foo_entry();
     let existing = "bar:\n  url: https://example.invalid/bar.git\n  tag: 0.1.0\n  version: 0.1.0\n";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert!(out.starts_with(existing));
     assert!(out.contains("\n\nfoo:\n"));
     assert!(out.ends_with(
@@ -69,7 +69,7 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert!(out.contains(
         "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
     ));
@@ -78,7 +78,7 @@ bar:
     ));
     // No duplicate foo: line
     assert_eq!(
-        out.matches("\nfoo:").count() + out.starts_with("foo:") as usize,
+        out.matches("\nfoo:").count() + usize::from(out.starts_with("foo:")),
         1
     );
 }
@@ -99,7 +99,7 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert!(out.contains("# Top of file comment"));
     assert!(out.contains("# Notes about bar — important context"));
 }
@@ -121,7 +121,7 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     // foo replaced, with the optional fields gone:
     assert!(!out.contains("additional_folder"));
     assert!(out.contains(
@@ -153,7 +153,7 @@ bar:
         Some("1.0.0")
     );
 
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert_eq!(
         out,
         "\
@@ -181,7 +181,7 @@ foo:
 bar:
   url: https://example.invalid/bar.git
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert!(out.contains("# vendored fork — do not bump\nbar:\n"));
     assert!(out.contains("  tag: 1.2.3\n"));
 }
@@ -190,7 +190,7 @@ bar:
 fn upsert_reemits_crlf_line_endings() {
     let (p, u, v) = foo_entry();
     let existing = "foo:\r\n  url: old\r\n  tag: 0.1.0\r\nbar:\r\n  url: keep\r\n";
-    let out = upsert_text(existing, &entry(&p, &u, &v)).unwrap();
+    let out = upsert_text(existing, &entry(&p, &u, &v));
     assert_eq!(
         out,
         "foo:\r\n  url: https://github.com/example/foo.git\r\n  tag: 1.2.3\r\n  \
@@ -198,7 +198,7 @@ fn upsert_reemits_crlf_line_endings() {
     );
 }
 
-const VENDORED_FIXTURE: &str = r#"# yaml-language-server: $schema=https://example.com/schema.json
+const VENDORED_FIXTURE: &str = r"# yaml-language-server: $schema=https://example.com/schema.json
 #
 # Vendor recipe for foo — header comment must survive.
 
@@ -217,7 +217,7 @@ build:
 requirements:
   host:
     - bar ==1.1.3
-"#;
+";
 
 #[test]
 fn vendored_updates_version_rev_and_resets_build_number() {
@@ -379,8 +379,7 @@ fn pixi_replaces_ref_with_rev_on_existing_entry() {
         &sha("3333333333333333333333333333333333333333"),
         None,
         false,
-    )
-    .unwrap();
+    );
     assert!(!out.contains("ref: main"));
     assert!(out.contains("rev: 3333333333333333333333333333333333333333"));
     assert!(out.contains("url: https://github.com/example/alpha.git"));
@@ -397,8 +396,7 @@ fn pixi_updates_subdir_when_passed() {
         &sha("4444444444444444444444444444444444444444"),
         Some("packages/beta-new"),
         false,
-    )
-    .unwrap();
+    );
     assert!(out.contains("subdir: packages/beta-new"));
     assert!(!out.contains("subdir: packages/beta\n"));
     assert!(out.contains("rev: 4444444444444444444444444444444444444444"));
@@ -413,8 +411,7 @@ fn pixi_lfs_is_authoritative_on_existing_and_new_entries() {
         &sha("4444444444444444444444444444444444444444"),
         Some("packages/beta"),
         true,
-    )
-    .unwrap();
+    );
     assert!(on.contains("    lfs: true"));
 
     let off = mutate_pixi_entry(
@@ -424,8 +421,7 @@ fn pixi_lfs_is_authoritative_on_existing_and_new_entries() {
         &sha("4444444444444444444444444444444444444444"),
         Some("packages/beta"),
         false,
-    )
-    .unwrap();
+    );
     assert!(!off.contains("lfs:"));
 
     let appended = mutate_pixi_entry(
@@ -435,8 +431,7 @@ fn pixi_lfs_is_authoritative_on_existing_and_new_entries() {
         &sha("5555555555555555555555555555555555555555"),
         None,
         true,
-    )
-    .unwrap();
+    );
     assert!(appended.contains("- name: delta"));
     assert!(appended.contains("    lfs: true"));
 }
@@ -450,8 +445,7 @@ fn pixi_appends_new_entry_when_absent() {
         &sha("5555555555555555555555555555555555555555"),
         Some("packages/delta"),
         false,
-    )
-    .unwrap();
+    );
     assert!(out.contains("- name: alpha"));
     assert!(out.contains("- name: delta"));
     assert!(out.contains("url: https://github.com/example/delta.git"));
@@ -468,8 +462,7 @@ fn pixi_appends_without_subdir() {
         &sha("6666666666666666666666666666666666666666"),
         None,
         false,
-    )
-    .unwrap();
+    );
     assert!(out.contains("- name: epsilon"));
     assert!(!out.lines().any(|l| l.trim() == "subdir:"));
 }
@@ -484,8 +477,7 @@ fn pixi_reemits_crlf_line_endings() {
         &sha("3333333333333333333333333333333333333333"),
         None,
         false,
-    )
-    .unwrap();
+    );
     assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
     assert!(out.contains("    rev: 3333333333333333333333333333333333333333\r\n"));
     // Only alpha's lines differ; the rest of the file is byte-identical.
@@ -502,8 +494,7 @@ fn pixi_preserves_a_missing_trailing_newline() {
         &sha("3333333333333333333333333333333333333333"),
         None,
         false,
-    )
-    .unwrap();
+    );
     assert!(!out.ends_with('\n'));
 }
 
@@ -517,8 +508,7 @@ fn pixi_preserves_tab_indented_sub_keys_it_does_not_own() {
         &sha("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
         None,
         false,
-    )
-    .unwrap();
+    );
     assert!(out.contains("\tcomment_key: kept\n"));
     assert!(out.contains("    url: https://github.com/example/alpha.git\n"));
     assert!(out.contains("    rev: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"));
@@ -536,8 +526,7 @@ fn pixi_preserves_blank_line_between_items() {
         &sha("7777777777777777777777777777777777777777"),
         None,
         false,
-    )
-    .unwrap();
+    );
     let lines: Vec<&str> = out.lines().collect();
     let alpha_idx = lines
         .iter()
@@ -550,8 +539,7 @@ fn pixi_preserves_blank_line_between_items() {
     let alpha_block_end = lines[alpha_idx + 1..beta_idx]
         .iter()
         .position(|l| l.trim().is_empty())
-        .map(|p| alpha_idx + 1 + p)
-        .unwrap_or(beta_idx);
+        .map_or(beta_idx, |p| alpha_idx + 1 + p);
     for line in &lines[alpha_idx + 1..alpha_block_end] {
         assert!(
             !line.trim().is_empty(),

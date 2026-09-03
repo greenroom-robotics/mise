@@ -31,13 +31,10 @@ const GLOBAL_BOTH: &[&str] = &[PIXI_TOML, "pixi.lock"];
 
 const GLOBAL_BOTH_PREFIXES: &[&str] = &[".github/workflows/", ".github/actions/", "scripts/"];
 
-/// The two archs, each with its vinca-pipeline runner template.
+/// The two archs, each with its vinca-pipeline runner name.
 const ARCHS: &[(Arch, &str)] = &[
-    (Arch::Linux64, "runs-on={run_id}/runner=8cpu-linux-x64"),
-    (
-        Arch::LinuxAarch64,
-        "runs-on={run_id}/runner=8cpu-linux-arm64",
-    ),
+    (Arch::Linux64, "8cpu-linux-x64"),
+    (Arch::LinuxAarch64, "8cpu-linux-arm64"),
 ];
 
 const fn ds_runner_family(arch: Arch) -> &'static str {
@@ -178,11 +175,11 @@ struct MatrixRow {
 }
 
 impl MatrixRow {
-    fn vinca(arch: Arch, runner_tmpl: &str, run_id: &str) -> Self {
+    fn vinca(arch: Arch, runner: &str, run_id: &str) -> Self {
         Self {
             kind: RowKind::Vinca,
             target_platform: arch,
-            runner: runner_tmpl.replace("{run_id}", run_id),
+            runner: format!("runs-on={run_id}/runner={runner}"),
             artifact_name: format!("build-{arch}"),
         }
     }
@@ -366,7 +363,7 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
         ChangedFiles::All => {
             state.vinca = true;
             state.pixi_native = RawScope::All;
-            state.ds_versions = ds.versions.clone();
+            state.ds_versions.clone_from(&ds.versions);
             return state;
         }
         ChangedFiles::Paths(p) => p,
@@ -420,11 +417,6 @@ fn classify(changed: &ChangedFiles, ds: &DeepstreamCfg) -> RawState {
             } else {
                 state.vinca = true;
             }
-            continue;
-        }
-        // `recipes/` is vinca-generated; changes there trigger nothing.
-        if p.starts_with("recipes/") {
-            continue;
         }
     }
 
@@ -435,8 +427,8 @@ fn build_matrix(plan: &MatrixPlan, manifest: &PixiNativeManifest, run_id: &str) 
     let mut out = Vec::new();
 
     if plan.vinca {
-        for (arch, runner_tmpl) in ARCHS {
-            out.push(MatrixRow::vinca(*arch, runner_tmpl, run_id));
+        for (arch, runner) in ARCHS {
+            out.push(MatrixRow::vinca(*arch, runner, run_id));
         }
     }
 

@@ -96,19 +96,17 @@ fn register(value: &str) {
 /// Replace every registered secret in `text` with [`REDACTED`].
 #[must_use]
 pub fn scrub(text: &str) -> String {
-    let guard = registry()
+    registry()
         .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guard.is_empty() {
-        return text.to_string();
-    }
-    let mut out = text.to_string();
-    for value in guard.iter() {
-        if out.contains(value.as_str()) {
-            out = out.replace(value.as_str(), REDACTED);
-        }
-    }
-    out
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .fold(text.to_string(), |out, value| {
+            if out.contains(value.as_str()) {
+                out.replace(value.as_str(), REDACTED)
+            } else {
+                out
+            }
+        })
 }
 
 #[cfg(test)]

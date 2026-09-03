@@ -8,6 +8,7 @@
 // the very PR that needs the refs bumped it still holds the old major. The
 // expected major is therefore pixi.toml's plus one whenever there's a
 // breaking commit since the release tag pixi.toml's version names.
+#![allow(clippy::unwrap_used)]
 use regex::Regex;
 use std::fs;
 use std::path::Path;
@@ -76,9 +77,8 @@ fn breaking_since(repo: &Path, tag: &str) -> bool {
 
 fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return out,
+    let Ok(entries) = fs::read_dir(dir) else {
+        return out;
     };
     for entry in entries.flatten() {
         let path = entry.path();

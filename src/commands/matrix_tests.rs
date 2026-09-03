@@ -17,7 +17,7 @@ fn runner_size(row: &MatrixRow) -> RunnerSpec {
     }
 }
 
-/// The DS version of a row that must be a DeepStream one.
+/// The DS version of a row that must be a `DeepStream` one.
 fn ds_version(row: &MatrixRow) -> DeepstreamVersion {
     match row.kind {
         RowKind::Deepstream { version } => version,
@@ -43,7 +43,7 @@ fn pipeline_serializes_to_kebab_case() {
 
 #[test]
 fn matrix_row_serializes_with_kebab_case_keys() {
-    let row = MatrixRow::vinca(Arch::Linux64, "runs-on={run_id}/runner=8cpu-linux-x64", "1");
+    let row = MatrixRow::vinca(Arch::Linux64, "8cpu-linux-x64", "1");
     let json = serde_json::to_string(&row).unwrap();
     assert_eq!(
         json,
@@ -360,12 +360,12 @@ fn build_matrix_ds_versions_produce_per_arch_rows() {
 
 #[test]
 fn build_matrix_ds_versions_sorted_ascending() {
+    use DeepstreamVersion::{V7_1, V8_0};
     let mut plan = MatrixPlan::default();
     plan.ds_versions.insert(DeepstreamVersion::V8_0);
     plan.ds_versions.insert(DeepstreamVersion::V7_1);
     let out = build_matrix(&plan, &empty_manifest(), "RUN");
     let versions: Vec<DeepstreamVersion> = out.iter().map(ds_version).collect();
-    use DeepstreamVersion::{V7_1, V8_0};
     assert_eq!(versions, vec![V7_1, V7_1, V8_0, V8_0]);
 }
 
@@ -380,7 +380,7 @@ fn should_not_run_row_is_the_sentinel() {
 
 #[test]
 fn diff_detects_added_changed_and_ignores_removed() {
-    let base = r#"
+    let base = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
@@ -391,8 +391,8 @@ packages:
   - name: gone
     url: https://github.com/org/gone
     rev: 3333333333333333333333333333333333333333
-"#;
-    let head = r#"
+";
+    let head = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
@@ -403,54 +403,54 @@ packages:
   - name: added
     url: https://github.com/org/added
     rev: 4444444444444444444444444444444444444444
-"#;
+";
     let changed = diff_changed_packages(Some(base), head).unwrap();
     assert_eq!(changed, ["added", "beta"].into_iter().map(pkg).collect());
 }
 
 #[test]
 fn diff_detects_runner_size_change() {
-    let base = r#"
+    let base = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
     rev: 1111111111111111111111111111111111111111
-"#;
-    let head = r#"
+";
+    let head = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
     rev: 1111111111111111111111111111111111111111
     runner-size: 16cpu
-"#;
+";
     let changed = diff_changed_packages(Some(base), head).unwrap();
-    assert_eq!(changed, ["alpha"].into_iter().map(pkg).collect());
+    assert_eq!(changed, std::iter::once("alpha").map(pkg).collect());
 }
 
 #[test]
 fn diff_detects_himem_change() {
-    let base = r#"
+    let base = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
     rev: 1111111111111111111111111111111111111111
     runner-size: 16cpu
-"#;
-    let head = r#"
+";
+    let head = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
     rev: 1111111111111111111111111111111111111111
     runner-size: 16cpu
     himem: true
-"#;
+";
     let changed = diff_changed_packages(Some(base), head).unwrap();
-    assert_eq!(changed, ["alpha"].into_iter().map(pkg).collect());
+    assert_eq!(changed, std::iter::once("alpha").map(pkg).collect());
 }
 
 #[test]
 fn diff_none_base_means_all_head_packages() {
-    let head = r#"
+    let head = r"
 packages:
   - name: alpha
     url: https://github.com/org/alpha
@@ -458,7 +458,7 @@ packages:
   - name: beta
     url: https://github.com/org/beta
     rev: 2222222222222222222222222222222222222222
-"#;
+";
     let changed = diff_changed_packages(None, head).unwrap();
     assert_eq!(changed, ["alpha", "beta"].into_iter().map(pkg).collect());
 }
@@ -490,7 +490,7 @@ fn build_matrix_only_prunes_to_changed_sizes() {
     // manifest_with_sizes names entries pkg0, pkg1, ... in order.
     let manifest = manifest_with_sizes(&[RunnerSize::Cpu4, RunnerSize::Cpu16]);
     let plan = MatrixPlan {
-        pixi_native: PixiScope::Only(["pkg0"].into_iter().map(pkg).collect()),
+        pixi_native: PixiScope::Only(std::iter::once("pkg0").map(pkg).collect()),
         ..Default::default()
     };
     let out = build_matrix(&plan, &manifest, "RUN");

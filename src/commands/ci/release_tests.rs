@@ -208,7 +208,7 @@ fn prepare_cmd_runs_verify_siblings_before_bump() {
 fn package_json_encodes_sibling_deps_for_msr_ordering() {
     let mut deps = std::collections::BTreeSet::new();
     deps.insert(pkg("geolocation"));
-    let js = package_json_for(&pkg("geolocation_node"), &ver("1.37.0"), &deps);
+    let js = package_json_for(&pkg("geolocation_node"), &ver("1.37.0"), &deps).unwrap();
     let v: serde_json::Value = serde_json::from_str(&js).unwrap();
     assert_eq!(v["name"], "geolocation_node");
     assert_eq!(v["version"], "1.37.0");
