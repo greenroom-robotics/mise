@@ -1,3 +1,10 @@
+## [8.19.3](https://github.com/greenroom-robotics/mise/compare/mise@8.19.2...mise@8.19.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* read noarch from recipe.yaml for pixi-build-rattler-build packages ([baa7875](https://github.com/greenroom-robotics/mise/commit/baa78758a862885b452a0c21a204677846608cc8))
+
 ## [8.19.2](https://github.com/greenroom-robotics/mise/compare/mise@8.19.1...mise@8.19.2) (2026-09-03)
 
 
