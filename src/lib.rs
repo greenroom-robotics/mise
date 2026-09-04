@@ -5,6 +5,7 @@ pub mod gh;
 pub mod git;
 pub mod manifest;
 pub mod process;
+pub mod recipe;
 pub mod repo;
 pub mod routing;
 pub mod secret;

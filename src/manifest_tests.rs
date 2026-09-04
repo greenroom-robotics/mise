@@ -1,4 +1,5 @@
 use super::*;
+use crate::recipe::RecipeNoarch;
 use crate::types::{Arch, ChannelUrl, PackageName, SiblingPinStyle, Version};
 
 fn pn(s: &str) -> PackageName {
@@ -153,37 +154,101 @@ fn ignores_unknown_keys() {
     .unwrap();
 }
 
-fn is_noarch(toml: &str) -> bool {
-    PackageManifest::parse(toml).unwrap().is_noarch()
+fn noarch(toml: &str, recipe: impl FnOnce() -> Result<String>) -> Result<Option<Noarch>> {
+    PackageManifest::parse(toml).unwrap().noarch(recipe)
+}
+
+fn no_recipe() -> Result<String> {
+    Err(color_eyre::eyre::eyre!("no recipe.yaml"))
+}
+
+const RATTLER_BUILD: &str = "[package]\nname=\"proto\"\nversion=\"1\"\n\
+    [package.build.backend]\nname=\"pixi-build-rattler-build\"\nversion=\"*\"";
+
+#[test]
+fn noarch_detects_python_and_ament_python_without_a_recipe() {
+    assert_eq!(
+        noarch(
+            "[package]\nname=\"c\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
+            no_recipe,
+        )
+        .unwrap(),
+        Some(Noarch::PythonBackend)
+    );
+    assert_eq!(
+        noarch(
+            "[package]\nname=\"p\"\nversion=\"1\"\n\
+             [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
+             [package.build.config]\nbuild-type=\"ament_python\"",
+            no_recipe,
+        )
+        .unwrap(),
+        Some(Noarch::AmentPython)
+    );
 }
 
 #[test]
-fn noarch_detects_python_and_ament_python() {
-    assert!(is_noarch(
-        "[package]\nname=\"c\"\nversion=\"1\"\n\
-         [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
-    ));
-    assert!(is_noarch(
-        "[package]\nname=\"p\"\nversion=\"1\"\n\
-         [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-         [package.build.config]\nbuild-type=\"ament_python\"",
-    ));
-}
-
-#[test]
-fn noarch_false_for_compiled_and_missing_build() {
+fn noarch_none_for_compiled_and_missing_build() {
     for bt in ["ament_cmake", "ament_idl", "cmake"] {
-        assert!(
-            !is_noarch(&format!(
-                "[package]\nname=\"x\"\nversion=\"1\"\n\
-                 [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-                 [package.build.config]\nbuild-type=\"{bt}\"",
-            )),
+        assert_eq!(
+            noarch(
+                &format!(
+                    "[package]\nname=\"x\"\nversion=\"1\"\n\
+                     [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
+                     [package.build.config]\nbuild-type=\"{bt}\"",
+                ),
+                no_recipe,
+            )
+            .unwrap(),
+            None,
             "expected {bt} to be arch-specific"
         );
     }
-    // no [package.build] at all → conservative: not noarch
-    assert!(!is_noarch("[package]\nname=\"x\"\nversion=\"1\""));
+    assert_eq!(
+        noarch("[package]\nname=\"x\"\nversion=\"1\"", no_recipe).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn rattler_build_package_is_noarch_when_its_recipe_says_so() {
+    assert_eq!(
+        noarch(RATTLER_BUILD, || Ok(
+            "package:\n  name: proto\n  version: 1\nbuild:\n  number: 0\n  noarch: generic\n"
+                .to_string()
+        ))
+        .unwrap(),
+        Some(Noarch::Recipe(RecipeNoarch::Generic))
+    );
+    assert_eq!(
+        noarch(RATTLER_BUILD, || Ok(
+            "build:\n  noarch: python\n".to_string()
+        ))
+        .unwrap(),
+        Some(Noarch::Recipe(RecipeNoarch::Python))
+    );
+}
+
+#[test]
+fn rattler_build_package_is_arch_specific_when_its_recipe_is_silent() {
+    assert_eq!(
+        noarch(RATTLER_BUILD, || Ok(
+            "package:\n  name: proto\n  version: 1\nbuild:\n  number: 0\n".to_string()
+        ))
+        .unwrap(),
+        None
+    );
+    assert_eq!(
+        noarch(RATTLER_BUILD, || Ok("build:\n  noarch:\n".to_string())).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn rattler_build_package_without_a_recipe_is_an_error() {
+    let msg = format!("{:#}", noarch(RATTLER_BUILD, no_recipe).unwrap_err());
+    assert!(msg.contains("no recipe.yaml"), "got: {msg}");
 }
 
 #[test]

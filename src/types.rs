@@ -15,7 +15,7 @@ use color_eyre::eyre::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::consts::PIXI_TOML;
+use crate::consts::{PIXI_TOML, RECIPE_YAML};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -740,11 +740,20 @@ impl PixiNativeEntry {
     /// Path of this entry's `pixi.toml` relative to its repo root.
     #[must_use]
     pub fn manifest_rel_path(&self) -> String {
+        self.rel_path(PIXI_TOML)
+    }
+
+    #[must_use]
+    pub fn recipe_rel_path(&self) -> String {
+        self.rel_path(RECIPE_YAML)
+    }
+
+    fn rel_path(&self, file: &str) -> String {
         self.subdir
             .as_deref()
             .map(|p| p.to_string_lossy().trim_matches('/').to_string())
             .filter(|s| !s.is_empty() && s != ".")
-            .map_or_else(|| PIXI_TOML.to_string(), |s| format!("{s}/{PIXI_TOML}"))
+            .map_or_else(|| file.to_string(), |s| format!("{s}/{file}"))
     }
 }
 

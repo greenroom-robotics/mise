@@ -22,6 +22,7 @@ pub const ROBOSTACK_CHANNEL: &str = "https://prefix.dev/robostack-kilted";
 
 /// Pixi workspace/package manifest filename.
 pub const PIXI_TOML: &str = "pixi.toml";
+pub const RECIPE_YAML: &str = "recipe.yaml";
 
 /// Manifest of packages built straight from their own pixi manifests. Read by
 /// `repo`, diffed by `matrix`, upserted into by `recipes_upsert`.

@@ -15,6 +15,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
+use crate::recipe::{Recipe, RecipeNoarch};
 use crate::types::{Arch, ChannelUrl, PackageName, SiblingPinStyle, Version};
 
 /// The dependency tables a pixi package can declare, in scan order.
@@ -61,6 +62,13 @@ pub struct PackageManifest {
 pub struct PackageIdentity {
     pub name: PackageName,
     pub version: Version,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Noarch {
+    PythonBackend,
+    AmentPython,
+    Recipe(RecipeNoarch),
 }
 
 /// One entry from a dependency table: the dep *key* — which is the channel
@@ -235,26 +243,21 @@ impl PackageManifest {
             .map_or(0, |c| c.build_number)
     }
 
-    /// `true` if this package builds a platform-independent (noarch) artifact:
-    /// the `pixi-build-python` backend, or an `ament_python` ROS package. Those
-    /// produce byte-identical output on every arch, so the buildfarm only
-    /// builds them on linux-64.
-    #[must_use]
-    pub fn is_noarch(&self) -> bool {
+    pub fn noarch(&self, recipe: impl FnOnce() -> Result<String>) -> Result<Option<Noarch>> {
         let Some(build) = &self.package.build else {
-            return false;
+            return Ok(None);
         };
-        if build
-            .backend
-            .as_ref()
-            .is_some_and(|b| b.name == "pixi-build-python")
-        {
-            return true;
+        match build.backend.as_ref().map(|b| b.name.as_str()) {
+            Some("pixi-build-python") => Ok(Some(Noarch::PythonBackend)),
+            Some("pixi-build-rattler-build") => {
+                Ok(Recipe::parse(&recipe()?)?.noarch().map(Noarch::Recipe))
+            }
+            _ => Ok(build
+                .config
+                .as_ref()
+                .filter(|c| c.build_type == "ament_python")
+                .map(|_| Noarch::AmentPython)),
         }
-        build
-            .config
-            .as_ref()
-            .is_some_and(|c| c.build_type == "ament_python")
     }
 
     /// `true` if the workspace's `platforms` list is empty or contains `target`.

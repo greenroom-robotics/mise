@@ -80,6 +80,7 @@ fn check_entry(
     rebuild_epoch: u64,
 ) -> color_eyre::eyre::Result<CheckOutcome> {
     let upstream = gh::fetch_upstream_manifest(entry)?;
+    let noarch = gh::fetch_upstream_noarch(entry, &upstream)?;
     let id = upstream.identity();
 
     if !upstream.supports_platform(target_platform) {
@@ -90,7 +91,7 @@ fn check_entry(
     }
 
     // noarch artifacts are arch-independent; built once, on linux-64.
-    if upstream.is_noarch() && target_platform != Arch::Linux64 {
+    if noarch.is_some() && target_platform != Arch::Linux64 {
         return Ok(CheckOutcome::SkipNoarchNonCanonical {
             name: id.name,
             version: id.version,
@@ -108,7 +109,7 @@ fn check_entry(
     // should re-run.
     let published =
         crate::routing::published_channels(routing_rules, channel, &id.name, &id.version);
-    let subdir = BuildSubdir::of(&upstream, target_platform);
+    let subdir = BuildSubdir::of(noarch, target_platform);
     let mut published_everywhere = true;
     for c in &published {
         published_everywhere &=

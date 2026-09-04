@@ -13,7 +13,7 @@ use color_eyre::eyre::WrapErr;
 use serde::Deserialize;
 
 use crate::consts::DEFAULT_BRANCH;
-use crate::manifest::PackageManifest;
+use crate::manifest::{Noarch, PackageManifest};
 use crate::process;
 use crate::repo::Repo;
 use crate::secret::{ExposeSecret, Secret};
@@ -273,6 +273,22 @@ pub fn fetch_upstream_manifest(
     .with_context(|| format!("entry {}", entry.name))?;
     PackageManifest::parse(&text)
         .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))
+}
+
+pub fn fetch_upstream_noarch(
+    entry: &PixiNativeEntry,
+    upstream: &PackageManifest,
+) -> color_eyre::eyre::Result<Option<Noarch>> {
+    upstream
+        .noarch(|| {
+            fetch_raw_file(
+                entry.url.owner(),
+                entry.url.repo(),
+                entry.rev.as_str(),
+                &entry.recipe_rel_path(),
+            )
+        })
+        .with_context(|| format!("entry {}: classify upstream as noarch", entry.name))
 }
 
 /// Paths the event touched, or [`ChangedFiles::All`] when nothing can be diffed.

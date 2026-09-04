@@ -1,4 +1,6 @@
 use super::*;
+use crate::manifest::Noarch;
+use crate::recipe::RecipeNoarch;
 
 fn pkg(name: &str) -> PackageName {
     PackageName::new(name).unwrap()
@@ -65,24 +67,22 @@ fn channel_index_does_not_match_a_build_from_another_subdir() {
 }
 
 #[test]
-fn build_subdir_follows_the_manifest_not_the_job_arch() {
-    let noarch = PackageManifest::parse(
-        "[package]\nname=\"p\"\nversion=\"1\"\n\
-             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
-    )
-    .unwrap();
-    let arch = PackageManifest::parse("[package]\nname=\"x\"\nversion=\"1\"").unwrap();
+fn build_subdir_follows_the_package_not_the_job_arch() {
     let l64 = Arch::Linux64;
     let a64 = Arch::LinuxAarch64;
 
-    assert_eq!(BuildSubdir::of(&noarch, l64), BuildSubdir::Noarch);
-    assert_eq!(BuildSubdir::of(&noarch, a64), BuildSubdir::Noarch);
+    for noarch in [
+        Noarch::PythonBackend,
+        Noarch::AmentPython,
+        Noarch::Recipe(RecipeNoarch::Generic),
+        Noarch::Recipe(RecipeNoarch::Python),
+    ] {
+        assert_eq!(BuildSubdir::of(Some(noarch), l64), BuildSubdir::Noarch);
+        assert_eq!(BuildSubdir::of(Some(noarch), a64), BuildSubdir::Noarch);
+    }
+    assert_eq!(BuildSubdir::of(None, l64), BuildSubdir::Arch(Arch::Linux64));
     assert_eq!(
-        BuildSubdir::of(&arch, l64),
-        BuildSubdir::Arch(Arch::Linux64)
-    );
-    assert_eq!(
-        BuildSubdir::of(&arch, a64),
+        BuildSubdir::of(None, a64),
         BuildSubdir::Arch(Arch::LinuxAarch64)
     );
     // Display must match the subdir keys `pixi search --json` returns.

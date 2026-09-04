@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use color_eyre::eyre::WrapErr;
 
-use crate::manifest::PackageManifest;
+use crate::manifest::Noarch;
 use crate::process;
 use crate::types::{Arch, LocalChannel, PackageName, RemoteChannel, Version};
 
@@ -126,12 +126,12 @@ pub(super) enum BuildSubdir {
 }
 
 impl BuildSubdir {
-    /// Where `upstream` publishes to when built for `target_platform`.
-    pub(super) fn of(upstream: &PackageManifest, target_platform: Arch) -> Self {
-        if upstream.is_noarch() {
-            Self::Noarch
-        } else {
-            Self::Arch(target_platform)
+    /// Where a package classified as `noarch` publishes to when built for
+    /// `target_platform`.
+    pub(super) const fn of(noarch: Option<Noarch>, target_platform: Arch) -> Self {
+        match noarch {
+            Some(_) => Self::Noarch,
+            None => Self::Arch(target_platform),
         }
     }
 }
