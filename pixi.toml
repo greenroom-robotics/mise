@@ -6,25 +6,13 @@ preview = ["pixi-build"]
 
 [dependencies]
 mise = { path = "." }
+rust = "1.95.*"
+cargo-nextest = ">=0.9.143,<0.10"
 
 [tasks]
 mise = "mise"
-
-[feature.rust.dependencies]
-rust = "1.95.*"
-
-[feature.lint.tasks]
 lint = "cargo fmt --all && cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings"
-
-[feature.test.dependencies]
-cargo-nextest = ">=0.9.143,<0.10"
-
-[feature.test.tasks]
 test = "cargo nextest run --locked --color always && cargo test --doc --locked"
-
-[environments]
-lint = { features = ["rust", "lint"], no-default-feature = true }
-test = { features = ["rust", "test"], no-default-feature = true }
 
 [package]
 name = "mise"

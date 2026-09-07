@@ -30,7 +30,7 @@ jobs:
 
       - name: Lint
         # lint auto-fixes; a dirty tree means something needed fixing.
-        run: pixi run -e lint lint && git diff --exit-code
+        run: pixi run lint && git diff --exit-code
 
       - name: Test
-        run: pixi run -e test test
+        run: pixi run test
