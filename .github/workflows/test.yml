@@ -22,15 +22,19 @@ jobs:
           # since the latest one to know which major is about to ship.
           fetch-depth: 0
 
+      - name: Install Rust toolchain
+        # Same version as the pixi env and build backend (pixi.toml).
+        run: rustup toolchain install 1.95.0 --component rustfmt,clippy --profile minimal && rustup default 1.95.0
+
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
         with:
-          cache: true
+          tool: cargo-nextest
 
       - name: Lint
         # lint auto-fixes; a dirty tree means something needed fixing.
-        run: pixi run lint && git diff --exit-code
+        run: cargo fmt --all && cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings && git diff --exit-code
 
       - name: Test
-        run: pixi run test
+        run: cargo nextest run --locked --color always && cargo test --doc --locked
