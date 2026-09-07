@@ -86,16 +86,17 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
         .assert()
         .success();
 
-    assert_eq!(
-        e2e.shim_calls(),
-        vec![vec![
-            "npx".to_string(),
-            "--no-install".to_string(),
-            "multi-semantic-release".to_string(),
-            "--tag-format=${name}@${version}".to_string(),
-            "--deps.release=inherit".to_string(),
-        ]]
-    );
+    // A dry-run pass records next versions first, then the real pass releases.
+    let real = vec![
+        "npx".to_string(),
+        "--no-install".to_string(),
+        "multi-semantic-release".to_string(),
+        "--tag-format=${name}@${version}".to_string(),
+        "--deps.release=inherit".to_string(),
+    ];
+    let mut dry = real.clone();
+    dry.push("--dry-run".to_string());
+    assert_eq!(e2e.shim_calls(), vec![dry, real]);
 
     let root_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(src.join("package.json")).unwrap()).unwrap();
