@@ -23,8 +23,7 @@ jobs:
           fetch-depth: 0
 
       - name: Install Rust toolchain
-        # Same version as the pixi env and build backend (pixi.toml).
-        run: rustup toolchain install 1.95.0 --component rustfmt,clippy --profile minimal && rustup default 1.95.0
+        run: rustup toolchain install stable --component rustfmt,clippy --profile minimal
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
