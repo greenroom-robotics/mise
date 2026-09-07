@@ -1,6 +1,5 @@
 // semantic-release plugin for the dry-run pass: writes each package's next
-// version and release notes to `<dir>/<name>.json`. Runs at generateNotes,
-// the last step semantic-release executes under --dry-run.
+// version and release notes to `<dir>/<name>.json`
 const fs = require("fs");
 const path = require("path");
 
