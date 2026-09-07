@@ -1,3 +1,10 @@
+## [8.20.0](https://github.com/greenroom-robotics/mise/compare/mise@8.19.3...mise@8.20.0) (2026-09-07)
+
+
+### Features
+
+* single release commit ([#100](https://github.com/greenroom-robotics/mise/issues/100)) ([9351d0f](https://github.com/greenroom-robotics/mise/commit/9351d0f1b7cdbe461f169f573936c2cd57ce95b8))
+
 ## [8.19.3](https://github.com/greenroom-robotics/mise/compare/mise@8.19.2...mise@8.19.3) (2026-09-04)
 
 
