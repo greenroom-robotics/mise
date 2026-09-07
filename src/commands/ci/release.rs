@@ -1,8 +1,55 @@
 use clap::Args;
+use color_eyre::eyre::WrapErr;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::manifest::Package;
 use crate::types::{PackageName, Version};
+
+const RECORD_PLUGIN: &str = include_str!("record_release.js");
+
+/// Which semantic-release pass a `.releaserc` is for.
+enum Pass<'a> {
+    /// `--dry-run`: the record plugin writes each package's next version and
+    /// notes under `dir`; nothing is committed or tagged.
+    Record { dir: &'a Path },
+    /// The real run. `changelog_committed` is set when a prior release commit
+    /// already prepended CHANGELOG.md, so the changelog plugin must not run
+    /// again and dirty the tree.
+    Release { changelog_committed: bool },
+}
+
+/// What the record plugin wrote for one package in the dry-run pass.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct Recorded {
+    version: Version,
+    notes: String,
+}
+
+/// Prepend `notes` to a CHANGELOG.md the way @semantic-release/changelog does.
+fn prepend_changelog(existing: &str, notes: &str) -> String {
+    let existing = existing.trim();
+    if existing.is_empty() {
+        format!("{}\n", notes.trim())
+    } else {
+        format!("{}\n\n{existing}\n", notes.trim())
+    }
+}
+
+fn release_commit_message(releases: &[(&PackageName, &Recorded)]) -> String {
+    let subject = releases
+        .iter()
+        .map(|(name, rel)| format!("{name} {}", rel.version))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let body = releases
+        .iter()
+        .map(|(_, rel)| rel.notes.trim())
+        .filter(|n| !n.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    format!("chore(release): {subject} [skip ci]\n\n{body}")
+}
 
 #[derive(Args, Debug)]
 pub struct Release {
@@ -126,6 +173,24 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
         .map_or_else(|| p.to_owned(), std::borrow::ToOwned::to_owned)
 }
 
+/// Packages the dry-run pass recorded a next release for, in `pkgs` order.
+fn read_recorded<'p>(
+    dir: &Path,
+    pkgs: &'p [Package],
+) -> color_eyre::eyre::Result<Vec<(&'p Package, Recorded)>> {
+    let mut out = Vec::new();
+    for pkg in pkgs {
+        let path = dir.join(format!("{}.json", pkg.identity().name));
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let rec: Recorded =
+            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        out.push((pkg, rec));
+    }
+    Ok(out)
+}
+
 /// Merge a `workspaces` array into the root package.json, creating a minimal
 /// one if absent.
 fn ensure_root_workspaces(
@@ -157,48 +222,111 @@ impl Release {
         };
         let multi = self.package.is_none() && pkgs.len() > 1;
 
-        let graph = crate::commands::ci::siblings::analyze(&pkgs);
-
-        let mut workspace_globs: Vec<String> = Vec::new();
-        for pkg in &pkgs {
-            let pkg_dir = &pkg.dir;
-            let id = pkg.identity();
-            let releaserc = self.releaserc_json(&pkg.manifest_path, &id.name)?;
-            std::fs::write(pkg_dir.join(".releaserc"), releaserc)?;
-            if multi {
-                let deps = msr_ordering_deps(&graph, &id.name);
-                std::fs::write(
-                    pkg_dir.join("package.json"),
-                    package_json_for(&id.name, &id.version, &deps)?,
-                )?;
-                let rel_pkg_dir = cwd_relative(pkg_dir);
-                workspace_globs.push(rel_pkg_dir.to_string_lossy().into_owned());
-            }
-        }
-        if multi {
-            ensure_root_workspaces(std::path::Path::new("package.json"), &workspace_globs)?;
-        }
-        // Plain semantic-release resolves its config from cwd — a .releaserc
-        // down in the package dir is invisible to it, and its own defaults
-        // have no `main` branch (ERELEASEBRANCHES).
-        if !multi {
-            let releaserc = self.releaserc_json(&first.manifest_path, &first.identity().name)?;
-            std::fs::write(".releaserc", releaserc)?;
-        }
-
         // Multi mode ignores the name; in single mode `first` is the only package.
         let tag_format = tag_format(multi, &first.identity().name);
-
         let argv = release_argv(multi, &tag_format);
+
+        if !multi {
+            let pass = Pass::Release {
+                changelog_committed: false,
+            };
+            self.write_releasercs(&pkgs, &pass)?;
+            // Plain semantic-release resolves its config from cwd — a .releaserc
+            // down in the package dir is invisible to it, and its own defaults
+            // have no `main` branch (ERELEASEBRANCHES).
+            let releaserc =
+                self.releaserc_json(&first.manifest_path, &first.identity().name, &pass)?;
+            std::fs::write(".releaserc", releaserc)?;
+            return crate::process::run("npx", &argv);
+        }
+
+        let graph = crate::commands::ci::siblings::analyze(&pkgs);
+        let mut workspace_globs: Vec<String> = Vec::new();
+        for pkg in &pkgs {
+            let id = pkg.identity();
+            let deps = msr_ordering_deps(&graph, &id.name);
+            std::fs::write(
+                pkg.dir.join("package.json"),
+                package_json_for(&id.name, &id.version, &deps)?,
+            )?;
+            workspace_globs.push(cwd_relative(&pkg.dir).to_string_lossy().into_owned());
+        }
+        ensure_root_workspaces(Path::new("package.json"), &workspace_globs)?;
+
+        // One release commit for every package released this run, made before
+        // any tag exists so all tags land on it. semantic-release only ever
+        // sees a clean tree afterwards: bump-pixi rewrites the same version and
+        // @semantic-release/git commits nothing when no asset changed.
+        let record_dir = tempfile::tempdir()?;
+        std::fs::write(record_dir.path().join("record_release.js"), RECORD_PLUGIN)?;
+        self.write_releasercs(
+            &pkgs,
+            &Pass::Record {
+                dir: record_dir.path(),
+            },
+        )?;
+        let mut dry_argv = argv.clone();
+        dry_argv.push("--dry-run".to_string());
+        crate::process::run("npx", &dry_argv)?;
+        let releases = read_recorded(record_dir.path(), &pkgs)?;
+        if !releases.is_empty() {
+            self.commit_release(&releases)?;
+        }
+
+        // ponytail: --extra-git-asset / --extra-prepare-cmd still dirty the
+        // tree per package in this pass and so still commit per package.
+        self.write_releasercs(
+            &pkgs,
+            &Pass::Release {
+                changelog_committed: self.changelog,
+            },
+        )?;
         crate::process::run("npx", &argv)
+    }
+
+    fn write_releasercs(&self, pkgs: &[Package], pass: &Pass) -> color_eyre::eyre::Result<()> {
+        for pkg in pkgs {
+            let releaserc = self.releaserc_json(&pkg.manifest_path, &pkg.identity().name, pass)?;
+            std::fs::write(pkg.dir.join(".releaserc"), releaserc)?;
+        }
+        Ok(())
+    }
+
+    fn commit_release(&self, releases: &[(&Package, Recorded)]) -> color_eyre::eyre::Result<()> {
+        let mut files: Vec<PathBuf> = Vec::new();
+        for (pkg, rel) in releases {
+            let body = std::fs::read_to_string(&pkg.manifest_path)
+                .with_context(|| format!("reading {}", pkg.manifest_path.display()))?;
+            let bumped = crate::manifest::set_package_version(&body, &rel.version)
+                .with_context(|| format!("bumping {}", pkg.manifest_path.display()))?;
+            std::fs::write(&pkg.manifest_path, bumped)?;
+            files.push(pkg.manifest_path.clone());
+            if self.changelog {
+                let changelog = pkg.dir.join("CHANGELOG.md");
+                let existing = std::fs::read_to_string(&changelog).unwrap_or_default();
+                std::fs::write(&changelog, prepend_changelog(&existing, &rel.notes))?;
+                files.push(changelog);
+            }
+        }
+        let names: Vec<PackageName> = releases.iter().map(|(p, _)| p.identity().name).collect();
+        let subjects: Vec<(&PackageName, &Recorded)> =
+            names.iter().zip(releases.iter().map(|(_, r)| r)).collect();
+        let message = release_commit_message(&subjects);
+
+        let mut add = vec!["add".to_string(), "--".to_string()];
+        add.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
+        crate::process::git(&add)?;
+        crate::process::git(&["commit", "--quiet", "-m", &message])?;
+        crate::process::git(&["push", "origin", "HEAD"])
     }
 
     /// `pkg_name` is embedded literally in both callbacks so
     /// multi-semantic-release needs no plugin-context env vars at runtime.
     fn releaserc_json(
         &self,
-        pixi: &std::path::Path,
+        pixi: &Path,
         pkg_name: &PackageName,
+        pass: &Pass,
     ) -> color_eyre::eyre::Result<String> {
         let branches = self
             .release_branches
@@ -237,12 +365,23 @@ impl Release {
         let mut plugins: Vec<serde_json::Value> = vec![
             serde_json::json!(["@semantic-release/commit-analyzer", { "preset": "conventionalcommits" }]),
             serde_json::json!(["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }]),
-            serde_json::json!(["@semantic-release/changelog", {}]),
-            serde_json::json!(["@semantic-release/exec", {
-                "prepareCmd": prepare_cmd,
-                "publishCmd": publish_cmd,
-            }]),
         ];
+        match pass {
+            Pass::Record { dir } => plugins.push(serde_json::json!([
+                dir.join("record_release.js"),
+                { "dir": dir, "name": pkg_name }
+            ])),
+            Pass::Release {
+                changelog_committed: false,
+            } => plugins.push(serde_json::json!(["@semantic-release/changelog", {}])),
+            Pass::Release {
+                changelog_committed: true,
+            } => {}
+        }
+        plugins.push(serde_json::json!(["@semantic-release/exec", {
+            "prepareCmd": prepare_cmd,
+            "publishCmd": publish_cmd,
+        }]));
 
         if self.github_release {
             plugins.push(serde_json::json!([

@@ -21,10 +21,6 @@
       }
     ],
     [
-      "@semantic-release/changelog",
-      {}
-    ],
-    [
       "@semantic-release/exec",
       {
         "prepareCmd": "mise ci verify-siblings --pixi-toml=<TMP>/packages/nodeb/pixi.toml --package-dir=<TMP>/packages && mise ci bump-pixi --version=${nextRelease.version} --pixi-toml=<TMP>/packages/nodeb/pixi.toml",

@@ -67,7 +67,16 @@ fn extra_prepare_cmd_and_git_assets_appear_in_releaserc() {
         "--extra-git-asset",
         "Cargo.lock",
     ]);
-    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
+    let rc = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("mise"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
+        .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let plugins = v["plugins"].as_array().unwrap();
 
@@ -99,7 +108,16 @@ fn pixi_toml_is_always_a_release_asset() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--changelog", "false"]);
-    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
+    let rc = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("mise"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
+        .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
         .as_array()
@@ -125,7 +143,13 @@ fn git_commit_message_names_the_package() {
     let cli = TestCli::parse_from(["x"]);
     let rc = cli
         .release
-        .releaserc_json(&pixi, &pkg("object_tracker"))
+        .releaserc_json(
+            &pixi,
+            &pkg("object_tracker"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let git = v["plugins"]
@@ -153,7 +177,16 @@ fn exec_cmd_paths_are_absolute() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x", "--package-dir", "packages"]);
-    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
+    let rc = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("mise"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
+        .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let exec = v["plugins"]
         .as_array()
@@ -179,7 +212,16 @@ fn prepare_cmd_runs_verify_siblings_before_bump() {
     let pixi = dir.join("pixi.toml");
     std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
     let cli = TestCli::parse_from(["x"]);
-    let rc = cli.release.releaserc_json(&pixi, &pkg("mise")).unwrap();
+    let rc = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("mise"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
+        .unwrap();
     let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
     let prepare = v["plugins"]
         .as_array()
@@ -283,4 +325,98 @@ fn workspace_globs_are_cwd_relative() {
     let rel_path = std::path::PathBuf::from("packages/y");
     let result = cwd_relative(&rel_path);
     assert_eq!(result, rel_path);
+}
+
+#[test]
+fn prepend_changelog_matches_semantic_release_changelog_layout() {
+    assert_eq!(
+        prepend_changelog("", "## x 1.1.0\n\n* a\n"),
+        "## x 1.1.0\n\n* a\n"
+    );
+    assert_eq!(
+        prepend_changelog("## x 1.0.0\n\n* old\n", "## x 1.1.0\n\n* a"),
+        "## x 1.1.0\n\n* a\n\n## x 1.0.0\n\n* old\n"
+    );
+}
+
+#[test]
+fn release_commit_message_names_every_package() {
+    let a = Recorded {
+        version: ver("1.1.0"),
+        notes: "## a 1.1.0\n\n* one".into(),
+    };
+    let b = Recorded {
+        version: ver("2.0.0"),
+        notes: String::new(),
+    };
+    let msg = release_commit_message(&[(&pkg("a"), &a), (&pkg("b"), &b)]);
+    assert_eq!(
+        msg,
+        "chore(release): a 1.1.0, b 2.0.0 [skip ci]\n\n## a 1.1.0\n\n* one"
+    );
+}
+
+fn plugin_names(rc: &str) -> Vec<String> {
+    let v: serde_json::Value = serde_json::from_str(rc).unwrap();
+    v["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p[0].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn record_pass_adds_record_plugin_and_no_changelog() {
+    let dir = std::env::temp_dir().join("mise-release-record-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pixi = dir.join("pixi.toml");
+    std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+    let cli = TestCli::parse_from(["x"]);
+    let rc = cli
+        .release
+        .releaserc_json(&pixi, &pkg("x"), &Pass::Record { dir: &dir })
+        .unwrap();
+    let names = plugin_names(&rc);
+    assert!(names.iter().any(|n| n.ends_with("/record_release.js")));
+    assert!(!names.iter().any(|n| n == "@semantic-release/changelog"));
+    let v: serde_json::Value = serde_json::from_str(&rc).unwrap();
+    let record = v["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p[0].as_str().unwrap().ends_with("record_release.js"))
+        .unwrap();
+    assert_eq!(record[1]["name"], "x");
+}
+
+#[test]
+fn release_pass_skips_changelog_plugin_once_committed() {
+    let dir = std::env::temp_dir().join("mise-release-committed-test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pixi = dir.join("pixi.toml");
+    std::fs::write(&pixi, "[package]\nname = \"x\"\nversion = \"1.0.0\"\n").unwrap();
+    let cli = TestCli::parse_from(["x"]);
+    let committed = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("x"),
+            &Pass::Release {
+                changelog_committed: true,
+            },
+        )
+        .unwrap();
+    assert!(!plugin_names(&committed).contains(&"@semantic-release/changelog".to_string()));
+    let fresh = cli
+        .release
+        .releaserc_json(
+            &pixi,
+            &pkg("x"),
+            &Pass::Release {
+                changelog_committed: false,
+            },
+        )
+        .unwrap();
+    assert!(plugin_names(&fresh).contains(&"@semantic-release/changelog".to_string()));
 }
