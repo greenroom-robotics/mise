@@ -173,6 +173,27 @@ fn cwd_relative(p: &std::path::Path) -> std::path::PathBuf {
         .map_or_else(|| p.to_owned(), std::borrow::ToOwned::to_owned)
 }
 
+/// Branch the release commit is pushed to. CI checks out a detached SHA, so
+/// `HEAD` alone is not a pushable ref there; `GITHUB_REF_NAME` names the branch.
+fn release_branch() -> color_eyre::eyre::Result<String> {
+    let branch = match std::env::var("GITHUB_REF_NAME") {
+        Ok(b) if !b.is_empty() => b,
+        _ => crate::process::capture_in(
+            Path::new("."),
+            "git",
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )?
+        .trim()
+        .to_string(),
+    };
+    if branch == "HEAD" {
+        color_eyre::eyre::bail!(
+            "detached HEAD and GITHUB_REF_NAME unset: cannot tell which branch to push to"
+        );
+    }
+    Ok(branch)
+}
+
 /// Packages the dry-run pass recorded a next release for, in `pkgs` order.
 fn read_recorded<'p>(
     dir: &Path,
@@ -317,7 +338,8 @@ impl Release {
         add.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
         crate::process::git(&add)?;
         crate::process::git(&["commit", "--quiet", "-m", &message])?;
-        crate::process::git(&["push", "origin", "HEAD"])
+        let refspec = format!("HEAD:refs/heads/{}", release_branch()?);
+        crate::process::git(&["push", "origin", &refspec])
     }
 
     /// `pkg_name` is embedded literally in both callbacks so
