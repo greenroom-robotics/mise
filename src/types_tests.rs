@@ -432,19 +432,3 @@ fn remote_channel_sibling_swaps_the_last_segment() {
         "https://example.invalid/app"
     );
 }
-
-#[test]
-fn channel_url_round_trips_both_variants() {
-    assert!(matches!(
-        ChannelUrl::parse("file:///tmp/out").unwrap(),
-        ChannelUrl::Local(_)
-    ));
-    assert_eq!(
-        ChannelUrl::parse("file:///tmp/out").unwrap().to_string(),
-        "file:///tmp/out"
-    );
-    assert!(matches!(
-        ChannelUrl::parse("https://example.invalid/general").unwrap(),
-        ChannelUrl::Remote(_)
-    ));
-}

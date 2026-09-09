@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{build_recipes::BuildRecipes, ci::Ci, route::Route, snapshot::Snapshot};
+use crate::commands::{ci::Ci, route::Route, snapshot::Snapshot};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -15,9 +15,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Top {
-    /// Recipe builds (vinca, pixi-native, `DeepStream` container).
-    #[command(subcommand)]
-    BuildRecipes(BuildRecipes),
     /// CI helpers for pixi-native ROS package repos.
     #[command(subcommand)]
     Ci(Ci),
@@ -32,7 +29,6 @@ impl Cli {
     /// Run the mise cli
     pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self.command {
-            Top::BuildRecipes(c) => c.run(),
             Top::Ci(c) => c.run(),
             Top::Snapshot(c) => c.run(),
             Top::Route(c) => c.run(),

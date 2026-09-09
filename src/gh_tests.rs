@@ -150,36 +150,6 @@ fn a_token_is_wrapped_so_it_cannot_be_formatted_into_a_message() {
     assert!(!format!("{t:?}").contains("tok-gh-fmt-case"));
 }
 
-// --- insteadOf cleanup ------------------------------------------------------
-
-// The token is part of the config *key*, so a rotated token writes a new key
-// instead of replacing the old one. Every one of ours has to be found.
-#[test]
-fn stale_instead_of_keys_finds_every_previously_written_rule() {
-    let output = "\
-url.https://x-access-token:old1@github.com/.insteadof https://github.com/
-url.https://x-access-token:old2@github.com/.insteadof https://github.com/
-";
-    assert_eq!(
-        stale_instead_of_keys(output),
-        vec![
-            "url.https://x-access-token:old1@github.com/.insteadof",
-            "url.https://x-access-token:old2@github.com/.insteadof",
-        ]
-    );
-}
-
-#[test]
-fn stale_instead_of_keys_leaves_unrelated_config_alone() {
-    let output = "\
-url.file:///tmp/bare.insteadof https://github.com/o/r
-url.https://x-access-token:t@github.com/.pushinsteadof https://github.com/
-user.name someone
-";
-    assert!(stale_instead_of_keys(output).is_empty());
-    assert!(stale_instead_of_keys("").is_empty());
-}
-
 // --- PrRef ------------------------------------------------------------------
 
 #[test]

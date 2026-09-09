@@ -216,8 +216,7 @@ impl<'de> Deserialize<'de> for PackageName {
 /// program `1.0.0+a` and `1.0.0+b` would be neither equal nor unordered.
 /// Refusing it beats either silently dropping it or ordering against the spec.
 ///
-/// Versions arriving from a channel are not parsed into this type at all — see
-/// `build_recipes::channel::ChannelIndex`.
+/// Versions arriving from a channel are not parsed into this type at all.
 #[derive(Debug, Clone)]
 pub struct Version {
     /// As written by whoever produced it. Never re-derived, so a round trip
@@ -632,68 +631,7 @@ impl FromStr for RemoteChannel {
 ///
 /// Holds the directory rather than a `Url`: the `file://` rendering is
 /// consumed by `pixi`, and building it by hand keeps the path byte-identical
-/// rather than percent-encoded.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct LocalChannel(PathBuf);
-
-impl LocalChannel {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self(dir.into())
-    }
-}
-
-impl fmt::Display for LocalChannel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "file://{}", self.0.display())
-    }
-}
-
-/// Either kind of channel, for the places that only forward a channel on
-/// (a solver argument, a `channels` array) and do not care which it is.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ChannelUrl {
-    Remote(RemoteChannel),
-    Local(LocalChannel),
-}
-
-impl ChannelUrl {
-    pub fn parse(s: &str) -> color_eyre::eyre::Result<Self> {
-        match s.strip_prefix("file://") {
-            Some(dir) => Ok(Self::Local(LocalChannel::new(dir))),
-            None => Ok(Self::Remote(RemoteChannel::parse(s)?)),
-        }
-    }
-}
-
-impl fmt::Display for ChannelUrl {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Remote(c) => fmt::Display::fmt(c, f),
-            Self::Local(c) => fmt::Display::fmt(c, f),
-        }
-    }
-}
-
-impl FromStr for ChannelUrl {
-    type Err = color_eyre::eyre::Report;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-    }
-}
-
-impl From<LocalChannel> for ChannelUrl {
-    fn from(c: LocalChannel) -> Self {
-        Self::Local(c)
-    }
-}
-
-impl From<RemoteChannel> for ChannelUrl {
-    fn from(c: RemoteChannel) -> Self {
-        Self::Remote(c)
-    }
-}
-
-// ---------------------------------------------------------------------------
+/// ---------------------------------------------------------------------------
 // pixi-native manifest
 // ---------------------------------------------------------------------------
 
