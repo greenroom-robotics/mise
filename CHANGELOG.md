@@ -1,3 +1,10 @@
+## [8.22.0](https://github.com/greenroom-robotics/mise/compare/mise@8.21.0...mise@8.22.0) (2026-09-09)
+
+
+### Features
+
+* remove build-recipes, now recipes-ctl build-recipes ([#103](https://github.com/greenroom-robotics/mise/issues/103)) ([4f215b8](https://github.com/greenroom-robotics/mise/commit/4f215b82f43ab987d07412de3d27ae856094da0b))
+
 ## [8.21.0](https://github.com/greenroom-robotics/mise/compare/mise@8.20.0...mise@8.21.0) (2026-09-09)
 
 
