@@ -1,14 +1,12 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{
-    build_recipes::BuildRecipes, ci::Ci, matrix::Matrix, route::Route, snapshot::Snapshot,
-};
+use crate::commands::{build_recipes::BuildRecipes, ci::Ci, route::Route, snapshot::Snapshot};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "mise",
     version,
-    about = "Build/matrix automation for a conda recipes repository"
+    about = "Build automation for a conda recipes repository"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -17,9 +15,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Top {
-    /// Build-matrix computation.
-    #[command(subcommand)]
-    Matrix(Matrix),
     /// Recipe builds (vinca, pixi-native, `DeepStream` container).
     #[command(subcommand)]
     BuildRecipes(BuildRecipes),
@@ -37,7 +32,6 @@ impl Cli {
     /// Run the mise cli
     pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self.command {
-            Top::Matrix(c) => c.run(),
             Top::BuildRecipes(c) => c.run(),
             Top::Ci(c) => c.run(),
             Top::Snapshot(c) => c.run(),
