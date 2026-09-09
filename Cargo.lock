@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "mise"
-version = "8.20.0"
+version = "8.21.0"
 dependencies = [
  "assert_cmd",
  "clap",

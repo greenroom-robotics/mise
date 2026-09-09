@@ -1,3 +1,10 @@
+## [8.21.0](https://github.com/greenroom-robotics/mise/compare/mise@8.20.0...mise@8.21.0) (2026-09-09)
+
+
+### Features
+
+* remove matrix compute, now recipes-ctl matrix ([#102](https://github.com/greenroom-robotics/mise/issues/102)) ([9f34ba7](https://github.com/greenroom-robotics/mise/commit/9f34ba79de51c7e117574a28da21abe21873ddbd))
+
 ## [8.20.0](https://github.com/greenroom-robotics/mise/compare/mise@8.19.3...mise@8.20.0) (2026-09-07)
 
 

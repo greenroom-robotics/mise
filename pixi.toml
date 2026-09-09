@@ -16,7 +16,7 @@ test = "cargo nextest run --locked --color always && cargo test --doc --locked"
 
 [package]
 name = "mise"
-version = "8.20.0"
+version = "8.21.0"
 
 [package.build-dependencies]
 rust = "1.95.*"
