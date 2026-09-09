@@ -14,10 +14,6 @@
 //!   `insteadOf` rewrites that redirect would-be network URLs to local
 //!   `file://` remotes.
 //!
-//! mise's in-process HTTP calls can't be shimmed on PATH (and git's
-//! `http.proxy` never applies to them), so they get a [`FixtureServer`] on
-//! 127.0.0.1 plus the `MISE_GITHUB_RAW_URL` override.
-//!
 //! Commands run with a cleared environment; only PATH, HOME, TMPDIR, the git
 //! config overrides and per-test vars are present, so host git config
 //! (including insteadOf rules) and stray GITHUB_*/GH_* tokens cannot leak in.
@@ -197,14 +193,6 @@ impl E2e {
         }
     }
 
-    /// Canned stderr for `prog` invoked with a first arg pair matching `args`.
-    /// For the paths where mise classifies a subprocess failure by what it
-    /// said, not just by its exit code.
-    pub fn respond_stderr(&self, prog: Shim, args: &[&str], stderr: &str) {
-        let stem = self.response_stem(prog, args);
-        fs::write(stem.with_extension("stderr"), stderr).unwrap();
-    }
-
     /// Canned exit code for `prog` invoked with a first arg pair matching
     /// `args` (stdout stays empty unless also registered).
     pub fn respond_exit(&self, prog: Shim, args: &[&str], code: i32) {
@@ -298,108 +286,6 @@ impl E2e {
             local.display()
         );
         fs::write(&self.gitconfig, cfg).unwrap();
-    }
-}
-
-/// A throwaway HTTP server on 127.0.0.1 serving a fixed path → body map.
-///
-/// mise reaches GitHub's raw-content host with in-process `ureq` calls, which
-/// no PATH shim can intercept. Pointing `MISE_GITHUB_RAW_URL` at one of these
-/// is what makes those paths testable.
-pub struct FixtureServer {
-    base: String,
-    addr: std::net::SocketAddr,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    handle: Option<std::thread::JoinHandle<()>>,
-}
-
-impl FixtureServer {
-    /// Serve `routes` (request path without query string → response body).
-    /// Any other path answers 404.
-    pub fn start(routes: std::collections::BTreeMap<String, String>) -> Self {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fixture server");
-        let addr = listener.local_addr().unwrap();
-        let port = addr.port();
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let thread_stop = std::sync::Arc::clone(&stop);
-        let handle = std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                if thread_stop.load(std::sync::atomic::Ordering::SeqCst) {
-                    break;
-                }
-                let Ok(mut stream) = stream else { continue };
-                let Ok(clone) = stream.try_clone() else {
-                    continue;
-                };
-                let mut reader = BufReader::new(clone);
-                let mut request_line = String::new();
-                if reader.read_line(&mut request_line).is_err() {
-                    continue;
-                }
-                // Drain the headers so the client's write side completes
-                // before we answer.
-                loop {
-                    let mut line = String::new();
-                    match reader.read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) if line.trim().is_empty() => break,
-                        Ok(_) => {}
-                    }
-                }
-                let path = request_line
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/")
-                    .split('?')
-                    .next()
-                    .unwrap_or("/")
-                    .to_string();
-                let response = routes.get(&path).map_or_else(
-                    || {
-                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\
-                         Connection: close\r\n\r\n"
-                            .to_string()
-                    },
-                    |body| {
-                        format!(
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\
-                             Content-Type: text/plain; charset=utf-8\r\n\
-                             Connection: close\r\n\r\n{body}",
-                            body.len()
-                        )
-                    },
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        Self {
-            base: format!("http://127.0.0.1:{port}"),
-            addr,
-            stop,
-            handle: Some(handle),
-        }
-    }
-
-    /// Value for `MISE_GITHUB_RAW_URL`.
-    pub fn base_url(&self) -> &str {
-        &self.base
-    }
-}
-
-impl Drop for FixtureServer {
-    /// Shut the accept loop down and reclaim the thread and the port. Without
-    /// this each server outlives its test, and a suite that starts one per
-    /// test leaks both for the life of the test binary.
-    fn drop(&mut self) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        // The loop is parked in a blocking `accept`; one throwaway connection
-        // wakes it so it can observe the flag.
-        let _ = std::net::TcpStream::connect(self.addr);
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
     }
 }
 

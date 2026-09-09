@@ -2,8 +2,7 @@
 //!
 //! * **Read** — [`Manifest`] / [`PackageManifest`], a serde model. Lossy
 //!   (comments, key order and spacing are gone) and cannot write.
-//! * **Write** — the `toml_edit` functions ([`set_package_version`],
-//!   [`set_build_number`], [`resolve_path_deps`], [`prepend_channels`]).
+//! * **Write** — the `toml_edit` function [`set_package_version`].
 //!   A rewritten manifest's diff must be limited to the key touched, so
 //!   never round-trip a manifest through the serde model to change it.
 //!
@@ -16,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
 use crate::recipe::{Recipe, RecipeNoarch};
-use crate::types::{Arch, ChannelUrl, PackageName, SiblingPinStyle, Version};
+use crate::types::{Arch, PackageName, Version};
 
 /// The dependency tables a pixi package can declare, in scan order.
 ///
@@ -608,195 +607,6 @@ pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String>
     }
     package["version"] = toml_edit::value(version.to_string());
     Ok(doc.to_string())
-}
-
-/// Rewrite `[package.build.config].build-number` in `manifest_path` to `value`,
-/// creating the intermediate tables if absent.
-pub fn set_build_number(manifest_path: &Path, value: u64) -> Result<()> {
-    let text = std::fs::read_to_string(manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .with_context(|| format!("parse {} as TOML", manifest_path.display()))?;
-
-    let package = doc
-        .get_mut("package")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("{}: missing [package] table", manifest_path.display())
-        })?;
-
-    if !package.contains_key("build") {
-        package.insert("build", toml_edit::table());
-    }
-    let build = package
-        .get_mut("build")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "{}: [package.build] exists but is not a table",
-                manifest_path.display(),
-            )
-        })?;
-
-    if !build.contains_key("config") {
-        build.insert("config", toml_edit::table());
-    }
-    let config = build
-        .get_mut("config")
-        .and_then(toml_edit::Item::as_table_like_mut)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "{}: [package.build.config] exists but is not a table",
-                manifest_path.display(),
-            )
-        })?;
-
-    config.insert(
-        "build-number",
-        toml_edit::value(i64::try_from(value).context("build-number exceeds i64")?),
-    );
-
-    std::fs::write(manifest_path, doc.to_string())
-        .with_context(|| format!("write {}", manifest_path.display()))?;
-    Ok(())
-}
-
-/// Front-insert channels into `[workspace].channels`, so local just-built
-/// artifacts win over the real channel during the solve.
-pub fn prepend_channels(manifest_path: &Path, channels: &[ChannelUrl]) -> Result<()> {
-    let text = std::fs::read_to_string(manifest_path)?;
-    let mut doc: toml_edit::DocumentMut = text.parse()?;
-    let arr = doc
-        .get_mut("workspace")
-        .and_then(|w| w.get_mut("channels"))
-        .and_then(toml_edit::Item::as_array_mut)
-        .ok_or_else(|| {
-            color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
-        })?;
-    for (i, ch) in channels.iter().enumerate() {
-        arr.insert(i, ch.to_string());
-    }
-    std::fs::write(manifest_path, doc.to_string())?;
-    Ok(())
-}
-
-/// A sibling package whose `path =` dep was rewritten to a derived pin.
-///
-/// The pin is `>=version,<major+1` in the temp checkout. `version` is the
-/// exact floor — availability checks and fallback builds key on it, never on
-/// "anything in range", so a coupled release always builds against the
-/// fresh sibling.
-#[derive(Debug)]
-pub struct ResolvedDep {
-    /// The dependency *key* in the consumer's manifest — the channel artifact
-    /// name, not necessarily the sibling's `package.name`.
-    pub name: PackageName,
-    pub version: Version,
-    /// The sibling's pixi.toml inside the same checkout.
-    pub manifest: PathBuf,
-}
-
-/// Rewrite every non-self `path =` dep in the manifest to a version pin in `style`.
-///
-/// The version is read from the sibling manifest at the same rev, so the
-/// derived pin is deterministic: same rev -> same sibling manifest -> same
-/// pin. The default [`SiblingPinStyle::Range`] lets already-published
-/// consumers accept future sibling releases within the major without a
-/// re-release; [`SiblingPinStyle::Exact`] is the lockstep opt-in.
-///
-/// For ephemeral temp checkouts only; the committed manifest keeps its path
-/// deps.
-pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result<Vec<ResolvedDep>> {
-    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new(""));
-    let text = std::fs::read_to_string(manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let mut doc: toml_edit::DocumentMut = text
-        .parse()
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
-
-    let mut resolved = Vec::new();
-    for_each_dep_table_mut(&mut doc, &mut |table| {
-        rewrite_path_deps_in(table, manifest_dir, style, &mut resolved)
-    })?;
-
-    std::fs::write(manifest_path, doc.to_string())?;
-    Ok(resolved)
-}
-
-/// Apply `f` to each dependency table present in `doc`, in [`DEP_TABLES`] order.
-fn for_each_dep_table_mut(
-    doc: &mut toml_edit::DocumentMut,
-    f: &mut dyn FnMut(&mut dyn toml_edit::TableLike) -> Result<()>,
-) -> Result<()> {
-    for table_path in DEP_TABLES {
-        if let Some(table) = table_at_mut(doc.as_item_mut(), table_path) {
-            f(table)?;
-        }
-    }
-    Ok(())
-}
-
-/// Walk `path` from `item` to the table it names.
-fn table_at_mut<'a>(
-    item: &'a mut toml_edit::Item,
-    path: &[&str],
-) -> Option<&'a mut dyn toml_edit::TableLike> {
-    match path.split_first() {
-        None => item.as_table_like_mut(),
-        Some((seg, rest)) => table_at_mut(item.get_mut(seg)?, rest),
-    }
-}
-
-/// Rewrite the sibling `path =` deps of one table to a `style` version pin.
-fn rewrite_path_deps_in(
-    table: &mut dyn toml_edit::TableLike,
-    manifest_dir: &Path,
-    style: SiblingPinStyle,
-    resolved: &mut Vec<ResolvedDep>,
-) -> Result<()> {
-    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
-    for key in keys {
-        let Some(item) = table.get(&key) else {
-            continue;
-        };
-        let Some(path) = item
-            .as_table_like()
-            .and_then(|t| t.get("path"))
-            .and_then(|p| p.as_str())
-        else {
-            continue;
-        };
-        if path == "." {
-            continue; // self-as-workspace-member idiom
-        }
-        let sib_manifest = manifest_dir.join(path).join(PIXI_TOML);
-        let sib_text = std::fs::read_to_string(&sib_manifest).with_context(|| {
-            format!(
-                "path dep {key}: no pixi.toml at {} in checkout",
-                sib_manifest.display()
-            )
-        })?;
-        // Only `package.version` is read from the sibling manifest: the
-        // dependency key, not the sibling's `package.name`, is the channel
-        // artifact name.
-        let version = PackageManifest::parse(&sib_text)
-            .with_context(|| {
-                format!(
-                    "path dep {key}: parsing sibling manifest {}",
-                    sib_manifest.display()
-                )
-            })?
-            .version()
-            .clone();
-        table.insert(&key, toml_edit::value(style.pin(&version)));
-        resolved.push(ResolvedDep {
-            name: PackageName::new(key)?,
-            version,
-            manifest: sib_manifest,
-        });
-    }
-    Ok(())
 }
 
 #[cfg(test)]

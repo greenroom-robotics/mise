@@ -1,6 +1,6 @@
 //! Git subprocess wrappers, built on [`crate::process`]. GitHub API calls
-//! live in [`crate::gh`]; git reads credentials from the `insteadOf` rule
-//! `gh::ensure_git_auth` installs.
+//! live in [`crate::gh`]; git reads credentials from the `insteadOf` rules
+//! the caller's environment installs.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ pub fn fetch_rev(dest: &Path, url: &str, rev: &Sha40) -> color_eyre::eyre::Resul
 /// Init and check out the repo's git submodules, recursively, in an existing
 /// checkout.
 ///
-/// Relies on the `insteadOf` rules `gh::ensure_git_auth` installs: they cover
+/// Relies on `insteadOf` rules in the git config that cover
 /// both the https and `git@github.com:` remote forms, so private submodules
 /// pinned by SSH URL in `.gitmodules` fetch with the same token. `--depth=1`
 /// works for arbitrary pinned SHAs on GitHub (it allows direct SHA fetches).

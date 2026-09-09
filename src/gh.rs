@@ -13,7 +13,7 @@ use color_eyre::eyre::WrapErr;
 use serde::Deserialize;
 
 use crate::consts::DEFAULT_BRANCH;
-use crate::manifest::{Noarch, PackageManifest};
+use crate::manifest::PackageManifest;
 use crate::process;
 use crate::repo::Repo;
 use crate::secret::{ExposeSecret, Secret};
@@ -150,59 +150,6 @@ fn token_from(lookup: impl Fn(&str) -> Option<String>) -> Option<Secret> {
 /// The `insteadOf` rule mise installs is keyed on a URL that embeds the token,
 /// so a new token means a new config key rather than a new value for the old
 /// one. This prefix identifies the whole family for removal.
-const INSTEAD_OF_PREFIX: &str = "url.https://x-access-token:";
-
-/// Config keys from `git config --get-regexp` output that are mise-installed
-/// `insteadOf` rules. Git lowercases the variable name (`insteadof`) but keeps
-/// the URL subsection verbatim, so match accordingly.
-fn stale_instead_of_keys(get_regexp_output: &str) -> Vec<String> {
-    get_regexp_output
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|key| {
-            key.starts_with(INSTEAD_OF_PREFIX) && key.to_ascii_lowercase().ends_with(".insteadof")
-        })
-        .map(str::to_string)
-        .collect()
-}
-
-/// Teach `git` to authenticate GitHub HTTPS remotes with [`token`], by writing
-/// an `insteadOf` rewrite into the global git config.
-///
-/// Every previously-installed rule is removed first: the token is part of the
-/// config *key*, so a rotated token writes a second key rather than replacing
-/// the first, and on a long-lived runner revoked tokens would accumulate as
-/// competing rules for the same prefix.
-pub fn ensure_git_auth() -> color_eyre::eyre::Result<()> {
-    let existing = process::capture_probe(
-        "git",
-        &[
-            "config",
-            "--global",
-            "--get-regexp",
-            "^url\\.https://x-access-token:",
-        ],
-    )?
-    .output()
-    .unwrap_or_default();
-    for key in stale_instead_of_keys(&existing) {
-        process::git(&["config", "--global", "--unset-all", &key])?;
-    }
-
-    if let Some(t) = token() {
-        let key = format!(
-            "{INSTEAD_OF_PREFIX}{}@github.com/.insteadOf",
-            t.expose_secret()
-        );
-        process::git(&["config", "--global", &key, "https://github.com/"])?;
-        // Also claim the SSH remote form, mapped straight to the token URL:
-        // git applies insteadOf rewrites once (no chaining), so an ssh→https
-        // rewrite would not then pick up the rule above.
-        process::git(&["config", "--global", "--add", &key, "git@github.com:"])?;
-    }
-    Ok(())
-}
-
 /// An override base URL, normalized to no trailing slash; callers supply the
 /// leading `/` of the path.
 fn base_url(var: &str, default: &str) -> String {
@@ -273,22 +220,6 @@ pub fn fetch_upstream_manifest(
     .with_context(|| format!("entry {}", entry.name))?;
     PackageManifest::parse(&text)
         .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))
-}
-
-pub fn fetch_upstream_noarch(
-    entry: &PixiNativeEntry,
-    upstream: &PackageManifest,
-) -> color_eyre::eyre::Result<Option<Noarch>> {
-    upstream
-        .noarch(|| {
-            fetch_raw_file(
-                entry.url.owner(),
-                entry.url.repo(),
-                entry.rev.as_str(),
-                &entry.recipe_rel_path(),
-            )
-        })
-        .with_context(|| format!("entry {}: classify upstream as noarch", entry.name))
 }
 
 /// Paths the event touched, or [`ChangedFiles::All`] when nothing can be diffed.

@@ -5,7 +5,6 @@ Build and release automation for Greenroom's conda/pixi ROS packaging: the `mise
 ## CLI
 
 ```
-mise build-recipes # run the builds (vinca / pixi-native / DeepStream container)
 mise ci            # test, build, and release pixi-native ROS package repos
 mise snapshot      # refresh rosdistro_snapshot.yaml and the vinca-cache repodata
 ```

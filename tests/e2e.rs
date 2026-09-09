@@ -13,8 +13,6 @@
 #[path = "e2e/harness.rs"]
 mod harness;
 
-#[path = "e2e/build_recipes_pixi.rs"]
-mod build_recipes_pixi;
 #[path = "e2e/recipes_pr.rs"]
 mod recipes_pr;
 #[path = "e2e/release.rs"]

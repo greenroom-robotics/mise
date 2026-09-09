@@ -37,7 +37,7 @@ pub struct RecipesPr {
     #[arg(long)]
     pub allow_missing_recipe: bool,
     /// Repeatable. Packages whose pixi-native entry gets `lfs: true`, so
-    /// `mise build-recipes pixi` pulls their LFS objects before building.
+    /// `recipes-ctl build-recipes pixi` pulls their LFS objects before building.
     /// Authoritative: a package released without being listed has any existing
     /// `lfs: true` removed.
     #[arg(long = "lfs-package")]
