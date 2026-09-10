@@ -37,6 +37,7 @@ pub const DEP_TABLES: &[&[&str]] = &[
 
 /// A parsed `pixi.toml`.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum Manifest {
     /// No `[package]` table: a dev/test environment for something this repo
     /// does not publish — no version to release, nothing for `pixi build`.
@@ -103,6 +104,8 @@ struct PackageSection {
 struct BuildSection {
     #[serde(default)]
     backend: Option<BuildBackend>,
+    #[serde(default, rename = "build-number")]
+    build_number: Option<u64>,
     #[serde(default)]
     config: Option<BuildConfig>,
 }
@@ -233,13 +236,14 @@ impl PackageManifest {
         &self.deps
     }
 
+    /// `[package.build].build-number`, else the deprecated
+    /// `[package.build.config].build-number`, else 0.
     #[must_use]
     pub fn build_number(&self) -> u64 {
-        self.package
-            .build
-            .as_ref()
-            .and_then(|b| b.config.as_ref())
-            .map_or(0, |c| c.build_number)
+        self.package.build.as_ref().map_or(0, |b| {
+            b.build_number
+                .unwrap_or_else(|| b.config.as_ref().map_or(0, |c| c.build_number))
+        })
     }
 
     pub fn noarch(&self, recipe: impl FnOnce() -> Result<String>) -> Result<Option<Noarch>> {

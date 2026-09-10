@@ -122,10 +122,31 @@ fn parses_minimal() {
 fn parses_build_number() {
     let p = PackageManifest::parse(
         "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
+         [package.build]\nbuild-number = 5\n",
+    )
+    .unwrap();
+    assert_eq!(p.build_number(), 5);
+}
+
+#[test]
+fn falls_back_to_deprecated_config_build_number() {
+    let p = PackageManifest::parse(
+        "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
          [package.build.config]\nbuild-number = 5\n",
     )
     .unwrap();
     assert_eq!(p.build_number(), 5);
+}
+
+#[test]
+fn build_section_build_number_wins_over_config() {
+    let p = PackageManifest::parse(
+        "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
+         [package.build]\nbuild-number = 7\n\
+         [package.build.config]\nbuild-number = 5\n",
+    )
+    .unwrap();
+    assert_eq!(p.build_number(), 7);
 }
 
 #[test]
