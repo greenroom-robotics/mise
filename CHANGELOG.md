@@ -1,3 +1,10 @@
+## [8.22.1](https://github.com/greenroom-robotics/mise/compare/mise@8.22.0...mise@8.22.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* read build-number from [package.build], fall back to config ([#104](https://github.com/greenroom-robotics/mise/issues/104)) ([dda0dcc](https://github.com/greenroom-robotics/mise/commit/dda0dcc6242c250c3c667bc685a95afbb245f9e7))
+
 ## [8.22.0](https://github.com/greenroom-robotics/mise/compare/mise@8.21.0...mise@8.22.0) (2026-09-09)
 
 
