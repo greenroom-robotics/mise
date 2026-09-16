@@ -52,8 +52,8 @@ pub enum RunnerSize {
 
 /// A pixi-native build bucket: a runner size plus an optional high-memory flavor.
 ///
-/// Renders as `16cpu` / `16cpu-himem` — the string that rides the matrix
-/// `runner-size` field, artifact names, and `--runner-size`.
+/// Renders as `16cpu` / `16cpu-himem` / `16cpu-himem-200gb` — the string that
+/// rides the matrix `runner-size` field, artifact names, and `--runner-size`.
 ///
 /// `himem` swaps the `RunsOn` instance family from the default c-family
 /// (2GB/cpu) to the m-family (4GB/cpu) for packages whose template-heavy
@@ -62,6 +62,7 @@ pub enum RunnerSize {
 pub struct RunnerSpec {
     pub size: RunnerSize,
     pub himem: bool,
+    pub volume: Option<u32>,
 }
 
 impl fmt::Display for Arch {
@@ -645,6 +646,9 @@ pub struct PixiNativeEntry {
     /// Run this entry's bucket on m-family (4GB/cpu) instances instead of the
     /// default c-family (2GB/cpu). See [`RunnerSpec`].
     pub himem: bool,
+    /// Extra runner disk in GB, added as `/volume={n}gb` to the runs-on label.
+    /// None keeps the runner's default.
+    pub volume: Option<u32>,
     /// Pull the entry's Git LFS objects after checkout. Off by default:
     /// `fetch_rev` leaves pointers in place, which is what a package with no
     /// LFS-tracked build inputs wants.
@@ -672,6 +676,7 @@ impl PixiNativeEntry {
         RunnerSpec {
             size: self.runner_size,
             himem: self.himem,
+            volume: self.volume,
         }
     }
 
@@ -715,6 +720,8 @@ struct PixiNativeEntryRaw {
     #[serde(default)]
     himem: bool,
     #[serde(default)]
+    volume: Option<u32>,
+    #[serde(default)]
     lfs: bool,
     #[serde(default)]
     submodules: bool,
@@ -745,6 +752,7 @@ impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
             subdir: raw.subdir,
             runner_size: raw.runner_size.unwrap_or_default(),
             himem: raw.himem,
+            volume: raw.volume,
             lfs: raw.lfs,
             submodules: raw.submodules,
             pin_style: if raw.exact_pins {
@@ -859,6 +867,9 @@ impl fmt::Display for RunnerSpec {
         if self.himem {
             f.write_str("-himem")?;
         }
+        if let Some(volume) = self.volume {
+            write!(f, "-{volume}gb")?;
+        }
         Ok(())
     }
 }
@@ -866,12 +877,19 @@ impl fmt::Display for RunnerSpec {
 impl FromStr for RunnerSpec {
     type Err = color_eyre::eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (s, volume) = s.rsplit_once('-').map_or((s, None), |(base, suffix)| {
+            suffix
+                .strip_suffix("gb")
+                .and_then(|gb| gb.parse::<u32>().ok())
+                .map_or((s, None), |gb| (base, Some(gb)))
+        });
         let (size, himem) = s
             .strip_suffix("-himem")
             .map_or((s, false), |base| (base, true));
         Ok(Self {
             size: size.parse()?,
             himem,
+            volume,
         })
     }
 }

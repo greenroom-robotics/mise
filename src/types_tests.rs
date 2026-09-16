@@ -34,7 +34,14 @@ fn runner_size_serde() {
 
 #[test]
 fn runner_spec_string_roundtrip() {
-    for s in ["4cpu", "16cpu", "16cpu-himem", "4cpu-himem"] {
+    for s in [
+        "4cpu",
+        "16cpu",
+        "16cpu-himem",
+        "4cpu-himem",
+        "16cpu-200gb",
+        "16cpu-himem-200gb",
+    ] {
         let spec: RunnerSpec = s.parse().unwrap();
         assert_eq!(spec.to_string(), s);
     }
@@ -42,7 +49,16 @@ fn runner_spec_string_roundtrip() {
         "16cpu-himem".parse::<RunnerSpec>().unwrap(),
         RunnerSpec {
             size: RunnerSize::Cpu16,
-            himem: true
+            himem: true,
+            volume: None,
+        }
+    );
+    assert_eq!(
+        "16cpu-himem-200gb".parse::<RunnerSpec>().unwrap(),
+        RunnerSpec {
+            size: RunnerSize::Cpu16,
+            himem: true,
+            volume: Some(200),
         }
     );
     assert!("himem".parse::<RunnerSpec>().is_err());
