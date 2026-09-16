@@ -1,3 +1,10 @@
+## [8.23.2](https://github.com/greenroom-robotics/mise/compare/mise@8.23.1...mise@8.23.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* better secret redaction ([dca81fe](https://github.com/greenroom-robotics/mise/commit/dca81fe773cd2fa409679a6ea4b05ca64857e3bb))
+
 ## [8.23.1](https://github.com/greenroom-robotics/mise/compare/mise@8.23.0...mise@8.23.1) (2026-09-16)
 
 
