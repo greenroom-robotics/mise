@@ -1,3 +1,10 @@
+## [8.23.0](https://github.com/greenroom-robotics/mise/compare/mise@8.22.1...mise@8.23.0) (2026-09-16)
+
+
+### Features
+
+* add volume to RunnerSpec and pixi native entries ([#105](https://github.com/greenroom-robotics/mise/issues/105)) ([e7831cc](https://github.com/greenroom-robotics/mise/commit/e7831cc17ac48ccd6aa00a8da6213396fb401b8c))
+
 ## [8.22.1](https://github.com/greenroom-robotics/mise/compare/mise@8.22.0...mise@8.22.1) (2026-09-10)
 
 
