@@ -114,6 +114,37 @@ fn spawn_failure_is_reported_as_such() {
     assert!(format!("{err:#}").contains("spawn"), "{err:#}");
 }
 
+// A caller that hands a credential straight to a subprocess never registers it,
+// so the flag name is the only thing that marks the next argument as secret.
+#[test]
+fn a_credential_named_flag_redacts_its_value() {
+    let labelled = label(
+        "rattler-index",
+        &[
+            "azblob",
+            "https://acct.blob.core.windows.net/general",
+            "--sas-token",
+            "skoid=abc&sig=PEeXeTR7O27VbQ%3D",
+            "--max-parallel",
+            "50",
+        ],
+    );
+    assert!(!labelled.contains("sig="), "{labelled}");
+    assert!(labelled.contains("--sas-token [REDACTED]"), "{labelled}");
+    assert!(labelled.contains("--max-parallel 50"), "{labelled}");
+}
+
+#[test]
+fn a_credential_named_flag_redacts_an_inline_value() {
+    let labelled = label(
+        "gh",
+        &["auth", "--with-token=ghp_realtoken", "--hostname=x"],
+    );
+    assert!(!labelled.contains("ghp_realtoken"), "{labelled}");
+    assert!(labelled.contains("--with-token=[REDACTED]"), "{labelled}");
+    assert!(labelled.contains("--hostname=x"), "{labelled}");
+}
+
 // The reason `Secret` registers its plaintext: by the time a tokenized clone
 // URL reaches the subprocess it is an ordinary String, so redaction has to
 // happen where the label is built.

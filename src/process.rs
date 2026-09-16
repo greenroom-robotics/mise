@@ -12,6 +12,9 @@
 //! Every command label that reaches a log or an error goes through
 //! [`crate::secret::scrub`], so a token embedded in an argument (a tokenized
 //! clone URL, a `git config url.https://x-access-token:…` key) is redacted.
+//! A credential that was never wrapped in [`crate::secret::Secret`] is not in
+//! that registry, so the value of a credential-named flag is redacted on the
+//! flag name alone as well.
 
 use std::ffi::OsStr;
 use std::fmt::Display;
@@ -26,14 +29,44 @@ use crate::secret;
 /// enough for a git/gh/pixi diagnostic, short enough not to bury the message.
 const STDERR_LIMIT: usize = 2000;
 
-/// Human-readable `prog arg arg`, with any registered secret redacted. Lossy:
-/// a label is diagnostic text, and a non-UTF-8 argument must not turn a
-/// runnable command into an error.
+/// A flag whose value is a credential, matched on its last hyphenated word so
+/// that a vendor prefix (`--sas-token`, `--api-key`) needs no enumeration.
+fn flag_hides_its_value(arg: &str) -> bool {
+    let Some(name) = arg.strip_prefix('-') else {
+        return false;
+    };
+    let name = name.trim_start_matches('-').to_ascii_lowercase();
+    matches!(
+        name.rsplit('-').next(),
+        Some("token" | "secret" | "password" | "key")
+    )
+}
+
+/// Human-readable `prog arg arg`, with any registered secret and the value of
+/// any credential-named flag redacted, in both the `--token v` and `--token=v`
+/// spellings. Lossy: a label is diagnostic text, and a non-UTF-8 argument must
+/// not turn a runnable command into an error.
 fn label(prog: &str, args: &[impl AsRef<OsStr>]) -> String {
     let mut s = prog.to_string();
+    let mut value_is_secret = false;
     for a in args {
+        let a = a.as_ref().to_string_lossy();
         s.push(' ');
-        s.push_str(&a.as_ref().to_string_lossy());
+        match a.split_once('=') {
+            _ if value_is_secret => {
+                s.push_str(secret::REDACTED);
+                value_is_secret = false;
+            }
+            Some((flag, _)) if flag_hides_its_value(flag) => {
+                s.push_str(flag);
+                s.push('=');
+                s.push_str(secret::REDACTED);
+            }
+            _ => {
+                s.push_str(&a);
+                value_is_secret = flag_hides_its_value(&a);
+            }
+        }
     }
     secret::scrub(&s)
 }
