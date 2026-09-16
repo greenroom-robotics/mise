@@ -88,13 +88,15 @@ runs:
     # configures a global `url.insteadOf` rewrite that embeds the App token in
     # every github.com URL, but the caller's checkout persisted the default
     # GITHUB_TOKEN in the remote's auth extraheader, and that Authorization
-    # header shadows the rewritten URL's App token. Drop the extraheader so
+    # header shadows the rewritten URL's App token. Reset the extraheader so
     # @semantic-release/git pushes via the App token instead of the default one.
+    # An empty value empties the header list; --unset-all would miss checkout
+    # >=v5, which keeps the header in a RUNNER_TEMP file pulled in via includeIf.
     - name: Push release as the App bot
       shell: bash
       run: |
         set -euo pipefail
-        git config --local --unset-all "http.https://github.com/.extraheader" || true
+        git config --local --add "http.https://github.com/.extraheader" ""
 
     - name: Run mise ci release
       shell: bash

@@ -71,9 +71,11 @@ runs:
         set -euo pipefail
         # actions/checkout persists GITHUB_TOKEN in the remote's auth
         # extraheader, and that Authorization header shadows the rewritten
-        # URL's App token. Drop it so the pushes below go out as the App —
-        # only the App has the branch-ruleset bypass.
-        git config --local --unset-all "http.https://github.com/.extraheader" || true
+        # URL's App token. Reset it so the pushes below go out as the App —
+        # only the App has the branch-ruleset bypass. An empty value empties
+        # the header list; --unset-all would miss checkout >=v5, which keeps
+        # the header in a RUNNER_TEMP file pulled in via includeIf.
+        git config --local --add "http.https://github.com/.extraheader" ""
         manifests=($PIXI_TOML)
         # bump-pixi validates every path before writing any file, so a bad
         # path aborts with the working tree untouched.
