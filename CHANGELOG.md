@@ -1,3 +1,10 @@
+## [8.23.1](https://github.com/greenroom-robotics/mise/compare/mise@8.23.0...mise@8.23.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* reset checkout extraheader so pushes go out as the App on checkout v6 ([#106](https://github.com/greenroom-robotics/mise/issues/106)) ([443d9fe](https://github.com/greenroom-robotics/mise/commit/443d9fecd0312e058eec4c7eb97748b43374027b))
+
 ## [8.23.0](https://github.com/greenroom-robotics/mise/compare/mise@8.22.1...mise@8.23.0) (2026-09-16)
 
 
