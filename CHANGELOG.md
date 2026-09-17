@@ -1,3 +1,10 @@
+## [8.25.0](https://github.com/greenroom-robotics/mise/compare/mise@8.24.0...mise@8.25.0) (2026-09-17)
+
+
+### Features
+
+* add run_teed to send subprocess output to your writers ([#108](https://github.com/greenroom-robotics/mise/issues/108)) ([d0708d0](https://github.com/greenroom-robotics/mise/commit/d0708d07bafbc9fd549788cac1e537535cce349e))
+
 ## [8.24.0](https://github.com/greenroom-robotics/mise/compare/mise@8.23.2...mise@8.24.0) (2026-09-17)
 
 
