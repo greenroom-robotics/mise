@@ -1,3 +1,10 @@
+## [8.24.0](https://github.com/greenroom-robotics/mise/compare/mise@8.23.2...mise@8.24.0) (2026-09-17)
+
+
+### Features
+
+* expose the cores a runner size promises ([#107](https://github.com/greenroom-robotics/mise/issues/107)) ([a8e5f56](https://github.com/greenroom-robotics/mise/commit/a8e5f561ccac0be37d6bf1d18685be875d0091fa))
+
 ## [8.23.2](https://github.com/greenroom-robotics/mise/compare/mise@8.23.1...mise@8.23.2) (2026-09-16)
 
 
