@@ -835,6 +835,20 @@ impl FromStr for RecipeName {
     }
 }
 
+impl RunnerSize {
+    /// The cores the name promises, for sizing a runner or for budgeting a
+    /// build that shares one with others.
+    #[must_use]
+    pub const fn cpus(self) -> usize {
+        match self {
+            Self::Cpu4 => 4,
+            Self::Cpu8 => 8,
+            Self::Cpu16 => 16,
+            Self::Cpu32 => 32,
+        }
+    }
+}
+
 impl fmt::Display for RunnerSize {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
