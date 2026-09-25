@@ -117,6 +117,7 @@ runs:
         installer="${RUNNER_TEMP}/install-pixi-gr.sh"
         curl -fsSL "https://github.com/greenroom-robotics/pixi/releases/download/pixi-gr@${PIXI_GR_VERSION}/install.sh" -o "$installer"
         sh "$installer"
+        echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
     # Write a dedicated pixi manifest that depends solely on mise, then install
