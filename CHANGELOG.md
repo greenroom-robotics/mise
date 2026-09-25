@@ -1,3 +1,10 @@
+## [8.26.0](https://github.com/greenroom-robotics/mise/compare/mise@8.25.0...mise@8.26.0) (2026-09-25)
+
+
+### Features
+
+* install pixi-gr 0.80.1 with channel grants from ros-recipes ([#109](https://github.com/greenroom-robotics/mise/issues/109)) ([0b41e89](https://github.com/greenroom-robotics/mise/commit/0b41e89f2808a462754c80443de8089bb66adc78))
+
 ## [8.25.0](https://github.com/greenroom-robotics/mise/compare/mise@8.24.0...mise@8.25.0) (2026-09-17)
 
 
