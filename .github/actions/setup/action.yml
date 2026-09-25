@@ -21,7 +21,7 @@ inputs:
   pixi-version:
     description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: "0.73.1"
+    default: "0.80.1"
   skip-pixi:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
     required: false
@@ -80,6 +80,30 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
+    # Container names are masked before any step can print them: this action
+    # also runs in public repos, whose logs are public.
+    - name: Install pixi channel grants
+      if: inputs.skip-pixi != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$HOME/.pixi"
+        if ! gh api -H "Accept: application/vnd.github.raw" \
+            repos/greenroom-robotics/ros-recipes/contents/ci/azure-options.toml \
+            > "$HOME/.pixi/config.toml"; then
+          echo "::error::could not fetch pixi channel grants; does the GitHub App have read access to ros-recipes?" >&2
+          exit 1
+        fi
+        python3 - <<'EOF'
+        import pathlib, tomllib
+        config = tomllib.loads((pathlib.Path.home() / ".pixi/config.toml").read_text())
+        for account in config["azure-options"].values():
+            for container in account["auth"]:
+                print(f"::add-mask::{container}")
+        EOF
+
     # Install the Greenroom pixi fork — upstream pixi cannot read our az://
     # channels. Reading az:// only needs the ambient azure/login above (SAS is
     # minted from it); explicit SAS is only required for writes (reindex).
@@ -93,6 +117,7 @@ runs:
         installer="${RUNNER_TEMP}/install-pixi-gr.sh"
         curl -fsSL "https://github.com/greenroom-robotics/pixi/releases/download/pixi-gr@${PIXI_GR_VERSION}/install.sh" -o "$installer"
         sh "$installer"
+        echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
         echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
     # Write a dedicated pixi manifest that depends solely on mise, then install
