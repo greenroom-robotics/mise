@@ -1,0 +1,24 @@
+name: Install pixi channel grants
+description: 'Merge the Azure channel grants from ros-recipes into ~/.pixi/config.toml, replacing only its `azure-options` key. Idempotent, and independent of pixi being installed. Public action — callable directly from custom workflows.'
+author: Greenroom Robotics
+
+inputs:
+  gh-token:
+    description: GitHub token with read access to greenroom-robotics/ros-recipes.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install pixi channel grants
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+      run: |
+        set -euo pipefail
+        venv="${RUNNER_TEMP}/pixi-grants-venv"
+        if [ ! -x "${venv}/bin/python" ]; then
+          python3 -m venv "$venv"
+          "${venv}/bin/pip" install --quiet tomlkit==0.15.1
+        fi
+        "${venv}/bin/python" "${GITHUB_ACTION_PATH}/install_grants.py"
