@@ -1,3 +1,10 @@
+## [8.27.0](https://github.com/greenroom-robotics/mise/compare/mise@8.26.0...mise@8.27.0) (2026-09-27)
+
+
+### Features
+
+* add standalone idempotent pixi-grants action ([f0166eb](https://github.com/greenroom-robotics/mise/commit/f0166eb7b8d9d65be68c3ef83f91b91678d537ee))
+
 ## [8.26.0](https://github.com/greenroom-robotics/mise/compare/mise@8.25.0...mise@8.26.0) (2026-09-25)
 
 
