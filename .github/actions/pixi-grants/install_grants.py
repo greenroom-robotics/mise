@@ -3,7 +3,8 @@
 
 Only the `azure-options` key is replaced; every other key, comment and
 formatting in an existing config is preserved. Container names are masked
-before anything else is printed, since logs of public repos are public.
+before anything else is printed, since logs of public repos are public,
+unless MASK_CHANNELS is exactly "false".
 """
 
 import os
@@ -32,11 +33,16 @@ def fetch_grants() -> tomlkit.TOMLDocument:
     return tomlkit.parse(result.stdout)
 
 
-def main() -> None:
-    options = fetch_grants()["azure-options"]
+def mask(options: tomlkit.items.Table) -> None:
     for account in options.values():
         for container in account["auth"]:
             print(f"::add-mask::{container}")
+
+
+def main() -> None:
+    options = fetch_grants()["azure-options"]
+    if os.environ.get("MASK_CHANNELS") != "false":
+        mask(options)
 
     config = tomlkit.parse(CONFIG.read_text()) if CONFIG.exists() else tomlkit.document()
     config["azure-options"] = options

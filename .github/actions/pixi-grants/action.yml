@@ -6,6 +6,10 @@ inputs:
   gh-token:
     description: GitHub token with read access to greenroom-robotics/ros-recipes.
     required: true
+  mask-channels:
+    description: Mask Azure container names in the log. Set to 'false' only in private repos.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -14,6 +18,7 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh-token }}
+        MASK_CHANNELS: ${{ inputs.mask-channels }}
       run: |
         set -euo pipefail
         venv="${RUNNER_TEMP}/pixi-grants-venv"
