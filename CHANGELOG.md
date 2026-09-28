@@ -1,3 +1,10 @@
+## [8.28.0](https://github.com/greenroom-robotics/mise/compare/mise@8.27.0...mise@8.28.0) (2026-09-28)
+
+
+### Features
+
+* only take release tags from branch ([afb51d6](https://github.com/greenroom-robotics/mise/commit/afb51d631989dfcf451c4c634ee75ba55b19a13d))
+
 ## [8.27.0](https://github.com/greenroom-robotics/mise/compare/mise@8.26.0...mise@8.27.0) (2026-09-27)
 
 
