@@ -1,3 +1,10 @@
+## [8.29.1](https://github.com/greenroom-robotics/mise/compare/mise@8.29.0...mise@8.29.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* expose mask-channels input ([5262da7](https://github.com/greenroom-robotics/mise/commit/5262da7fd4dfe82f1751b6d8b342712bf825ce09))
+
 ## [8.29.0](https://github.com/greenroom-robotics/mise/compare/mise@8.28.0...mise@8.29.0) (2026-09-28)
 
 
