@@ -52,6 +52,10 @@ inputs:
     description: Skip running each job's task; still install the pixi environment (respecting `locked`) to verify the lock is satisfiable and the package builds. Passes `--build-only` to `mise ci test`. For workspaces with no tests (e.g. a docker-build variant) that still want lock/build verification.
     required: false
     default: "false"
+  mask-channels:
+    description: Mask Azure container names in the log. Set to 'false' only in private repos.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -63,6 +67,7 @@ runs:
         azure-client-id: ${{ inputs.azure-client-id }}
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
+        mask-channels: ${{ inputs.mask-channels }}
 
     - name: Run mise ci test
       shell: bash

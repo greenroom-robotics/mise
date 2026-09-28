@@ -26,6 +26,10 @@ inputs:
     description: Skip the pixi install step. For repos whose pixi work happens inside a container build — the App token, Azure login, and git auth still run on the host.
     required: false
     default: "false"
+  mask-channels:
+    description: Mask Azure container names in the log. Set to 'false' only in private repos.
+    required: false
+    default: "true"
 
 outputs:
   gh-token:
@@ -85,6 +89,7 @@ runs:
       uses: greenroom-robotics/mise/.github/actions/pixi-grants@v8
       with:
         gh-token: ${{ steps.app-token.outputs.token }}
+        mask-channels: ${{ inputs.mask-channels }}
 
     # Install the Greenroom pixi fork — upstream pixi cannot read our az://
     # channels. Reading az:// only needs the ambient azure/login above (SAS is

@@ -117,6 +117,11 @@ on:
         required: false
         type: string
         default: ""
+      mask-channels:
+        description: Mask Azure container names in the log. Set false only in private repos.
+        required: false
+        type: boolean
+        default: true
     secrets:
       gh-app-client-id:
         required: true
@@ -326,6 +331,7 @@ jobs:
           jobs: ${{ inputs.jobs }}
           locked: ${{ inputs.locked }}
           build-only: ${{ inputs.build-only }}
+          mask-channels: ${{ inputs.mask-channels }}
 
   # Sequential counterpart to `test`: one runner, packages in order. Setup runs
   # once (App token, Azure OIDC, pixi, mise) and the rattler cache carries from
@@ -384,6 +390,7 @@ jobs:
           azure-client-id: ${{ secrets.azure-client-id }}
           azure-tenant-id: ${{ secrets.azure-tenant-id }}
           azure-subscription-id: ${{ secrets.azure-subscription-id }}
+          mask-channels: ${{ inputs.mask-channels }}
 
       # Per-package invocations (not one package-dir sweep) keep the pass/fail
       # and duration attribution the summary needs.
