@@ -80,29 +80,11 @@ runs:
       run: |
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-    # Container names are masked before any step can print them: this action
-    # also runs in public repos, whose logs are public.
     - name: Install pixi channel grants
       if: inputs.skip-pixi != 'true'
-      shell: bash
-      env:
-        GH_TOKEN: ${{ steps.app-token.outputs.token }}
-      run: |
-        set -euo pipefail
-        mkdir -p "$HOME/.pixi"
-        if ! gh api -H "Accept: application/vnd.github.raw" \
-            repos/greenroom-robotics/ros-recipes/contents/ci/azure-options.toml \
-            > "$HOME/.pixi/config.toml"; then
-          echo "::error::could not fetch pixi channel grants; does the GitHub App have read access to ros-recipes?" >&2
-          exit 1
-        fi
-        python3 - <<'EOF'
-        import pathlib, tomllib
-        config = tomllib.loads((pathlib.Path.home() / ".pixi/config.toml").read_text())
-        for account in config["azure-options"].values():
-            for container in account["auth"]:
-                print(f"::add-mask::{container}")
-        EOF
+      uses: greenroom-robotics/mise/.github/actions/pixi-grants@v8
+      with:
+        gh-token: ${{ steps.app-token.outputs.token }}
 
     # Install the Greenroom pixi fork — upstream pixi cannot read our az://
     # channels. Reading az:// only needs the ambient azure/login above (SAS is
