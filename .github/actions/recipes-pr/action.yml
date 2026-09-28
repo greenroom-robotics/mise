@@ -59,9 +59,9 @@ runs:
         azure-tenant-id: ${{ inputs.azure-tenant-id }}
         azure-subscription-id: ${{ inputs.azure-subscription-id }}
 
-    - name: Fetch tags created by the deb release
+    - name: Fetch tags and the release branch tip
       shell: bash
-      run: git fetch --tags --force origin
+      run: git fetch --tags --force origin "+refs/heads/${GITHUB_REF_NAME}:refs/remotes/origin/${GITHUB_REF_NAME}"
 
     - name: Publish conda recipe PR for each package released this run
       shell: bash
@@ -78,6 +78,9 @@ runs:
       run: |
         set -euo pipefail
         published=0
+        # Only tags on the dispatched branch's line, so a release from a
+        # maintenance branch never picks up a higher tag from another line.
+        release_ref="refs/remotes/origin/${GITHUB_REF_NAME}"
 
         # One --lfs-package per listed name, applied to every package this run
         # publishes; the CLI matches by name, so unrelated packages are
@@ -126,7 +129,7 @@ runs:
           # write (~4 KB) — hence `for-each-ref --count=1`.
           globs=('[0-9]*.[0-9]*.[0-9]*')
           [ -n "$ONLY_PACKAGE" ] && globs+=("${ONLY_PACKAGE}@*")
-          tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "${globs[@]/#/refs/tags/}")"
+          tag="$(git for-each-ref --merged "$release_ref" --count=1 --sort=-v:refname --format='%(refname:strip=2)' "${globs[@]/#/refs/tags/}")"
           publish_one "${ONLY_PACKAGE:-$(basename "$PWD")}" "$tag" "$ONLY_PACKAGE"
         else
           # Multi-package layout: packages/<pkg>/{pixi.toml|package.xml}, <pkg>@<ver> tags.
@@ -134,7 +137,7 @@ runs:
             # Explicit target: release exactly this package (may be a vendored
             # package with no pixi.toml). No gate — a missing recipe is a user
             # error the CLI reports loudly.
-            tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${ONLY_PACKAGE}@*")"
+            tag="$(git for-each-ref --merged "$release_ref" --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${ONLY_PACKAGE}@*")"
             publish_one "$ONLY_PACKAGE" "$tag" "$ONLY_PACKAGE"
           else
             # Sweep every current package. --allow-missing-recipe lets a tagged
@@ -145,7 +148,7 @@ runs:
               # (ROS, incl. vendored packages with no pixi.toml); junk/renamed
               # dirs (neither) drop.
               { [ -f "$PACKAGE_DIR/$pkg/pixi.toml" ] || [ -f "$PACKAGE_DIR/$pkg/package.xml" ]; } || continue
-              tag="$(git for-each-ref --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${pkg}@*")"
+              tag="$(git for-each-ref --merged "$release_ref" --count=1 --sort=-v:refname --format='%(refname:strip=2)' "refs/tags/${pkg}@*")"
               publish_one "$pkg" "$tag" "$pkg"
             done
           fi
