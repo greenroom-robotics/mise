@@ -1,3 +1,10 @@
+## [8.29.0](https://github.com/greenroom-robotics/mise/compare/mise@8.28.0...mise@8.29.0) (2026-09-28)
+
+
+### Features
+
+* allow opt out to masking ([0720952](https://github.com/greenroom-robotics/mise/commit/07209526b2e8f2d736b8246b67cb2696ef51c766))
+
 ## [8.28.0](https://github.com/greenroom-robotics/mise/compare/mise@8.27.0...mise@8.28.0) (2026-09-28)
 
 
