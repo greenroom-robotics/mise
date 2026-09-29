@@ -1,3 +1,10 @@
+## [8.29.2](https://github.com/greenroom-robotics/mise/compare/mise@8.29.1...mise@8.29.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* stop relying on runner python for tomllib ([47cd6c6](https://github.com/greenroom-robotics/mise/commit/47cd6c62286fe4cc967b745049c8b653ed220686))
+
 ## [8.29.1](https://github.com/greenroom-robotics/mise/compare/mise@8.29.0...mise@8.29.1) (2026-09-28)
 
 
