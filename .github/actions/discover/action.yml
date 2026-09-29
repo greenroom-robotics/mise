@@ -15,6 +15,10 @@ inputs:
     description: 'Also discover workspace-only manifests (`[workspace]`, no `[package]`) that have a committed pixi.lock, alongside regular packages — e.g. a docker-build variant workspace with no publishable package but still pixi environments/tasks to test. A workspace''s discovered name is its dir basename (same convention as a package). Off by default.'
     required: false
     default: "false"
+  pixi-version:
+    description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
+    required: false
+    default: "0.80.1"
 
 outputs:
   all:
@@ -30,10 +34,16 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Install pixi (Greenroom fork)
+      uses: greenroom-robotics/pixi/.github/actions/setup-pixi-gr@main
+      with:
+        version: ${{ inputs.pixi-version }}
+        install: "false"
+
     - id: discover
       shell: bash
       env:
         PACKAGE: ${{ inputs.package }}
         PACKAGE_DIR: ${{ inputs.package-dir }}
         INCLUDE_WORKSPACES: ${{ inputs.include-workspaces }}
-      run: python3 "$GITHUB_ACTION_PATH/discover_packages.py"
+      run: pixi run --script "$GITHUB_ACTION_PATH/discover_packages.py"

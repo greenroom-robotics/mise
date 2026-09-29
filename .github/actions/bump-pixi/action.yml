@@ -84,7 +84,7 @@ runs:
         names=()
         tags=()
         for manifest in "${manifests[@]}"; do
-          name="$(python3 -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' "$manifest")"
+          name="$(pixi exec --spec 'python>=3.11' python -c 'import tomllib, sys; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["name"])' "$manifest")"
           names+=("$name")
           tags+=("${name}@${VERSION}")
         done

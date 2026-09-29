@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# ///
 """Discover per-package pixi workspaces and emit a paths-filter map.
 
 Reads env PACKAGE / PACKAGE_DIR / INCLUDE_WORKSPACES, writes `all`, `map` and

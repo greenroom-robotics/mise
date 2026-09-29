@@ -96,16 +96,10 @@ runs:
     # minted from it); explicit SAS is only required for writes (reindex).
     - name: Install pixi (Greenroom fork)
       if: inputs.skip-pixi != 'true'
-      shell: bash
-      env:
-        PIXI_GR_VERSION: ${{ inputs.pixi-version }}
-      run: |
-        set -euo pipefail
-        installer="${RUNNER_TEMP}/install-pixi-gr.sh"
-        curl -fsSL "https://github.com/greenroom-robotics/pixi/releases/download/pixi-gr@${PIXI_GR_VERSION}/install.sh" -o "$installer"
-        sh "$installer"
-        echo "$HOME/.pixi/bin" >> "$GITHUB_PATH"
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      uses: greenroom-robotics/pixi/.github/actions/setup-pixi-gr@main
+      with:
+        version: ${{ inputs.pixi-version }}
+        install: "false"
 
     # Write a dedicated pixi manifest that depends solely on mise, then install
     # it. Downstream actions run mise via
@@ -122,7 +116,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        version="$(python3 -c 'import tomllib; print(tomllib.load(open("'"${GITHUB_ACTION_PATH}"'/../../../pixi.toml","rb"))["package"]["version"])')"
+        version="$(awk '/^\[/{s=($0=="[package]")} s && /^version *=/{gsub(/"/,"",$3); print $3; exit}' "${GITHUB_ACTION_PATH}/../../../pixi.toml")"
         if [ -z "$version" ]; then
           echo "::error::could not read [package].version from the action's pixi.toml" >&2
           exit 1
