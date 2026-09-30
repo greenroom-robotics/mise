@@ -308,11 +308,7 @@ impl Version {
     }
 }
 
-/// How the farm pins a rewritten sibling `path =` dep in the published artifact.
-///
-/// Per consumer entry (`exact-pins:` in `pixi_native_packages.yaml`), never per
-/// dep: a consumer either rides sibling releases within the major or is
-/// version-locked to its siblings wholesale.
+/// Version-pin form for a rewritten sibling `path =` dep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SiblingPinStyle {
     /// `>=<version>,<major+1>` — published consumers accept future sibling
@@ -624,15 +620,34 @@ impl FromStr for RemoteChannel {
     }
 }
 
-/// A conda channel that is a directory on this machine.
-///
-/// The counterpart of [`RemoteChannel`]: a build publishes into one of these
-/// as it goes, so a snapshot of it goes stale mid-loop and it has to be
-/// queried live.
-///
-/// Holds the directory rather than a `Url`: the `file://` rendering is
-/// consumed by `pixi`, and building it by hand keeps the path byte-identical
-/// ---------------------------------------------------------------------------
+/// A conda channel that is a directory on this machine, rendered as a
+/// `file://` URL.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct LocalChannel(Url);
+
+impl LocalChannel {
+    /// An empty channel at `dir`, created or emptied on disk.
+    pub fn fresh(dir: &Path) -> color_eyre::eyre::Result<Self> {
+        use color_eyre::eyre::WrapErr;
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).with_context(|| format!("clearing {}", dir.display()))?;
+        }
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let abs =
+            std::fs::canonicalize(dir).with_context(|| format!("resolving {}", dir.display()))?;
+        Url::from_directory_path(&abs).map(Self).map_err(|()| {
+            color_eyre::eyre::eyre!("{} is not a valid channel directory", abs.display())
+        })
+    }
+}
+
+impl fmt::Display for LocalChannel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0.as_str())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // pixi-native manifest
 // ---------------------------------------------------------------------------
 

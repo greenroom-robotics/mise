@@ -1,6 +1,6 @@
 use super::*;
 use crate::recipe::RecipeNoarch;
-use crate::types::{Arch, PackageName, Version};
+use crate::types::{Arch, LocalChannel, PackageName, SiblingPinStyle, Version};
 
 fn pn(s: &str) -> PackageName {
     PackageName::new(s).unwrap()
@@ -341,7 +341,7 @@ fn path_dep_rel_paths_excludes_self_idiom() {
          [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n",
     )
     .unwrap();
-    let mut got = t.path_dep_rel_paths();
+    let mut got = t.path_dep_rel_paths(Path::new("packages/node"));
     got.sort();
     assert_eq!(got, vec!["../lib".to_string(), "../msgs".to_string()]);
 }
@@ -733,4 +733,210 @@ fn range_pin_derives_major_cap() {
     assert_eq!(ver("2.5.0").range_pin(), ">=2.5.0,<3");
     assert_eq!(ver("1.24.0-alpha.2").range_pin(), ">=1.24.0-alpha.2,<2");
     assert_eq!(ver("0.3.1").range_pin(), ">=0.3.1,<1");
+}
+
+fn channels_of(path: &Path) -> Vec<String> {
+    let doc: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    doc["workspace"]["channels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect()
+}
+
+#[test]
+fn prepend_channels_front_inserts_and_skips_listed_ones() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("pixi.toml");
+    fs::write(
+        &path,
+        "[workspace]\nname = \"x\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+         [package]\nname = \"x\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    let out = LocalChannel::fresh(&tmp.path().join("out")).unwrap();
+    let local = LocalChannel::fresh(&tmp.path().join("local-deps")).unwrap();
+    prepend_channels(&path, &[out.clone(), local.clone()]).unwrap();
+    prepend_channels(&path, std::slice::from_ref(&local)).unwrap();
+    assert_eq!(
+        channels_of(&path),
+        vec![
+            out.to_string(),
+            local.to_string(),
+            "https://prefix.dev/conda-forge".to_string()
+        ]
+    );
+    assert!(lists_channel(&path, &local).unwrap());
+}
+
+fn write_checkout_pkg(root: &Path, name: &str, extra: &str) -> PathBuf {
+    let dir = root.join("packages").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("pixi.toml");
+    fs::write(
+        &p,
+        format!(
+            "[workspace]\nname = \"{name}\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+             [dependencies]\n{name} = {{ path = \".\" }}\n\
+             [package]\nname = \"{name}\"\nversion = \"2.5.0\"\n{extra}"
+        ),
+    )
+    .unwrap();
+    p
+}
+
+#[test]
+fn resolve_path_deps_rewrites_to_sibling_manifest_version() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "lib", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\nlib = { path = \"../lib\" }\nros-kilted-rclpy = \"*\"\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name, pn("lib"));
+    assert_eq!(resolved[0].version, ver("2.5.0"));
+
+    let text = fs::read_to_string(&consumer).unwrap();
+    assert!(text.contains("lib = \">=2.5.0,<3\""), "rewritten: {text}");
+    assert!(
+        text.contains("node = { path = \".\" }"),
+        "self idiom untouched: {text}"
+    );
+    assert!(
+        text.contains("ros-kilted-rclpy = \"*\""),
+        "externals untouched: {text}"
+    );
+}
+
+#[test]
+fn resolve_path_deps_uses_dep_key_not_sibling_package_name() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "lib", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\nros-kilted-lib = { path = \"../lib\" }\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name, pn("ros-kilted-lib"));
+    assert_eq!(resolved[0].version, ver("2.5.0"));
+
+    let text = fs::read_to_string(&consumer).unwrap();
+    assert!(
+        text.contains("ros-kilted-lib = \">=2.5.0,<3\""),
+        "rewritten under the dep key: {text}"
+    );
+}
+
+#[test]
+fn resolve_path_deps_errors_clearly_when_sibling_has_no_version() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let dir = root.join("packages").join("lib");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pixi.toml"),
+        "[workspace]\nname = \"lib\"\nchannels = [\"https://prefix.dev/conda-forge\"]\n\
+         [dependencies]\nlib = { path = \".\" }\n\
+         [package]\nname = \"lib\"\n",
+    )
+    .unwrap();
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+    );
+    let err = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("path dep lib"), "got: {msg}");
+    assert!(msg.contains("missing field `version`"), "got: {msg}");
+}
+
+#[test]
+fn resolve_path_deps_exact_style_writes_lockstep_pins() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "lib", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\nlib = { path = \"../lib\" }\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Exact).unwrap();
+    assert_eq!(resolved[0].version, ver("2.5.0"));
+
+    let text = fs::read_to_string(&consumer).unwrap();
+    assert!(text.contains("lib = \"==2.5.0\""), "rewritten: {text}");
+    assert!(
+        text.contains("node = { path = \".\" }"),
+        "self idiom untouched: {text}"
+    );
+}
+
+#[test]
+fn resolve_path_deps_keeps_other_keys_of_a_path_dep() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "lib", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\n\
+         lib = { path = \"../lib\", extras = [\"test\"] }\n\
+         other = { version = \">=1\", channel = \"x\" }\n",
+    );
+    resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
+
+    let text = fs::read_to_string(&consumer).unwrap();
+    assert!(
+        text.contains("lib = { extras = [\"test\"], version = \">=2.5.0,<3\" }"),
+        "rewritten: {text}"
+    );
+    let doc: toml::Value = toml::from_str(&text).unwrap();
+    let deps = &doc["package"]["run-dependencies"];
+    assert_eq!(
+        deps["lib"],
+        toml::toml! { extras = ["test"] version = ">=2.5.0,<3" }.into()
+    );
+    assert_eq!(
+        deps["other"],
+        toml::toml! { version = ">=1" channel = "x" }.into()
+    );
+}
+
+#[test]
+fn resolve_path_deps_treats_every_spelling_of_self_as_self() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.run-dependencies]\n\
+         a = { path = \"./\" }\n\
+         b = { path = \"../node\" }\n\
+         c = { path = \"../../packages/node\" }\n",
+    );
+    let before = fs::read_to_string(&consumer).unwrap();
+    assert!(
+        resolve_path_deps(&consumer, SiblingPinStyle::Range)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read_to_string(&consumer).unwrap(), before);
+}
+
+#[test]
+fn is_self_path_resolves_a_root_package_named_by_its_parent() {
+    let cwd = std::env::current_dir().unwrap();
+    let name = cwd.file_name().unwrap().to_str().unwrap();
+    assert!(is_self_path(Path::new(""), &format!("../{name}")));
+    assert!(is_self_path(Path::new(""), "."));
+    assert!(!is_self_path(Path::new(""), "../elsewhere-not-this-dir"));
 }

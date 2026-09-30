@@ -435,6 +435,17 @@ fn remote_channel_rejects_local_paths() {
 }
 
 #[test]
+fn local_channel_is_an_empty_absolute_file_url() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = tmp.path().join("chan");
+    std::fs::create_dir_all(dir.join("linux-64")).unwrap();
+    let ch = LocalChannel::fresh(&dir).unwrap();
+    let abs = std::fs::canonicalize(&dir).unwrap();
+    assert_eq!(ch.to_string(), format!("file://{}/", abs.display()));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+}
+
+#[test]
 fn remote_channel_sibling_swaps_the_last_segment() {
     let base = RemoteChannel::parse("az://stg.blob.core.windows.net/general").unwrap();
     assert_eq!(

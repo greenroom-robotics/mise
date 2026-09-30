@@ -2,27 +2,28 @@
 //!
 //! * **Read** — [`Manifest`] / [`PackageManifest`], a serde model. Lossy
 //!   (comments, key order and spacing are gone) and cannot write.
-//! * **Write** — the `toml_edit` function [`set_package_version`].
-//!   A rewritten manifest's diff must be limited to the key touched, so
-//!   never round-trip a manifest through the serde model to change it.
+//! * **Write** — the `toml_edit` functions ([`set_package_version`],
+//!   [`resolve_path_deps`], [`prepend_channels`]).
+//!
+//! Rewrites edit only the values they change; never round-trip a manifest
+//! through the serde model.
 //!
 //! [`Package`] is the two joined at the point of discovery: a manifest parsed
 //! once, carrying the directory that owns it.
 
 use color_eyre::eyre::{Result, WrapErr};
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
 use crate::recipe::{Recipe, RecipeNoarch};
-use crate::types::{Arch, PackageName, Version};
+use crate::types::{Arch, LocalChannel, PackageName, SiblingPinStyle, Version};
 
 /// The dependency tables a pixi package can declare, in scan order.
 ///
 /// One list because the readers and the writer have to agree: a table missing
 /// from a reader is a sibling edge nobody sees (a release ordered wrong), and a
-/// table missing from the writer is a `path =` dep that reaches the build farm
-/// unresolved. `[dependencies]` holds only the self-as-workspace-member idiom
+/// table missing from the writer leaves a `path =` dep unresolved. `[dependencies]` holds only the self-as-workspace-member idiom
 /// today but is scanned for safety.
 pub const DEP_TABLES: &[&[&str]] = &[
     &["dependencies"],
@@ -207,6 +208,39 @@ impl Dep {
     pub fn path(&self) -> Option<&str> {
         self.value.get("path").and_then(toml::Value::as_str)
     }
+
+    /// The `path = "..."` of a local dep on another package, relative to
+    /// `dir`, the consumer's directory.
+    #[must_use]
+    pub fn sibling_path(&self, dir: &Path) -> Option<&str> {
+        self.path().filter(|p| !is_self_path(dir, p))
+    }
+}
+
+/// Whether `path`, relative to `dir`, names `dir` itself: the
+/// self-as-workspace-member idiom.
+#[must_use]
+pub fn is_self_path(dir: &Path, path: &str) -> bool {
+    let dir = std::path::absolute(Path::new(".").join(dir))
+        .map_or_else(|_| normalize(dir), |abs| normalize(&abs));
+    normalize(&dir.join(path)) == dir
+}
+
+/// Lexical path normalization (no fs access): resolves `.` and `..`.
+pub(crate) fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// The version of an exact `==X.Y.Z` pin, else `None`. The explicit-triple
@@ -294,13 +328,12 @@ impl PackageManifest {
         ws.platforms.iter().any(|p| p.subdir() == target_str)
     }
 
-    /// Relative `path =` values of every dep, excluding the
-    /// self-as-workspace-member idiom (`path = "."`).
-    pub fn path_dep_rel_paths(&self) -> Vec<String> {
+    /// Relative `path =` values of every dep on another package, for a
+    /// manifest in `dir`.
+    pub fn path_dep_rel_paths(&self, dir: &Path) -> Vec<String> {
         self.deps
             .iter()
-            .filter_map(Dep::path)
-            .filter(|p| *p != ".")
+            .filter_map(|d| d.sibling_path(dir))
             .map(str::to_string)
             .collect()
     }
@@ -628,6 +661,185 @@ pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String>
     }
     package["version"] = toml_edit::value(version.to_string());
     Ok(doc.to_string())
+}
+
+/// Front-insert channels into `[workspace].channels`, so they win over the
+/// manifest's own channels during the solve. Channels already listed are
+/// left where they are.
+pub fn prepend_channels(manifest_path: &Path, channels: &[LocalChannel]) -> Result<()> {
+    let text = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+    let arr = workspace_channels_mut(&mut doc).ok_or_else(|| {
+        color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
+    })?;
+    let mut at = 0;
+    for ch in channels.iter().map(ToString::to_string) {
+        if arr.iter().any(|v| v.as_str() == Some(&ch)) {
+            continue;
+        }
+        arr.insert(at, ch);
+        at = at.saturating_add(1);
+    }
+    std::fs::write(manifest_path, doc.to_string())
+        .with_context(|| format!("write {}", manifest_path.display()))?;
+    Ok(())
+}
+
+/// Whether `[workspace].channels` of the manifest lists `channel`.
+pub fn lists_channel(manifest_path: &Path, channel: &LocalChannel) -> Result<bool> {
+    let text = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+    let channel = channel.to_string();
+    Ok(workspace_channels_mut(&mut doc)
+        .is_some_and(|arr| arr.iter().any(|v| v.as_str() == Some(&channel))))
+}
+
+fn workspace_channels_mut(doc: &mut toml_edit::DocumentMut) -> Option<&mut toml_edit::Array> {
+    doc.get_mut("workspace")
+        .and_then(|w| w.get_mut("channels"))
+        .and_then(toml_edit::Item::as_array_mut)
+}
+
+/// A sibling `path =` dep rewritten to a version pin; `version` is the
+/// sibling's own version, the pin's lower bound.
+#[derive(Debug)]
+pub struct ResolvedDep {
+    name: PackageName,
+    version: Version,
+    manifest: PathBuf,
+}
+
+impl ResolvedDep {
+    /// The dependency key in the consumer's manifest, which is the channel
+    /// artifact name and not necessarily the sibling's `package.name`.
+    #[must_use]
+    pub const fn name(&self) -> &PackageName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> &Version {
+        &self.version
+    }
+
+    /// The sibling's pixi.toml inside the same checkout.
+    #[must_use]
+    pub fn manifest(&self) -> &Path {
+        &self.manifest
+    }
+}
+
+/// Rewrites every non-self `path =` dep of the manifest, in place, to a
+/// `style` pin on the sibling's `package.version`. Returns the rewritten
+/// siblings.
+pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result<Vec<ResolvedDep>> {
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new(""));
+    let text = std::fs::read_to_string(manifest_path)
+        .with_context(|| format!("read {}", manifest_path.display()))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
+
+    let mut resolved = Vec::new();
+    for_each_dep_table_mut(&mut doc, &mut |table| {
+        rewrite_path_deps_in(table, manifest_dir, style, &mut resolved)
+    })?;
+
+    if !resolved.is_empty() {
+        std::fs::write(manifest_path, doc.to_string())
+            .with_context(|| format!("write {}", manifest_path.display()))?;
+    }
+    Ok(resolved)
+}
+
+/// Apply `f` to each dependency table present in `doc`, in [`DEP_TABLES`] order.
+fn for_each_dep_table_mut(
+    doc: &mut toml_edit::DocumentMut,
+    f: &mut dyn FnMut(&mut dyn toml_edit::TableLike) -> Result<()>,
+) -> Result<()> {
+    for table_path in DEP_TABLES {
+        if let Some(table) = table_at_mut(doc.as_item_mut(), table_path) {
+            f(table)?;
+        }
+    }
+    Ok(())
+}
+
+/// Walk `path` from `item` to the table it names.
+fn table_at_mut<'a>(
+    item: &'a mut toml_edit::Item,
+    path: &[&str],
+) -> Option<&'a mut dyn toml_edit::TableLike> {
+    match path.split_first() {
+        None => item.as_table_like_mut(),
+        Some((seg, rest)) => table_at_mut(item.get_mut(seg)?, rest),
+    }
+}
+
+/// Rewrite the sibling `path =` deps of one table to a `style` version pin.
+/// A dep with keys besides `path` keeps them, with `version` set to the pin.
+fn rewrite_path_deps_in(
+    table: &mut dyn toml_edit::TableLike,
+    manifest_dir: &Path,
+    style: SiblingPinStyle,
+    resolved: &mut Vec<ResolvedDep>,
+) -> Result<()> {
+    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for key in keys {
+        let Some(spec) = table
+            .get_mut(&key)
+            .and_then(toml_edit::Item::as_table_like_mut)
+        else {
+            continue;
+        };
+        let Some(path) = spec.get("path").and_then(toml_edit::Item::as_str) else {
+            continue;
+        };
+        if is_self_path(manifest_dir, path) {
+            continue;
+        }
+        let sib_manifest = manifest_dir.join(path).join(PIXI_TOML);
+        let sib_text = std::fs::read_to_string(&sib_manifest).with_context(|| {
+            format!(
+                "path dep {key}: no pixi.toml at {} in checkout",
+                sib_manifest.display()
+            )
+        })?;
+        let version = PackageManifest::parse(&sib_text)
+            .with_context(|| {
+                format!(
+                    "path dep {key}: parsing sibling manifest {}",
+                    sib_manifest.display()
+                )
+            })?
+            .version()
+            .clone();
+        let pin = style.pin(&version);
+        if spec.len() > 1 {
+            spec.remove("path");
+            spec.insert("version", toml_edit::value(pin));
+            if let Some(inline) = table
+                .get_mut(&key)
+                .and_then(toml_edit::Item::as_inline_table_mut)
+            {
+                inline.fmt();
+            }
+        } else {
+            table.insert(&key, toml_edit::value(pin));
+        }
+        resolved.push(ResolvedDep {
+            name: PackageName::new(key)?,
+            version,
+            manifest: sib_manifest,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]

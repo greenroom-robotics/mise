@@ -1,7 +1,10 @@
 use clap::Args;
 use color_eyre::eyre::WrapErr;
-use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+use super::local_deps::LocalDeps;
+use crate::types::{Arch, LocalChannel};
 
 #[derive(Args, Debug)]
 pub struct Build {
@@ -13,7 +16,34 @@ pub struct Build {
     pub package_dir: PathBuf,
     /// rattler-build target subdir.
     #[arg(long)]
-    pub target_platform: Option<String>,
+    pub target_platform: Option<Arch>,
+}
+
+enum PublishTarget<'a> {
+    Dir(&'a Path),
+    Channel(&'a LocalChannel),
+}
+
+impl PublishTarget<'_> {
+    fn args(&self) -> [OsString; 2] {
+        match self {
+            Self::Dir(dir) => ["--target-dir".into(), dir.into()],
+            Self::Channel(ch) => ["--target-channel".into(), ch.to_string().into()],
+        }
+    }
+}
+
+fn publish(
+    manifest: &Path,
+    target: &PublishTarget<'_>,
+    target_platform: Option<Arch>,
+) -> color_eyre::eyre::Result<()> {
+    let mut argv: Vec<OsString> = vec!["publish".into(), "--path".into(), manifest.into()];
+    argv.extend(target.args());
+    if let Some(plat) = target_platform {
+        argv.extend(["--target-platform".into(), plat.to_string().into()]);
+    }
+    crate::process::run("pixi", &argv)
 }
 
 impl Build {
@@ -22,28 +52,29 @@ impl Build {
         if pkgs.is_empty() {
             color_eyre::eyre::bail!("no packages found under {}", self.package_dir.display());
         }
-        let out_dir = std::env::var("RUNNER_TEMP").map_or_else(
-            |_| std::path::PathBuf::from("./output"),
-            |t| std::path::PathBuf::from(t).join("conda-bld"),
-        );
+        let base = std::env::var_os("RUNNER_TEMP").map_or_else(|| "./output".into(), PathBuf::from);
+        let out_dir = base.join("conda-bld");
         std::fs::create_dir_all(&out_dir)
             .with_context(|| format!("creating {}", out_dir.display()))?;
+        let channel = LocalChannel::fresh(&base.join("local-deps"))?;
+
+        let target_platform = self.target_platform;
+        let mut local_deps = LocalDeps::new(channel.clone(), |manifest| {
+            publish(manifest, &PublishTarget::Channel(&channel), target_platform)
+        });
 
         for pkg in pkgs {
             let pkg_dir = &pkg.dir;
             println!("==> mise ci build :: {}", pkg_dir.display());
-            let mut argv: Vec<&OsStr> = vec![
-                OsStr::new("publish"),
-                OsStr::new("--path"),
-                pkg.manifest_path.as_os_str(),
-                OsStr::new("--target-dir"),
-                out_dir.as_os_str(),
-            ];
-            if let Some(plat) = &self.target_platform {
-                argv.extend([OsStr::new("--target-platform"), OsStr::new(plat)]);
-            }
-            crate::process::run("pixi", &argv)
-                .with_context(|| format!("pixi build failed for {}", pkg_dir.display()))?;
+            local_deps
+                .prepare(&pkg)
+                .with_context(|| format!("preparing path deps for {}", pkg_dir.display()))?;
+            publish(
+                &pkg.manifest_path,
+                &PublishTarget::Dir(&out_dir),
+                target_platform,
+            )
+            .with_context(|| format!("pixi build failed for {}", pkg_dir.display()))?;
         }
         Ok(())
     }
