@@ -1,3 +1,10 @@
+## [8.29.6](https://github.com/greenroom-robotics/mise/compare/mise@8.29.5...mise@8.29.6) (2026-09-30)
+
+
+### Bug Fixes
+
+* use correct manifest path ([049226c](https://github.com/greenroom-robotics/mise/commit/049226caea9d253f48300751904bf70cfb7c27c6))
+
 ## [8.29.5](https://github.com/greenroom-robotics/mise/compare/mise@8.29.4...mise@8.29.5) (2026-09-30)
 
 
