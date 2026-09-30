@@ -1,3 +1,10 @@
+## [8.29.3](https://github.com/greenroom-robotics/mise/compare/mise@8.29.2...mise@8.29.3) (2026-09-30)
+
+
+### Bug Fixes
+
+* accept inline-table entries in workspace platforms ([#111](https://github.com/greenroom-robotics/mise/issues/111)) ([6dc0ac3](https://github.com/greenroom-robotics/mise/commit/6dc0ac37fcc96d7fc69ab7bf7f5ec5631208374e))
+
 ## [8.29.2](https://github.com/greenroom-robotics/mise/compare/mise@8.29.1...mise@8.29.2) (2026-09-29)
 
 
