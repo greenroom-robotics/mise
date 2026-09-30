@@ -757,8 +757,8 @@ fn prepend_channels_front_inserts_and_skips_listed_ones() {
     .unwrap();
     let out = LocalChannel::fresh(&tmp.path().join("out")).unwrap();
     let local = LocalChannel::fresh(&tmp.path().join("local-deps")).unwrap();
-    prepend_channels(&path, &[out.clone(), local.clone()]).unwrap();
-    prepend_channels(&path, std::slice::from_ref(&local)).unwrap();
+    prepend_channels(&path, &[out.url().clone(), local.url().clone()]).unwrap();
+    prepend_channels(&path, std::slice::from_ref(local.url())).unwrap();
     assert_eq!(
         channels_of(&path),
         vec![

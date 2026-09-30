@@ -18,6 +18,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::consts::PIXI_TOML;
 use crate::recipe::{Recipe, RecipeNoarch};
 use crate::types::{Arch, LocalChannel, PackageName, SiblingPinStyle, Version};
+use url::Url;
 
 /// The dependency tables a pixi package can declare, in scan order.
 ///
@@ -666,7 +667,7 @@ pub fn set_package_version(toml_text: &str, version: &Version) -> Result<String>
 /// Front-insert channels into `[workspace].channels`, so they win over the
 /// manifest's own channels during the solve. Channels already listed are
 /// left where they are.
-pub fn prepend_channels(manifest_path: &Path, channels: &[LocalChannel]) -> Result<()> {
+pub fn prepend_channels(manifest_path: &Path, channels: &[Url]) -> Result<()> {
     let text = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let mut doc: toml_edit::DocumentMut = text
@@ -676,8 +677,8 @@ pub fn prepend_channels(manifest_path: &Path, channels: &[LocalChannel]) -> Resu
         color_eyre::eyre::eyre!("{}: no workspace.channels array", manifest_path.display())
     })?;
     let mut at = 0;
-    for ch in channels.iter().map(ToString::to_string) {
-        if arr.iter().any(|v| v.as_str() == Some(&ch)) {
+    for ch in channels.iter().map(Url::as_str) {
+        if arr.iter().any(|v| v.as_str() == Some(ch)) {
             continue;
         }
         arr.insert(at, ch);
@@ -710,29 +711,12 @@ fn workspace_channels_mut(doc: &mut toml_edit::DocumentMut) -> Option<&mut toml_
 /// sibling's own version, the pin's lower bound.
 #[derive(Debug)]
 pub struct ResolvedDep {
-    name: PackageName,
-    version: Version,
-    manifest: PathBuf,
-}
-
-impl ResolvedDep {
     /// The dependency key in the consumer's manifest, which is the channel
     /// artifact name and not necessarily the sibling's `package.name`.
-    #[must_use]
-    pub const fn name(&self) -> &PackageName {
-        &self.name
-    }
-
-    #[must_use]
-    pub const fn version(&self) -> &Version {
-        &self.version
-    }
-
+    pub name: PackageName,
+    pub version: Version,
     /// The sibling's pixi.toml inside the same checkout.
-    #[must_use]
-    pub fn manifest(&self) -> &Path {
-        &self.manifest
-    }
+    pub manifest: PathBuf,
 }
 
 /// Rewrites every non-self `path =` dep of the manifest, in place, to a

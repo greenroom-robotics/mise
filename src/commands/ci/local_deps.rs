@@ -82,13 +82,13 @@ impl<P: FnMut(&Path) -> Result<()>> LocalDeps<P> {
             tracing::info!(
                 "{}: pinned path dep {} to {}",
                 path.display(),
-                dep.name(),
-                PIN_STYLE.pin(dep.version())
+                dep.name,
+                PIN_STYLE.pin(&dep.version)
             );
             self.build(dep, visiting)?;
         }
         if !siblings.is_empty() {
-            prepend_channels(path, std::slice::from_ref(&self.channel))?;
+            prepend_channels(path, std::slice::from_ref(self.channel.url()))?;
             tracing::info!("{}: prepended channel {}", path.display(), self.channel);
         }
         self.pinned.insert(manifest);
@@ -96,34 +96,33 @@ impl<P: FnMut(&Path) -> Result<()>> LocalDeps<P> {
     }
 
     fn build(&mut self, dep: &ResolvedDep, visiting: &mut Vec<Visit>) -> Result<()> {
-        let manifest = CanonicalManifest::new(dep.manifest())?;
+        let manifest = CanonicalManifest::new(&dep.manifest)?;
         if let Some(start) = visiting.iter().position(|v| v.manifest == manifest) {
             let cycle: Vec<&str> = visiting
                 .iter()
                 .skip(start)
                 .map(|v| v.name.as_str())
-                .chain([dep.name().as_str()])
+                .chain([dep.name.as_str()])
                 .collect();
             color_eyre::eyre::bail!("path dep cycle: {}", cycle.join(" -> "));
         }
         if self.built.contains(&manifest) {
-            tracing::info!("sibling {} already built into {}", dep.name(), self.channel);
+            tracing::info!("sibling {} already built into {}", dep.name, self.channel);
             return Ok(());
         }
         visiting.push(Visit {
-            name: dep.name().clone(),
+            name: dep.name.clone(),
             manifest: manifest.clone(),
         });
-        self.pin(dep.manifest(), manifest.clone(), visiting)?;
+        self.pin(&dep.manifest, manifest.clone(), visiting)?;
         visiting.pop();
         tracing::info!(
             "building sibling {} {} into {}",
-            dep.name(),
-            dep.version(),
+            dep.name,
+            dep.version,
             self.channel
         );
-        (self.publish)(dep.manifest())
-            .with_context(|| format!("building sibling {}", dep.name()))?;
+        (self.publish)(&dep.manifest).with_context(|| format!("building sibling {}", dep.name))?;
         self.built.insert(manifest);
         Ok(())
     }

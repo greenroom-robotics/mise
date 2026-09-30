@@ -639,6 +639,11 @@ impl LocalChannel {
             color_eyre::eyre::eyre!("{} is not a valid channel directory", abs.display())
         })
     }
+
+    #[must_use]
+    pub const fn url(&self) -> &Url {
+        &self.0
+    }
 }
 
 impl fmt::Display for LocalChannel {
