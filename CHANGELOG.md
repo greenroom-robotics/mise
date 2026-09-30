@@ -1,3 +1,10 @@
+## [8.29.5](https://github.com/greenroom-robotics/mise/compare/mise@8.29.4...mise@8.29.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* list mise version after setup ([4e9a56e](https://github.com/greenroom-robotics/mise/commit/4e9a56e98a53ef97b3fb3d7a494f9ee9260f2ef1))
+
 ## [8.29.4](https://github.com/greenroom-robotics/mise/compare/mise@8.29.3...mise@8.29.4) (2026-09-30)
 
 
