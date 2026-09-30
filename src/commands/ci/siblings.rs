@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::manifest::Package;
+use crate::manifest::{Package, normalize};
 use crate::types::PackageName;
 
 /// Sibling dependency graph for one repo's per-package pixi workspaces.
@@ -34,12 +34,11 @@ pub fn analyze(packages: &[Package]) -> SiblingGraph {
         let name = pkg.manifest.name();
         let dir = &normalize(&pkg.dir);
         for dep in pkg.manifest.deps() {
-            if let Some(path) = dep.path() {
-                let target = normalize(&dir.join(path));
-                if &target == dir {
-                    continue; // self-as-workspace-member idiom
-                }
-                if let Some(sib) = dir_to_name.get(&target) {
+            if dep.path().is_some() {
+                let Some(path) = dep.sibling_path(dir) else {
+                    continue;
+                };
+                if let Some(sib) = dir_to_name.get(&normalize(&dir.join(path))) {
                     g.path_deps
                         .entry(name.clone())
                         .or_default()
@@ -54,23 +53,6 @@ pub fn analyze(packages: &[Package]) -> SiblingGraph {
         }
     }
     g
-}
-
-/// Lexical path normalization (no fs access): resolves `.` and `..`.
-pub(crate) fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() {
-                    out.push("..");
-                }
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

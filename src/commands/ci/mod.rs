@@ -2,6 +2,7 @@ use clap::Subcommand;
 
 pub mod build;
 pub mod bump_pixi;
+mod local_deps;
 pub mod recipes_pr;
 pub mod recipes_upsert;
 pub mod release;
@@ -24,6 +25,9 @@ pub enum Ci {
     /// Run tests for one or more pixi-native ROS packages.
     Test(Test),
     /// Build one or more pixi-native ROS packages to .conda artifacts.
+    ///
+    /// Modifies package manifests in the checkout: pins `path =` deps and
+    /// prepends a local channel of their builds.
     Build(Build),
     /// Run semantic-release for one or more pixi-native ROS packages.
     Release(Release),
