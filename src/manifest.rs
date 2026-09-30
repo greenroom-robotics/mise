@@ -127,7 +127,24 @@ struct BuildConfig {
 #[derive(Debug, Deserialize)]
 struct Workspace {
     #[serde(default)]
-    platforms: Vec<String>,
+    platforms: Vec<PlatformEntry>,
+}
+
+/// A `[workspace] platforms` entry: a bare subdir (`"linux-64"`) or an inline
+/// table naming the subdir alongside virtual-package keys (`archspec`, `glibc`, ...).
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PlatformEntry {
+    Subdir(String),
+    Table { platform: String },
+}
+
+impl PlatformEntry {
+    fn subdir(&self) -> &str {
+        match self {
+            Self::Subdir(subdir) | Self::Table { platform: subdir } => subdir,
+        }
+    }
 }
 
 impl Manifest {
@@ -274,7 +291,7 @@ impl PackageManifest {
             return true;
         }
         let target_str = target.to_string();
-        ws.platforms.iter().any(|p| p == &target_str)
+        ws.platforms.iter().any(|p| p.subdir() == target_str)
     }
 
     /// Relative `path =` values of every dep, excluding the

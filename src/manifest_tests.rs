@@ -167,6 +167,28 @@ fn respects_workspace_platforms_list() {
 }
 
 #[test]
+fn respects_workspace_platform_tables() {
+    let p = PackageManifest::parse(
+        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
+         [workspace]\nplatforms = [{ platform = \"linux-64\", archspec = \"x86_64_v3\", glibc = \"2.34\" }]\n",
+    )
+    .unwrap();
+    assert!(p.supports_platform(Arch::Linux64));
+    assert!(!p.supports_platform(Arch::LinuxAarch64));
+}
+
+#[test]
+fn rejects_platform_table_without_platform() {
+    assert!(
+        PackageManifest::parse(
+            "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
+         [workspace]\nplatforms = [{ archspec = \"x86_64_v3\" }]\n",
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn ignores_unknown_keys() {
     PackageManifest::parse(
         "[package]\nname = \"foo\"\nversion = \"1.0.0\"\n\
