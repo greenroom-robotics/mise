@@ -1,3 +1,10 @@
+## [8.29.4](https://github.com/greenroom-robotics/mise/compare/mise@8.29.3...mise@8.29.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* pin path deps and build siblings locally in ci build ([#110](https://github.com/greenroom-robotics/mise/issues/110)) ([697c43e](https://github.com/greenroom-robotics/mise/commit/697c43e02a2f699848049b1b7c2c03e0f0a1018b))
+
 ## [8.29.3](https://github.com/greenroom-robotics/mise/compare/mise@8.29.2...mise@8.29.3) (2026-09-30)
 
 
