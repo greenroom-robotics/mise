@@ -136,3 +136,4 @@ runs:
         pixi install --manifest-path "${manifest_dir}/pixi.toml"
         # Export the manifest path so downstream actions invoke mise from it.
         echo "MISE_MANIFEST=${manifest_dir}/pixi.toml" >> "$GITHUB_ENV"
+        pixi list mise
