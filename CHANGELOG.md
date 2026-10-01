@@ -1,3 +1,10 @@
+## [8.29.7](https://github.com/greenroom-robotics/mise/compare/mise@8.29.6...mise@8.29.7) (2026-10-01)
+
+
+### Bug Fixes
+
+* rewrite path deps inside package extras ([#112](https://github.com/greenroom-robotics/mise/issues/112)) ([2573473](https://github.com/greenroom-robotics/mise/commit/257347353381a07e5402b6f5375f352667a0f8a6))
+
 ## [8.29.6](https://github.com/greenroom-robotics/mise/compare/mise@8.29.5...mise@8.29.6) (2026-09-30)
 
 
