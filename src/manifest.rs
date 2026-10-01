@@ -26,12 +26,29 @@ use url::Url;
 /// from a reader is a sibling edge nobody sees (a release ordered wrong), and a
 /// table missing from the writer leaves a `path =` dep unresolved. `[dependencies]` holds only the self-as-workspace-member idiom
 /// today but is scanned for safety.
-pub const DEP_TABLES: &[&[&str]] = &[
-    &["dependencies"],
-    &["package", "run-dependencies"],
-    &["package", "host-dependencies"],
-    &["package", "build-dependencies"],
+pub const DEP_TABLES: &[&[TableSeg]] = &[
+    &[TableSeg::Key("dependencies")],
+    &[TableSeg::Key("package"), TableSeg::Key("run-dependencies")],
+    &[TableSeg::Key("package"), TableSeg::Key("host-dependencies")],
+    &[
+        TableSeg::Key("package"),
+        TableSeg::Key("build-dependencies"),
+    ],
+    &[
+        TableSeg::Key("package"),
+        TableSeg::Key("extra-dependencies"),
+        TableSeg::EachChild,
+    ],
 ];
+
+/// One step of a [`DEP_TABLES`] path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableSeg {
+    /// The child table under this key.
+    Key(&'static str),
+    /// Every child table, such as each `[package.extra-dependencies.<extra>]`.
+    EachChild,
+}
 
 // ---------------------------------------------------------------------------
 // Read view
@@ -175,31 +192,45 @@ impl Manifest {
 fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
     let mut out = Vec::new();
     for table_path in DEP_TABLES {
-        let mut node = value;
-        let mut found = true;
-        for seg in *table_path {
-            if let Some(next) = node.get(seg) {
-                node = next;
-            } else {
-                found = false;
-                break;
+        for_each_table_at(value, table_path, &mut Vec::new(), &mut |keys, table| {
+            for (name, value) in table {
+                out.push(Dep {
+                    name: PackageName::new(name.clone())
+                        .with_context(|| format!("dependency key in [{}]", keys.join(".")))?,
+                    value: value.clone(),
+                });
             }
-        }
-        if !found {
-            continue;
-        }
-        let Some(table) = node.as_table() else {
-            continue;
-        };
-        for (name, value) in table {
-            out.push(Dep {
-                name: PackageName::new(name.clone())
-                    .with_context(|| format!("dependency key in [{}]", table_path.join(".")))?,
-                value: value.clone(),
-            });
-        }
+            Ok(())
+        })?;
     }
     Ok(out)
+}
+
+/// Walk `path` from `value`, calling `f` with each table it names and the
+/// concrete keys that led there.
+fn for_each_table_at<'v>(
+    value: &'v toml::Value,
+    path: &[TableSeg],
+    keys: &mut Vec<&'v str>,
+    f: &mut dyn FnMut(&[&str], &toml::Table) -> Result<()>,
+) -> Result<()> {
+    let Some(table) = value.as_table() else {
+        return Ok(());
+    };
+    let Some((seg, rest)) = path.split_first() else {
+        return f(keys, table);
+    };
+    let children: Box<dyn Iterator<Item = (&String, &toml::Value)>> = match seg {
+        TableSeg::Key(key) => Box::new(table.get_key_value(*key).into_iter()),
+        TableSeg::EachChild => Box::new(table.iter()),
+    };
+    for (key, child) in children {
+        keys.push(key);
+        let walked = for_each_table_at(child, rest, keys, f);
+        keys.pop();
+        walked?;
+    }
+    Ok(())
 }
 
 impl Dep {
@@ -748,22 +779,31 @@ fn for_each_dep_table_mut(
     f: &mut dyn FnMut(&mut dyn toml_edit::TableLike) -> Result<()>,
 ) -> Result<()> {
     for table_path in DEP_TABLES {
-        if let Some(table) = table_at_mut(doc.as_item_mut(), table_path) {
-            f(table)?;
-        }
+        for_each_table_at_mut(doc.as_item_mut(), table_path, f)?;
     }
     Ok(())
 }
 
-/// Walk `path` from `item` to the table it names.
-fn table_at_mut<'a>(
-    item: &'a mut toml_edit::Item,
-    path: &[&str],
-) -> Option<&'a mut dyn toml_edit::TableLike> {
-    match path.split_first() {
-        None => item.as_table_like_mut(),
-        Some((seg, rest)) => table_at_mut(item.get_mut(seg)?, rest),
+/// Walk `path` from `item`, calling `f` with each table it names.
+fn for_each_table_at_mut(
+    item: &mut toml_edit::Item,
+    path: &[TableSeg],
+    f: &mut dyn FnMut(&mut dyn toml_edit::TableLike) -> Result<()>,
+) -> Result<()> {
+    let Some(table) = item.as_table_like_mut() else {
+        return Ok(());
+    };
+    let Some((seg, rest)) = path.split_first() else {
+        return f(table);
+    };
+    let children: Box<dyn Iterator<Item = &mut toml_edit::Item>> = match seg {
+        TableSeg::Key(key) => Box::new(table.get_mut(key).into_iter()),
+        TableSeg::EachChild => Box::new(table.iter_mut().map(|(_, child)| child)),
+    };
+    for child in children {
+        for_each_table_at_mut(child, rest, f)?;
     }
+    Ok(())
 }
 
 /// Rewrite the sibling `path =` deps of one table to a `style` version pin.

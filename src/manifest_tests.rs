@@ -301,11 +301,13 @@ fn deps_are_collected_from_every_dep_table() {
          [package]\nname=\"node\"\nversion=\"1\"\n\
          [package.run-dependencies]\nlib = { path = \"../lib\" }\n\
          [package.host-dependencies]\nmsgs = { path = \"../msgs\" }\n\
-         [package.build-dependencies]\ngen = \"==1.2.3\"\n",
+         [package.build-dependencies]\ngen = \"==1.2.3\"\n\
+         [package.extra-dependencies.test]\nbin = { path = \"../bin\" }\n\
+         [package.extra-dependencies.docs]\nsphinx = \"*\"\n",
     )
     .unwrap();
     let names: Vec<&str> = m.deps().iter().map(|d| d.name.as_str()).collect();
-    assert_eq!(names, vec!["node", "lib", "msgs", "gen"]);
+    assert_eq!(names, vec!["node", "lib", "msgs", "gen", "sphinx", "bin"]);
 }
 
 // conda-forge really ships these, and conda virtual packages surface with a
@@ -908,6 +910,27 @@ fn resolve_path_deps_keeps_other_keys_of_a_path_dep() {
     assert_eq!(
         deps["other"],
         toml::toml! { version = ">=1" channel = "x" }.into()
+    );
+}
+
+#[test]
+fn resolve_path_deps_rewrites_path_deps_inside_extras() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "bin", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.extra-dependencies.test]\nbin = { path = \"../bin/\" }\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name.as_str(), "bin");
+
+    let doc: toml::Value = toml::from_str(&fs::read_to_string(&consumer).unwrap()).unwrap();
+    assert_eq!(
+        doc["package"]["extra-dependencies"]["test"]["bin"].as_str(),
+        Some(">=2.5.0,<3")
     );
 }
 
