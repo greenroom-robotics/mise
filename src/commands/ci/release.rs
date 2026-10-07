@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::manifest::Package;
-use crate::types::{PackageName, Version};
+use crate::types::{PackageName, ReleaseTag, Version};
 
 const RECORD_PLUGIN: &str = include_str!("record_release.js");
 
@@ -83,15 +83,9 @@ pub struct Release {
     pub extra_prepare_cmd: Option<String>,
 }
 
-/// semantic-release tag format. Both modes tag `<package>@<version>` — in
-/// multi-package mode multi-semantic-release substitutes `${name}` itself; in
-/// single-package mode the resolved package name is embedded literally.
+/// semantic-release tag format, from [`ReleaseTag`] in both modes.
 fn tag_format(multi: bool, single_pkg_name: &PackageName) -> String {
-    if multi {
-        "${name}@${version}".to_string()
-    } else {
-        format!("{single_pkg_name}@${{version}}")
-    }
+    ReleaseTag::format((!multi).then_some(single_pkg_name))
 }
 
 /// Sibling deps that msr should **order** on for `name`: path deps only. These

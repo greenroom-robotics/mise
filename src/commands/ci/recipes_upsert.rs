@@ -2,14 +2,17 @@ use color_eyre::eyre::{Result, WrapErr};
 use std::path::{Path, PathBuf};
 
 use super::yaml_block::{self, ItemBounds, indent_of, item_bounds};
-use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
+use crate::types::{GithubRepoUrl, PackageName, ReleaseTag, Sha40, Version};
 
-/// An entry in `rosdistro_additional_recipes.yaml`, emitted as url, tag, version.
+/// An entry in `rosdistro_additional_recipes.yaml`.
 pub struct Entry<'a> {
     pub package: &'a PackageName,
     pub url: &'a GithubRepoUrl,
-    pub tag: &'a str,
+    pub tag: &'a ReleaseTag,
     pub version: &'a Version,
+    /// Folder holding the package, relative to the repo root; `None` for a
+    /// package at the root.
+    pub subdir: Option<&'a str>,
 }
 
 /// Idempotently upsert `entry` into the recipes YAML file. Comments and other
@@ -28,14 +31,85 @@ pub fn upsert(recipes_yaml: &Path, entry: &Entry) -> Result<()> {
     Ok(())
 }
 
-fn render(entry: &Entry, nl: &str) -> String {
-    format!(
+fn additional_folder_line(subdir: &str, nl: &str) -> String {
+    format!("  additional_folder: {subdir}{nl}")
+}
+
+fn render_new(entry: &Entry, nl: &str) -> String {
+    let mut out = format!(
         "{name}:{nl}  url: {url}{nl}  tag: {tag}{nl}  version: {version}{nl}",
         name = entry.package,
         url = entry.url.git_url(),
         tag = entry.tag,
         version = entry.version,
-    )
+    );
+    if let Some(subdir) = entry.subdir {
+        out.push_str(&additional_folder_line(subdir, nl));
+    }
+    out
+}
+
+/// Rewrite an existing block, owning only `url`, `tag` and `version`; every
+/// other key (e.g. `additional_folder`) passes through. The url is kept when it
+/// already names the same repository, so its casing doesn't churn.
+fn render_existing(block: &str, entry: &Entry, nl: &str) -> String {
+    let url = entry.url.git_url();
+    let owned = [
+        ("url", url.as_str()),
+        ("tag", &entry.tag.to_string()),
+        ("version", &entry.version.to_string()),
+    ];
+    let mut seen = [false; 3];
+    let mut has_folder = false;
+    let mut lines: Vec<String> = Vec::new();
+    let mut after_last_key = 0;
+    for line in block.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let indented = line.starts_with([' ', '\t']);
+        let pad = line.get(..indent_of(line)).unwrap_or_default();
+        let key = indented
+            .then(|| {
+                owned
+                    .iter()
+                    .position(|(k, _)| trimmed.starts_with(&format!("{k}:")))
+            })
+            .flatten();
+        let replacement = key.and_then(|i| {
+            *seen.get_mut(i)? = true;
+            let (k, v) = owned.get(i)?;
+            let keep_url = *k == "url"
+                && trimmed
+                    .strip_prefix("url:")
+                    .and_then(|old| GithubRepoUrl::parse_remote(old.trim()).ok())
+                    .is_some_and(|old| old.same_repo(entry.url));
+            (!keep_url).then(|| format!("{pad}{k}: {v}{nl}"))
+        });
+        has_folder |= indented && trimmed.starts_with("additional_folder:");
+        lines.push(replacement.unwrap_or_else(|| line.to_string()));
+        if indented && !trimmed.is_empty() && !trimmed.starts_with('#') {
+            after_last_key = lines.len();
+        }
+    }
+    let mut missing: Vec<String> = owned
+        .iter()
+        .zip(seen)
+        .filter(|(_, seen)| !seen)
+        .map(|((k, v), _)| format!("  {k}: {v}{nl}"))
+        .collect();
+    if let (false, Some(subdir)) = (has_folder, entry.subdir) {
+        missing.push(additional_folder_line(subdir, nl));
+    }
+    if !missing.is_empty() {
+        if let Some(last) = after_last_key
+            .checked_sub(1)
+            .and_then(|i| lines.get_mut(i))
+            .filter(|l| !l.ends_with('\n'))
+        {
+            last.push_str(nl);
+        }
+        lines.splice(after_last_key..after_last_key, missing);
+    }
+    lines.concat()
 }
 
 fn upsert_text(body: &str, entry: &Entry) -> String {
@@ -44,7 +118,7 @@ fn upsert_text(body: &str, entry: &Entry) -> String {
     if let Some(block) = yaml_block::section_bounds(body, entry.package.as_str()) {
         let mut out = String::with_capacity(body.len());
         out.push_str(block.before());
-        out.push_str(&render(entry, nl));
+        out.push_str(&render_existing(block.inner(), entry, nl));
         out.push_str(block.after());
         return out;
     }
@@ -57,7 +131,7 @@ fn upsert_text(body: &str, entry: &Entry) -> String {
         }
         out.push_str(nl);
     }
-    out.push_str(&render(entry, nl));
+    out.push_str(&render_new(entry, nl));
     out
 }
 
@@ -315,8 +389,9 @@ pub(crate) enum ReleaseTarget {
     Rosdistro {
         package: PackageName,
         url: GithubRepoUrl,
-        tag: String,
+        tag: ReleaseTag,
         version: Version,
+        subdir: Option<String>,
     },
     /// An entry in `pixi_native_packages.yaml`, which pins a rev.
     PixiNative {
@@ -339,7 +414,8 @@ impl ReleaseTarget {
     }
 }
 
-/// The facts only a `pixi_native_packages.yaml` entry records.
+/// Where the package sits in its repo, and the `lfs` fact only a
+/// `pixi_native_packages.yaml` entry records.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PixiEntryOpts<'a> {
     pub subdir: Option<&'a str>,
@@ -359,7 +435,6 @@ pub(crate) fn route(
     recipes_root: &Path,
     package: &PackageName,
     url: &GithubRepoUrl,
-    tag: &str,
     version: &Version,
     sha: &Sha40,
     pixi: PixiEntryOpts<'_>,
@@ -390,8 +465,9 @@ pub(crate) fn route(
         return Ok(ReleaseTarget::Rosdistro {
             package: package.clone(),
             url: url.clone(),
-            tag: tag.to_string(),
+            tag: ReleaseTag::new(package, version),
             version: version.clone(),
+            subdir: pixi.subdir.map(str::to_string),
         });
     }
 
@@ -449,6 +525,7 @@ pub(crate) fn apply(
             url,
             tag,
             version,
+            subdir,
         } => {
             let old_ref = read_if_exists(&abs)?
                 .as_deref()
@@ -462,6 +539,7 @@ pub(crate) fn apply(
                     url,
                     tag,
                     version,
+                    subdir: subdir.as_deref(),
                 },
             )?;
             Ok(old_ref)

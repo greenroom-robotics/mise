@@ -194,6 +194,45 @@ impl<'de> Deserialize<'de> for PackageName {
 }
 
 // ---------------------------------------------------------------------------
+// Release tag
+// ---------------------------------------------------------------------------
+
+/// The git tag a release of one package creates: `<package>@<version>`. The
+/// semantic-release `--tag-format` and the tag recorded in recipes both come
+/// from here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseTag {
+    package: PackageName,
+    version: Version,
+}
+
+impl ReleaseTag {
+    #[must_use]
+    pub fn new(package: &PackageName, version: &Version) -> Self {
+        Self {
+            package: package.clone(),
+            version: version.clone(),
+        }
+    }
+
+    /// The semantic-release tag format for `package`, or for whichever package
+    /// multi-semantic-release is releasing when `None`.
+    #[must_use]
+    pub fn format(package: Option<&PackageName>) -> String {
+        package.map_or_else(
+            || "${name}@${version}".to_string(),
+            |package| format!("{package}@${{version}}"),
+        )
+    }
+}
+
+impl fmt::Display for ReleaseTag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.package, self.version)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Version
 // ---------------------------------------------------------------------------
 
@@ -534,6 +573,13 @@ impl GithubRepoUrl {
     #[must_use]
     pub fn git_url(&self) -> String {
         format!("{}.git", self.https_url())
+    }
+
+    /// Whether both name the same repository; GitHub owner and repo names are
+    /// case-insensitive.
+    #[must_use]
+    pub fn same_repo(&self, other: &Self) -> bool {
+        self.owner.eq_ignore_ascii_case(&other.owner) && self.repo.eq_ignore_ascii_case(&other.repo)
     }
 
     /// GitHub's two-dot compare page between two refs of this repository.

@@ -152,6 +152,10 @@ impl<'a> Section<'a> {
         self.before
     }
 
+    pub const fn inner(&self) -> &'a str {
+        self.inner
+    }
+
     pub const fn after(&self) -> &'a str {
         self.after
     }
