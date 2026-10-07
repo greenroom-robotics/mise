@@ -1,3 +1,10 @@
+## [8.29.8](https://github.com/greenroom-robotics/mise/compare/mise@8.29.7...mise@8.29.8) (2026-10-07)
+
+
+### Bug Fixes
+
+* keep real tag and additional_folder in rosdistro entries ([#113](https://github.com/greenroom-robotics/mise/issues/113)) ([31646af](https://github.com/greenroom-robotics/mise/commit/31646afde861d5a31dc9c25befa99d2749e1a19d))
+
 ## [8.29.7](https://github.com/greenroom-robotics/mise/compare/mise@8.29.6...mise@8.29.7) (2026-10-01)
 
 
