@@ -64,7 +64,7 @@ impl RecipesPr {
 
         let src_url = GithubRepoUrl::parse_remote(&git::remote_url(&cwd, ORIGIN)?)?;
         let src_short = src_url.repo();
-        let tag = format!("v{}", self.version);
+        let label = format!("v{}", self.version);
         let run_id = std::env::var("GITHUB_RUN_ID").ok();
 
         let tmp = tempfile::TempDir::new()?;
@@ -112,7 +112,6 @@ impl RecipesPr {
                 &recipes_root,
                 name,
                 &src_url,
-                &tag,
                 &self.version,
                 &self.sha,
                 recipes_upsert::PixiEntryOpts {
@@ -122,7 +121,7 @@ impl RecipesPr {
             )?;
             changed.insert(target.rel_path());
             old_refs.extend(recipes_upsert::apply(&recipes_root, &target)?);
-            released.insert(name.clone(), tag.clone());
+            released.insert(name.clone(), label.clone());
         }
 
         if changed.is_empty() {
@@ -134,7 +133,7 @@ impl RecipesPr {
             .chain(changed.iter().map(|p| p.as_os_str()))
             .collect();
         process::run_in(&recipes_root, "git", &add_args)?;
-        let title = release_title(src_short, &released, &tag);
+        let title = release_title(src_short, &released, &label);
         match classify_noop(git::nothing_staged(&recipes_root)?, pr_open) {
             NoopOutcome::EarlyReturn => {
                 println!("recipe for {title} already up to date; nothing to publish");

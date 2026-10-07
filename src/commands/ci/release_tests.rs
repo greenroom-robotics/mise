@@ -420,3 +420,15 @@ fn release_pass_skips_changelog_plugin_once_committed() {
         .unwrap();
     assert!(plugin_names(&fresh).contains(&"@semantic-release/changelog".to_string()));
 }
+
+#[test]
+fn tag_format_renders_to_the_recorded_release_tag() {
+    let (name, version) = (pkg("mise"), Version::parse("1.2.3").unwrap());
+    let recorded = ReleaseTag::new(&name, &version).to_string();
+    for multi in [false, true] {
+        let rendered = tag_format(multi, &name)
+            .replace(concat!("$", "{name}"), "mise")
+            .replace(concat!("$", "{version}"), "1.2.3");
+        assert_eq!(rendered, recorded);
+    }
+}

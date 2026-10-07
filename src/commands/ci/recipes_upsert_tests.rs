@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::{GithubRepoUrl, PackageName, Sha40, Version};
+use crate::types::{GithubRepoUrl, PackageName, ReleaseTag, Sha40, Version};
 
 fn pkg(s: &str) -> PackageName {
     PackageName::new(s).unwrap()
@@ -17,48 +17,57 @@ fn url(s: &str) -> GithubRepoUrl {
     GithubRepoUrl::parse_remote(s).unwrap()
 }
 
-fn entry<'a>(package: &'a PackageName, repo: &'a GithubRepoUrl, version: &'a Version) -> Entry<'a> {
+fn entry<'a>(
+    package: &'a PackageName,
+    repo: &'a GithubRepoUrl,
+    version: &'a Version,
+    tag: &'a ReleaseTag,
+) -> Entry<'a> {
     Entry {
         package,
         url: repo,
-        tag: "1.2.3",
+        tag,
         version,
+        subdir: None,
     }
 }
 
-fn foo_entry() -> (PackageName, GithubRepoUrl, Version) {
+fn foo_entry() -> (PackageName, GithubRepoUrl, Version, ReleaseTag) {
+    let (package, version) = (pkg("foo"), ver("1.2.3"));
+    let tag = ReleaseTag::new(&package, &version);
     (
-        pkg("foo"),
+        package,
         url("https://github.com/example/foo.git"),
-        ver("1.2.3"),
+        version,
+        tag,
     )
 }
 
 #[test]
 fn upsert_into_empty_yields_fresh_block() {
-    let (p, u, v) = foo_entry();
-    let out = upsert_text("", &entry(&p, &u, &v));
+    let (p, u, v, t) = foo_entry();
+    let out = upsert_text("", &entry(&p, &u, &v, &t));
     assert_eq!(
         out,
-        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n"
     );
 }
 
 #[test]
 fn upsert_appends_new_entry_with_blank_line_separator() {
-    let (p, u, v) = foo_entry();
+    let (p, u, v, t) = foo_entry();
     let existing = "bar:\n  url: https://example.invalid/bar.git\n  tag: 0.1.0\n  version: 0.1.0\n";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert!(out.starts_with(existing));
     assert!(out.contains("\n\nfoo:\n"));
     assert!(out.ends_with(
-        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n"
     ));
 }
 
 #[test]
 fn upsert_replaces_existing_block_in_place() {
-    let (p, u, v) = foo_entry();
+    let (p, u, v, t) = foo_entry();
     let existing = "\
 foo:
   url: https://github.com/example/foo.git
@@ -69,9 +78,9 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert!(out.contains(
-        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n"
     ));
     assert!(out.contains(
         "bar:\n  url: https://example.invalid/bar.git\n  tag: 0.1.0\n  version: 0.1.0\n"
@@ -85,7 +94,7 @@ bar:
 
 #[test]
 fn upsert_preserves_comments_outside_the_block() {
-    let (p, u, v) = foo_entry();
+    let (p, u, v, t) = foo_entry();
     let existing = "\
 # Top of file comment
 foo:
@@ -99,20 +108,18 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert!(out.contains("# Top of file comment"));
     assert!(out.contains("# Notes about bar — important context"));
 }
 
 #[test]
-fn upsert_replaces_block_with_extra_optional_fields() {
-    let (p, u, v) = foo_entry();
-    // Entries sometimes carry extra optional fields; upsert deliberately
-    // replaces the block with the canonical four-field shape.
+fn upsert_keeps_unowned_fields_and_writes_real_tag() {
+    let (p, u, v, t) = foo_entry();
     let existing = "\
 foo:
   url: https://github.com/example/foo.git
-  tag: 1.0.0
+  tag: foo@1.0.0
   version: 1.0.0
   additional_folder: packages/foo
   manifest_file: package.xml
@@ -121,19 +128,73 @@ bar:
   tag: 0.1.0
   version: 0.1.0
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
-    // foo replaced, with the optional fields gone:
-    assert!(!out.contains("additional_folder"));
-    assert!(out.contains(
-        "foo:\n  url: https://github.com/example/foo.git\n  tag: 1.2.3\n  version: 1.2.3\n"
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
+    assert!(out.starts_with(
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n  \
+         additional_folder: packages/foo\n  manifest_file: package.xml\nbar:\n"
     ));
-    // bar still intact:
     assert!(out.contains("bar:\n  url: https://example.invalid/bar.git"));
 }
 
 #[test]
-fn upsert_replaces_a_block_whose_body_continues_past_a_column_zero_comment() {
-    let (p, u, v) = foo_entry();
+fn upsert_keeps_existing_url_casing_for_the_same_repo() {
+    let (p, u, v, t) = foo_entry();
+    let existing =
+        "foo:\n  url: https://github.com/Example/Foo.git\n  tag: foo@1.0.0\n  version: 1.0.0\n";
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
+    assert_eq!(
+        out,
+        "foo:\n  url: https://github.com/Example/Foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n"
+    );
+}
+
+#[test]
+fn upsert_rewrites_url_pointing_at_another_repo() {
+    let (p, u, v, t) = foo_entry();
+    let existing =
+        "foo:\n  url: https://github.com/example/moved.git\n  tag: foo@1.0.0\n  version: 1.0.0\n";
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
+    assert!(out.contains("url: https://github.com/example/foo.git\n"));
+}
+
+#[test]
+fn upsert_adds_additional_folder_to_existing_entry_lacking_it() {
+    let (p, u, v, t) = foo_entry();
+    let existing = "foo:\n  url: https://github.com/example/foo.git\n  tag: v1.0.0\n  version: 1.0.0\n\nbar:\n  url: x\n";
+    let out = upsert_text(
+        existing,
+        &Entry {
+            subdir: Some("sub/foo"),
+            ..entry(&p, &u, &v, &t)
+        },
+    );
+    assert_eq!(
+        out,
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n  \
+         additional_folder: sub/foo\n\nbar:\n  url: x\n"
+    );
+}
+
+#[test]
+fn upsert_new_entry_in_subdirectory_sets_additional_folder() {
+    let (p, u, v, t) = foo_entry();
+    let out = upsert_text(
+        "",
+        &Entry {
+            subdir: Some("sub/foo"),
+            ..entry(&p, &u, &v, &t)
+        },
+    );
+    assert_eq!(
+        out,
+        "foo:\n  url: https://github.com/example/foo.git\n  tag: foo@1.2.3\n  version: 1.2.3\n  \
+         additional_folder: sub/foo\n"
+    );
+}
+
+#[test]
+fn upsert_updates_a_block_whose_body_continues_past_a_column_zero_comment() {
+    let (p, u, v, t) = foo_entry();
     // The reader (`field_of`) and the writer (`section_bounds`) must agree
     // that `# a note` is interior here: if the writer stopped at the comment
     // it would splice in a fresh block and strand the old `version:` beside
@@ -153,13 +214,14 @@ bar:
         Some("1.0.0")
     );
 
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert_eq!(
         out,
         "\
 foo:
   url: https://github.com/example/foo.git
-  tag: 1.2.3
+  tag: foo@1.2.3
+# a note
   version: 1.2.3
 bar:
   url: https://example.invalid/bar.git
@@ -172,7 +234,7 @@ bar:
 
 #[test]
 fn upsert_keeps_a_comment_that_captions_the_next_block() {
-    let (p, u, v) = foo_entry();
+    let (p, u, v, t) = foo_entry();
     let existing = "\
 foo:
   url: https://github.com/example/foo.git
@@ -181,19 +243,19 @@ foo:
 bar:
   url: https://example.invalid/bar.git
 ";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert!(out.contains("# vendored fork — do not bump\nbar:\n"));
-    assert!(out.contains("  tag: 1.2.3\n"));
+    assert!(out.contains("  tag: foo@1.2.3\n"));
 }
 
 #[test]
 fn upsert_reemits_crlf_line_endings() {
-    let (p, u, v) = foo_entry();
+    let (p, u, v, t) = foo_entry();
     let existing = "foo:\r\n  url: old\r\n  tag: 0.1.0\r\nbar:\r\n  url: keep\r\n";
-    let out = upsert_text(existing, &entry(&p, &u, &v));
+    let out = upsert_text(existing, &entry(&p, &u, &v, &t));
     assert_eq!(
         out,
-        "foo:\r\n  url: https://github.com/example/foo.git\r\n  tag: 1.2.3\r\n  \
+        "foo:\r\n  url: https://github.com/example/foo.git\r\n  tag: foo@1.2.3\r\n  \
          version: 1.2.3\r\nbar:\r\n  url: keep\r\n"
     );
 }
@@ -566,7 +628,6 @@ fn route_and_apply(
     root: &std::path::Path,
     package: &PackageName,
     url: &GithubRepoUrl,
-    tag: &str,
     version: &Version,
     sha: &Sha40,
     subdir: Option<&str>,
@@ -575,7 +636,6 @@ fn route_and_apply(
         root,
         package,
         url,
-        tag,
         version,
         sha,
         PixiEntryOpts { subdir, lfs: false },
@@ -597,7 +657,6 @@ fn release_patches_vendored_recipe_when_present() {
         root,
         &pkg("is-core"),
         &url("https://github.com/example/is-core.git"),
-        "v1.1.0",
         &ver("1.1.0"),
         &sha("1111111111111111111111111111111111111111"),
         None,
@@ -634,7 +693,6 @@ fn release_updates_existing_pixi_native_entry() {
         root,
         &pkg("mise"),
         &url("https://github.com/greenroom-robotics/mise"),
-        "v4.4.0",
         &ver("4.4.0"),
         &sha("2222222222222222222222222222222222222222"),
         None,
@@ -670,7 +728,6 @@ fn release_updates_existing_rosdistro_entry() {
         root,
         &pkg("foo_pkg"),
         &url("https://github.com/example/foo_pkg.git"),
-        "v0.2.0",
         &ver("0.2.0"),
         &sha("3333333333333333333333333333333333333333"),
         Some("packages/foo_pkg"),
@@ -682,7 +739,8 @@ fn release_updates_existing_rosdistro_entry() {
     );
     assert_eq!(old_ref, Some(OldRef::Tag("0.1.0".into())));
     let out = std::fs::read_to_string(root.join("rosdistro_additional_recipes.yaml")).unwrap();
-    assert!(out.contains("tag: v0.2.0") && out.contains("version: 0.2.0"));
+    assert!(out.contains("tag: foo_pkg@0.2.0") && out.contains("version: 0.2.0"));
+    assert!(out.contains("additional_folder: packages/foo_pkg"));
 }
 
 #[test]
@@ -698,7 +756,6 @@ fn release_defaults_brand_new_package_to_pixi_native() {
         root,
         &pkg("newpkg"),
         &url("https://github.com/example/newpkg.git"),
-        "v1.0.0",
         &ver("1.0.0"),
         &sha("4444444444444444444444444444444444444444"),
         Some("packages/newpkg"),
@@ -720,7 +777,6 @@ fn release_errors_when_pixi_native_absent() {
         root,
         &pkg("newpkg"),
         &url("https://github.com/example/newpkg.git"),
-        "v1.0.0",
         &ver("1.0.0"),
         &sha("5555555555555555555555555555555555555555"),
         None,
@@ -743,7 +799,6 @@ fn release_resolves_hyphenated_vendored_dir() {
         root,
         &pkg("deepstream_extensions"),
         &url("https://github.com/example/pp.git"),
-        "v1.1.0",
         &ver("1.1.0"),
         &sha("1111111111111111111111111111111111111111"),
         None,
@@ -781,7 +836,6 @@ fn route_picks_pixi_native_over_rosdistro_when_both_list_the_package() {
         root,
         &pkg("both"),
         &url("https://github.com/example/both.git"),
-        "v0.2.0",
         &ver("0.2.0"),
         &sha("1111111111111111111111111111111111111111"),
         PixiEntryOpts {
@@ -817,7 +871,6 @@ fn route_carries_only_the_facts_its_arm_records() {
         root,
         &pkg("vend"),
         &url("https://github.com/example/vend.git"),
-        "v1.1.0",
         &ver("1.1.0"),
         &sha("1111111111111111111111111111111111111111"),
         PixiEntryOpts {
