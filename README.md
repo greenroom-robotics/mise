@@ -6,7 +6,6 @@ Build and release automation for Greenroom's conda/pixi ROS packaging: the `mise
 
 ```
 mise ci            # test, build, and release pixi-native ROS package repos
-mise snapshot      # refresh rosdistro_snapshot.yaml and the vinca-cache repodata
 ```
 
 `mise ci` also carries the semantic-release hook callbacks (`prepare`, `publish`, `recipes-pr`, …). They exist for semantic-release to invoke, not for you to run by hand.
