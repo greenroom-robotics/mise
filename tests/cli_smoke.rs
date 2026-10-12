@@ -13,7 +13,11 @@ fn help_lists_top_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("ci"))
-        .stdout(predicate::str::contains("snapshot"));
+        .stdout(
+            predicate::str::is_match(r"(?m)^\s+(snapshot|route)\b")
+                .unwrap()
+                .not(),
+        );
 }
 
 #[test]

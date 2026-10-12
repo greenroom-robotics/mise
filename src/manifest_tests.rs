@@ -1,6 +1,5 @@
 use super::*;
-use crate::recipe::RecipeNoarch;
-use crate::types::{Arch, LocalChannel, PackageName, SiblingPinStyle, Version};
+use crate::types::{LocalChannel, PackageName, SiblingPinStyle, Version};
 
 fn pn(s: &str) -> PackageName {
     PackageName::new(s).unwrap()
@@ -115,77 +114,6 @@ fn parses_minimal() {
     let p = PackageManifest::parse("[package]\nname = \"foo\"\nversion = \"1.2.3\"\n").unwrap();
     assert_eq!(*p.name(), pn("foo"));
     assert_eq!(*p.version(), ver("1.2.3"));
-    assert_eq!(p.build_number(), 0);
-}
-
-#[test]
-fn parses_build_number() {
-    let p = PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
-         [package.build]\nbuild-number = 5\n",
-    )
-    .unwrap();
-    assert_eq!(p.build_number(), 5);
-}
-
-#[test]
-fn falls_back_to_deprecated_config_build_number() {
-    let p = PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
-         [package.build.config]\nbuild-number = 5\n",
-    )
-    .unwrap();
-    assert_eq!(p.build_number(), 5);
-}
-
-#[test]
-fn build_section_build_number_wins_over_config() {
-    let p = PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.2.3\"\n\
-         [package.build]\nbuild-number = 7\n\
-         [package.build.config]\nbuild-number = 5\n",
-    )
-    .unwrap();
-    assert_eq!(p.build_number(), 7);
-}
-
-#[test]
-fn supports_platform_when_workspace_lists_none() {
-    let p = PackageManifest::parse("[package]\nname = \"foo\"\nversion = \"1.0\"\n").unwrap();
-    assert!(p.supports_platform(Arch::Linux64));
-}
-
-#[test]
-fn respects_workspace_platforms_list() {
-    let p = PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
-         [workspace]\nplatforms = [\"linux-64\"]\n",
-    )
-    .unwrap();
-    assert!(p.supports_platform(Arch::Linux64));
-    assert!(!p.supports_platform(Arch::LinuxAarch64));
-}
-
-#[test]
-fn respects_workspace_platform_tables() {
-    let p = PackageManifest::parse(
-        "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
-         [workspace]\nplatforms = [{ platform = \"linux-64\", archspec = \"x86_64_v3\", glibc = \"2.34\" }]\n",
-    )
-    .unwrap();
-    assert!(p.supports_platform(Arch::Linux64));
-    assert!(!p.supports_platform(Arch::LinuxAarch64));
-}
-
-#[test]
-fn rejects_platform_table_without_platform() {
-    assert!(
-        PackageManifest::parse(
-            "[package]\nname = \"foo\"\nversion = \"1.0\"\n\
-         [workspace]\nplatforms = [{ archspec = \"x86_64_v3\" }]\n",
-        )
-        .is_err()
-    );
 }
 
 #[test]
@@ -195,103 +123,6 @@ fn ignores_unknown_keys() {
          [tasks]\nci = \"test\"\n[dependencies]\nsomething = \"1\"\n",
     )
     .unwrap();
-}
-
-fn noarch(toml: &str, recipe: impl FnOnce() -> Result<String>) -> Result<Option<Noarch>> {
-    PackageManifest::parse(toml).unwrap().noarch(recipe)
-}
-
-fn no_recipe() -> Result<String> {
-    Err(color_eyre::eyre::eyre!("no recipe.yaml"))
-}
-
-const RATTLER_BUILD: &str = "[package]\nname=\"proto\"\nversion=\"1\"\n\
-    [package.build.backend]\nname=\"pixi-build-rattler-build\"\nversion=\"*\"";
-
-#[test]
-fn noarch_detects_python_and_ament_python_without_a_recipe() {
-    assert_eq!(
-        noarch(
-            "[package]\nname=\"c\"\nversion=\"1\"\n\
-             [package.build.backend]\nname=\"pixi-build-python\"\nversion=\"*\"",
-            no_recipe,
-        )
-        .unwrap(),
-        Some(Noarch::PythonBackend)
-    );
-    assert_eq!(
-        noarch(
-            "[package]\nname=\"p\"\nversion=\"1\"\n\
-             [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-             [package.build.config]\nbuild-type=\"ament_python\"",
-            no_recipe,
-        )
-        .unwrap(),
-        Some(Noarch::AmentPython)
-    );
-}
-
-#[test]
-fn noarch_none_for_compiled_and_missing_build() {
-    for bt in ["ament_cmake", "ament_idl", "cmake"] {
-        assert_eq!(
-            noarch(
-                &format!(
-                    "[package]\nname=\"x\"\nversion=\"1\"\n\
-                     [package.build.backend]\nname=\"pixi-build-ros-gr\"\n\
-                     [package.build.config]\nbuild-type=\"{bt}\"",
-                ),
-                no_recipe,
-            )
-            .unwrap(),
-            None,
-            "expected {bt} to be arch-specific"
-        );
-    }
-    assert_eq!(
-        noarch("[package]\nname=\"x\"\nversion=\"1\"", no_recipe).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn rattler_build_package_is_noarch_when_its_recipe_says_so() {
-    assert_eq!(
-        noarch(RATTLER_BUILD, || Ok(
-            "package:\n  name: proto\n  version: 1\nbuild:\n  number: 0\n  noarch: generic\n"
-                .to_string()
-        ))
-        .unwrap(),
-        Some(Noarch::Recipe(RecipeNoarch::Generic))
-    );
-    assert_eq!(
-        noarch(RATTLER_BUILD, || Ok(
-            "build:\n  noarch: python\n".to_string()
-        ))
-        .unwrap(),
-        Some(Noarch::Recipe(RecipeNoarch::Python))
-    );
-}
-
-#[test]
-fn rattler_build_package_is_arch_specific_when_its_recipe_is_silent() {
-    assert_eq!(
-        noarch(RATTLER_BUILD, || Ok(
-            "package:\n  name: proto\n  version: 1\nbuild:\n  number: 0\n".to_string()
-        ))
-        .unwrap(),
-        None
-    );
-    assert_eq!(
-        noarch(RATTLER_BUILD, || Ok("build:\n  noarch:\n".to_string())).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn rattler_build_package_without_a_recipe_is_an_error() {
-    let msg = format!("{:#}", noarch(RATTLER_BUILD, no_recipe).unwrap_err());
-    assert!(msg.contains("no recipe.yaml"), "got: {msg}");
 }
 
 #[test]
@@ -346,32 +177,6 @@ fn path_dep_rel_paths_excludes_self_idiom() {
     let mut got = t.path_dep_rel_paths(Path::new("packages/node"));
     got.sort();
     assert_eq!(got, vec!["../lib".to_string(), "../msgs".to_string()]);
-}
-
-#[test]
-fn exact_pin_version_parses_only_concrete_triples() {
-    assert_eq!(exact_pin_version("==2.5.0"), Some(ver("2.5.0")));
-    assert_eq!(
-        exact_pin_version("==2.5.0-alpha.1"),
-        Some(ver("2.5.0-alpha.1"))
-    );
-    assert_eq!(exact_pin_version(">=2.5.0"), None);
-    assert_eq!(exact_pin_version("==2.5.*"), None);
-    assert_eq!(exact_pin_version("*"), None);
-    assert_eq!(exact_pin_version("==2.5"), None); // not three components
-}
-
-#[test]
-fn exact_pins_lists_pin_keys_across_tables() {
-    let t = PackageManifest::parse(
-        "[package]\nname=\"node\"\nversion=\"1\"\n\
-         [package.run-dependencies]\nlib = \"==2.5.0\"\nros-kilted-rclpy = \"*\"\n\
-         [package.host-dependencies]\nmsgs = \"==1.2.3\"\n",
-    )
-    .unwrap();
-    let mut got: Vec<PackageName> = t.exact_pins().into_iter().map(|(k, _)| k).collect();
-    got.sort();
-    assert_eq!(got, vec![pn("lib"), pn("msgs")]);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,22 +283,21 @@ fn a_syntactically_broken_sibling_does_not_hide_its_neighbours() {
 }
 
 #[test]
-fn a_sibling_with_a_type_mismatched_field_does_not_hide_its_neighbours() {
-    // Valid TOML, wrong types: `build-number` is a u64 and `platforms` a list
-    // in the schema. alpha's release never reads either, so a mistake in
-    // broken/ must not make alpha undiscoverable.
+fn a_sibling_with_an_invalid_dependency_key_does_not_hide_its_neighbours() {
+    // Valid TOML with a readable identity, but the manifest is rejected
+    // elsewhere. alpha's release never reads broken/, so a mistake there must
+    // not make alpha undiscoverable.
     let tmp = TempDir::new().unwrap();
     make_pkg(tmp.path(), "alpha");
     let pkg = tmp.path().join("broken");
     fs::create_dir_all(&pkg).unwrap();
     fs::write(
         pkg.join("pixi.toml"),
-        "[workspace]\nplatforms = \"linux-64\"\n\
-         [package]\nname = \"broken\"\nversion = \"1.0.0\"\n\
-         [package.build.config]\nbuild-number = \"not-a-number\"\n",
+        "[package]\nname = \"broken\"\nversion = \"1.0.0\"\n\
+         [dependencies]\n\"bad key\" = \"*\"\n",
     )
     .unwrap();
-    // The manifest really is rejected by the schema...
+    // The manifest really is rejected...
     assert!(Manifest::read(&pkg.join("pixi.toml")).is_err());
     // ...and discovery survives it.
     let result = manifest_paths(&discover(tmp.path(), None).unwrap());

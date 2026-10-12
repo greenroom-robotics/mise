@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{ci::Ci, route::Route, snapshot::Snapshot};
+use crate::commands::ci::Ci;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -18,11 +18,6 @@ enum Top {
     /// CI helpers for pixi-native ROS package repos.
     #[command(subcommand)]
     Ci(Ci),
-    /// Snapshot maintenance.
-    #[command(subcommand)]
-    Snapshot(Snapshot),
-    /// Package routing
-    Route(Route),
 }
 
 impl Cli {
@@ -30,8 +25,6 @@ impl Cli {
     pub fn run(self) -> color_eyre::eyre::Result<()> {
         match self.command {
             Top::Ci(c) => c.run(),
-            Top::Snapshot(c) => c.run(),
-            Top::Route(c) => c.run(),
         }
     }
 }

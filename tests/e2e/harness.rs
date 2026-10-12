@@ -108,8 +108,8 @@ impl E2e {
         // and local-path remotes are unaffected.
         //
         // uploadpack.allowAnySHA1InWant lets a local fixture remote serve a
-        // fetch-by-SHA the way GitHub does, so `git::fetch_rev` can be
-        // exercised against a `file://` redirect.
+        // fetch-by-SHA the way GitHub does, so a `file://` redirect can be
+        // fetched by SHA.
         fs::write(
             &gitconfig,
             "[user]\n\tname = e2e-test\n\temail = e2e-test@example.invalid\n\

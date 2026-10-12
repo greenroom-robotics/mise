@@ -16,8 +16,7 @@ use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
 use crate::consts::PIXI_TOML;
-use crate::recipe::{Recipe, RecipeNoarch};
-use crate::types::{Arch, LocalChannel, PackageName, SiblingPinStyle, Version};
+use crate::types::{LocalChannel, PackageName, SiblingPinStyle, Version};
 use url::Url;
 
 /// The dependency tables a pixi package can declare, in scan order.
@@ -69,7 +68,6 @@ pub enum Manifest {
 #[derive(Debug)]
 pub struct PackageManifest {
     package: PackageSection,
-    workspace: Option<Workspace>,
     /// Every dependency entry across [`DEP_TABLES`], in that order.
     deps: Vec<Dep>,
 }
@@ -81,13 +79,6 @@ pub struct PackageManifest {
 pub struct PackageIdentity {
     pub name: PackageName,
     pub version: Version,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Noarch {
-    PythonBackend,
-    AmentPython,
-    Recipe(RecipeNoarch),
 }
 
 /// One entry from a dependency table: the dep *key* — which is the channel
@@ -105,8 +96,6 @@ struct ManifestRaw {
     /// and its errors can be attributed to that table by name.
     #[serde(default)]
     package: Option<toml::Value>,
-    #[serde(default)]
-    workspace: Option<Workspace>,
 }
 
 /// Both identity keys are required: a `[package]` table that does not name and
@@ -115,55 +104,6 @@ struct ManifestRaw {
 struct PackageSection {
     name: PackageName,
     version: Version,
-    #[serde(default)]
-    build: Option<BuildSection>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BuildSection {
-    #[serde(default)]
-    backend: Option<BuildBackend>,
-    #[serde(default, rename = "build-number")]
-    build_number: Option<u64>,
-    #[serde(default)]
-    config: Option<BuildConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-struct BuildBackend {
-    #[serde(default)]
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct BuildConfig {
-    #[serde(default, rename = "build-number")]
-    build_number: u64,
-    #[serde(default, rename = "build-type")]
-    build_type: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Workspace {
-    #[serde(default)]
-    platforms: Vec<PlatformEntry>,
-}
-
-/// A `[workspace] platforms` entry: a bare subdir (`"linux-64"`) or an inline
-/// table naming the subdir alongside virtual-package keys (`archspec`, `glibc`, ...).
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum PlatformEntry {
-    Subdir(String),
-    Table { platform: String },
-}
-
-impl PlatformEntry {
-    fn subdir(&self) -> &str {
-        match self {
-            Self::Subdir(subdir) | Self::Table { platform: subdir } => subdir,
-        }
-    }
 }
 
 impl Manifest {
@@ -175,7 +115,6 @@ impl Manifest {
             None => Self::WorkspaceOnly,
             Some(package) => Self::Package(PackageManifest {
                 package: package.try_into().context("[package]")?,
-                workspace: raw.workspace,
                 deps,
             }),
         })
@@ -275,15 +214,6 @@ pub(crate) fn normalize(p: &Path) -> PathBuf {
     out
 }
 
-/// The version of an exact `==X.Y.Z` pin, else `None`. The explicit-triple
-/// check matters: a two-component `==1.2` parses as a [`Version`] but is a
-/// range to the solver.
-fn exact_pin_version(s: &str) -> Option<Version> {
-    Version::parse(s.trim().strip_prefix("==")?)
-        .ok()
-        .filter(Version::is_explicit_triple)
-}
-
 impl PackageManifest {
     pub fn parse(text: &str) -> Result<Self> {
         match Manifest::parse(text)? {
@@ -319,47 +249,6 @@ impl PackageManifest {
         &self.deps
     }
 
-    /// `[package.build].build-number`, else the deprecated
-    /// `[package.build.config].build-number`, else 0.
-    #[must_use]
-    pub fn build_number(&self) -> u64 {
-        self.package.build.as_ref().map_or(0, |b| {
-            b.build_number
-                .unwrap_or_else(|| b.config.as_ref().map_or(0, |c| c.build_number))
-        })
-    }
-
-    pub fn noarch(&self, recipe: impl FnOnce() -> Result<String>) -> Result<Option<Noarch>> {
-        let Some(build) = &self.package.build else {
-            return Ok(None);
-        };
-        match build.backend.as_ref().map(|b| b.name.as_str()) {
-            Some("pixi-build-python") => Ok(Some(Noarch::PythonBackend)),
-            Some("pixi-build-rattler-build") => {
-                Ok(Recipe::parse(&recipe()?)?.noarch().map(Noarch::Recipe))
-            }
-            _ => Ok(build
-                .config
-                .as_ref()
-                .filter(|c| c.build_type == "ament_python")
-                .map(|_| Noarch::AmentPython)),
-        }
-    }
-
-    /// `true` if the workspace's `platforms` list is empty or contains `target`.
-    /// Empty list is treated as "no explicit restriction" (build everywhere).
-    #[must_use]
-    pub fn supports_platform(&self, target: Arch) -> bool {
-        let Some(ws) = &self.workspace else {
-            return true;
-        };
-        if ws.platforms.is_empty() {
-            return true;
-        }
-        let target_str = target.to_string();
-        ws.platforms.iter().any(|p| p.subdir() == target_str)
-    }
-
     /// Relative `path =` values of every dep on another package, for a
     /// manifest in `dir`.
     pub fn path_dep_rel_paths(&self, dir: &Path) -> Vec<String> {
@@ -367,22 +256,6 @@ impl PackageManifest {
             .iter()
             .filter_map(|d| d.sibling_path(dir))
             .map(str::to_string)
-            .collect()
-    }
-
-    /// Dep (key, pinned-version) pairs whose value is an exact `==X.Y.Z` string.
-    /// These are committed opt-out pins (a released consumer that was decoupled
-    /// from its sibling), hand-written or legacy.
-    #[must_use]
-    pub fn exact_pins(&self) -> Vec<(PackageName, Version)> {
-        self.deps
-            .iter()
-            .filter_map(|d| {
-                d.value
-                    .as_str()
-                    .and_then(exact_pin_version)
-                    .map(|v| (d.name.clone(), v))
-            })
             .collect()
     }
 }
@@ -514,7 +387,8 @@ impl Candidate {
 /// Whether `text` is valid TOML declaring a `[package]` table whose `name` or
 /// `version` is missing, or is not a string our own newtypes accept.
 ///
-/// Limited to identity: a `[package]` with a bad `build-number` is not fatal.
+/// Limited to identity: a `[package]` that fails to parse for any other
+/// reason, such as an invalid dependency key, is not fatal.
 /// The table check is load-bearing: a `package` key that is not a table
 /// (`package = "oops"`, a stray `[[package]]`) is a malformed manifest, not a
 /// package that names itself unreadably — it stays a tolerated skip so one

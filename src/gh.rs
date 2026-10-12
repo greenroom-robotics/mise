@@ -1,128 +1,15 @@
-//! GitHub-facing plumbing: workflow events, auth, the REST/raw HTTP calls, the
-//! `gh` CLI wrappers, and the Actions output/summary files.
+//! GitHub-facing plumbing: auth, the `gh` CLI wrappers, and the Actions step
+//! summary file.
 //!
 //! Git subprocess work lives in [`crate::git`].
 
 use std::env;
-use std::fmt::Display;
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-
-use color_eyre::eyre::WrapErr;
-use serde::Deserialize;
 
 use crate::consts::DEFAULT_BRANCH;
-use crate::manifest::PackageManifest;
 use crate::process;
-use crate::repo::Repo;
 use crate::secret::{ExposeSecret, Secret};
-use crate::types::{PixiNativeEntry, Sha40};
-
-/// The GitHub "no parent" sentinel for `push` event's `before` field on initial pushes.
-const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Event {
-    PullRequest { base: Sha40, head: Sha40 },
-    Push { before: Option<Sha40>, after: Sha40 },
-    WorkflowDispatch,
-    Other,
-}
-
-impl Event {
-    /// The SHA to diff the working tree against for change detection.
-    #[must_use]
-    pub const fn base_sha(&self) -> Option<&Sha40> {
-        match self {
-            Self::PullRequest { base, .. } => Some(base),
-            Self::Push {
-                before: Some(b), ..
-            } => Some(b),
-            _ => None,
-        }
-    }
-
-    /// Load using `GITHUB_EVENT_NAME` + `GITHUB_EVENT_PATH`.
-    pub fn load() -> color_eyre::eyre::Result<Self> {
-        let name = env::var("GITHUB_EVENT_NAME").unwrap_or_default();
-        if name == "workflow_dispatch" {
-            return Ok(Self::WorkflowDispatch);
-        }
-        let path = env::var("GITHUB_EVENT_PATH").context("GITHUB_EVENT_PATH must be set")?;
-        Self::load_from(&name, Path::new(&path))
-    }
-
-    pub fn load_from(name: &str, path: &Path) -> color_eyre::eyre::Result<Self> {
-        let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        Self::from_str_with_kind(name, &text)
-    }
-
-    pub fn from_str_with_kind(name: &str, json: &str) -> color_eyre::eyre::Result<Self> {
-        match name {
-            "pull_request" => {
-                #[derive(Deserialize)]
-                struct E {
-                    pull_request: Pr,
-                }
-                #[derive(Deserialize)]
-                struct Pr {
-                    base: Side,
-                    head: Side,
-                }
-                #[derive(Deserialize)]
-                struct Side {
-                    sha: Sha40,
-                }
-                let e: E = serde_json::from_str(json)?;
-                Ok(Self::PullRequest {
-                    base: e.pull_request.base.sha,
-                    head: e.pull_request.head.sha,
-                })
-            }
-            "push" => {
-                #[derive(Deserialize)]
-                struct E {
-                    before: String,
-                    after: Sha40,
-                }
-                let e: E = serde_json::from_str(json)?;
-                let before = if e.before == ZERO_SHA {
-                    None
-                } else {
-                    Some(Sha40::new(e.before)?)
-                };
-                Ok(Self::Push {
-                    before,
-                    after: e.after,
-                })
-            }
-            "workflow_dispatch" => Ok(Self::WorkflowDispatch),
-            _ => Ok(Self::Other),
-        }
-    }
-
-    /// The `git diff` range that expresses "what this event changed", or
-    /// `None` when the event carries no base to diff from (which callers read
-    /// as "assume everything changed").
-    #[must_use]
-    pub fn diff_range(&self) -> Option<String> {
-        match self {
-            Self::PullRequest { base, head } => Some(format!("{base}...{head}")),
-            Self::Push {
-                before: Some(b),
-                after,
-            } => Some(format!("{b}..{after}")),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ChangedFiles {
-    All,
-    Paths(Vec<PathBuf>),
-}
 
 /// Environment variables holding a GitHub credential, in precedence order:
 ///
@@ -147,21 +34,6 @@ fn token_from(lookup: impl Fn(&str) -> Option<String>) -> Option<Secret> {
         .map(Secret::new)
 }
 
-/// The `insteadOf` rule mise installs is keyed on a URL that embeds the token,
-/// so a new token means a new config key rather than a new value for the old
-/// one. This prefix identifies the whole family for removal.
-/// An override base URL, normalized to no trailing slash; callers supply the
-/// leading `/` of the path.
-fn base_url(var: &str, default: &str) -> String {
-    let raw = env::var(var).unwrap_or_else(|_| default.to_string());
-    raw.trim_end_matches('/').to_string()
-}
-
-/// Base URL for raw file content; `MISE_GITHUB_RAW_URL` overrides it.
-fn raw_base() -> String {
-    base_url("MISE_GITHUB_RAW_URL", "https://raw.githubusercontent.com")
-}
-
 /// The URL to clone `owner/repo` from: tokenized HTTPS when a token is
 /// available, ssh otherwise. The token is registered for log scrubbing, so
 /// the URL is safe to hand to [`crate::process`].
@@ -176,71 +48,6 @@ pub fn clone_url(repo: &str) -> String {
             )
         },
     )
-}
-
-/// Fetch one file's content from the raw-content host at a given rev.
-pub fn fetch_raw_file(
-    owner: &str,
-    repo: &str,
-    rev: &str,
-    path: &str,
-) -> color_eyre::eyre::Result<String> {
-    let url = format!("{}/{owner}/{repo}/{rev}/{path}", raw_base());
-    let token = token();
-    let mut req = ureq::get(&url);
-    if let Some(t) = &token {
-        req = req.set("Authorization", &format!("Bearer {}", t.expose_secret()));
-    }
-    match req.call() {
-        Ok(resp) => resp
-            .into_string()
-            .with_context(|| format!("read body of {url}")),
-        Err(ureq::Error::Status(code, _)) => {
-            let hint = if token.is_none() && (code == 401 || code == 403 || code == 404) {
-                " (set GH_TOKEN for private repos)"
-            } else {
-                ""
-            };
-            color_eyre::eyre::bail!("failed to fetch {url} ({code}){hint}")
-        }
-        Err(e) => color_eyre::eyre::bail!("fetch {url}: {e}"),
-    }
-}
-
-/// Fetch and parse an entry's `pixi.toml` at its pinned rev without cloning.
-pub fn fetch_upstream_manifest(
-    entry: &PixiNativeEntry,
-) -> color_eyre::eyre::Result<PackageManifest> {
-    let text = fetch_raw_file(
-        entry.url.owner(),
-        entry.url.repo(),
-        entry.rev.as_str(),
-        &entry.manifest_rel_path(),
-    )
-    .with_context(|| format!("entry {}", entry.name))?;
-    PackageManifest::parse(&text)
-        .with_context(|| format!("entry {}: parse upstream pixi.toml", entry.name))
-}
-
-/// Paths the event touched, or [`ChangedFiles::All`] when nothing can be diffed.
-///
-/// That is the case when the event carries no base ref, or a base that is not
-/// present locally (a force-push rewrote it away); a full rebuild is the
-/// fail-safe.
-pub fn changed_files(repo: &Repo, event: &Event) -> color_eyre::eyre::Result<ChangedFiles> {
-    if let Some(base) = event.base_sha()
-        && !crate::git::rev_exists(repo.root(), base)?
-    {
-        tracing::warn!("base {base} not present locally; rebuilding all");
-        return Ok(ChangedFiles::All);
-    }
-    match event.diff_range() {
-        None => Ok(ChangedFiles::All),
-        Some(range) => Ok(ChangedFiles::Paths(crate::git::changed_files(
-            repo.root(),
-            &range,
-        )?)),
-    }
 }
 
 /// A pull request identified the way every `gh pr` subcommand identifies one:
@@ -354,29 +161,6 @@ pub mod pr {
         let prs: Vec<serde_json::Value> = serde_json::from_str(&out).ok()?;
         let first = prs.first()?;
         Some(first["body"].as_str().unwrap_or_default().to_string())
-    }
-}
-
-pub mod outputs {
-    use super::{Display, Path, WrapErr, Write, env, fs};
-
-    /// Append `key=value` to `$GITHUB_OUTPUT`. No-op when unset.
-    pub fn set(key: &str, value: &impl Display) -> color_eyre::eyre::Result<()> {
-        let Some(path) = env::var_os("GITHUB_OUTPUT") else {
-            return Ok(());
-        };
-        let formatted = format!("{value}");
-        color_eyre::eyre::ensure!(
-            !formatted.contains('\n'),
-            "outputs::set value must not contain newlines (multiline values need the heredoc format); key={key}"
-        );
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .with_context(|| format!("open $GITHUB_OUTPUT ({})", Path::new(&path).display()))?;
-        writeln!(f, "{key}={formatted}").context("write $GITHUB_OUTPUT line")?;
-        Ok(())
     }
 }
 

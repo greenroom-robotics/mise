@@ -12,65 +12,6 @@ fn arch_rejects_unknown() {
 }
 
 #[test]
-fn deepstream_version_round_trips_via_serde() {
-    let yaml = "\"7.1\"\n";
-    let v: DeepstreamVersion = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(v, DeepstreamVersion::V7_1);
-    let out = serde_yaml_ng::to_string(&DeepstreamVersion::V8_0).unwrap();
-    assert_eq!(out.trim(), "'8.0'");
-}
-
-#[test]
-fn runner_size_default_is_4cpu() {
-    assert_eq!(RunnerSize::default(), RunnerSize::Cpu4);
-}
-
-#[test]
-fn runner_size_serde() {
-    let v: RunnerSize = serde_yaml_ng::from_str("16cpu").unwrap();
-    assert_eq!(v, RunnerSize::Cpu16);
-    assert!(serde_yaml_ng::from_str::<RunnerSize>("2cpu").is_err());
-}
-
-#[test]
-fn runner_spec_string_roundtrip() {
-    for s in [
-        "4cpu",
-        "16cpu",
-        "16cpu-himem",
-        "4cpu-himem",
-        "16cpu-200gb",
-        "16cpu-himem-200gb",
-    ] {
-        let spec: RunnerSpec = s.parse().unwrap();
-        assert_eq!(spec.to_string(), s);
-    }
-    assert_eq!(
-        "16cpu-himem".parse::<RunnerSpec>().unwrap(),
-        RunnerSpec {
-            size: RunnerSize::Cpu16,
-            himem: true,
-            volume: None,
-        }
-    );
-    assert_eq!(
-        "16cpu-himem-200gb".parse::<RunnerSpec>().unwrap(),
-        RunnerSpec {
-            size: RunnerSize::Cpu16,
-            himem: true,
-            volume: Some(200),
-        }
-    );
-    assert!("himem".parse::<RunnerSpec>().is_err());
-    assert!("2cpu-himem".parse::<RunnerSpec>().is_err());
-}
-
-#[test]
-fn deepstream_version_ord_is_ascending() {
-    assert!(DeepstreamVersion::V7_1 < DeepstreamVersion::V8_0);
-}
-
-#[test]
 fn sha40_accepts_valid() {
     let s = Sha40::new("4110a9a40736b555c7419119ef6c607951563745").unwrap();
     assert_eq!(s.as_str(), "4110a9a40736b555c7419119ef6c607951563745");
@@ -112,145 +53,6 @@ fn github_url_rejects_non_github() {
 #[test]
 fn github_url_rejects_http() {
     assert!(GithubRepoUrl::parse("http://github.com/foo/bar").is_err());
-}
-
-#[test]
-fn rejects_ref_entry_with_migration_pointer() {
-    let yaml = r"
-packages:
-  - name: pkg_with_ref
-    url: https://github.com/example/repo.git
-    ref: main
-";
-    let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(msg.contains("pkg_with_ref"), "got: {msg}");
-    assert!(msg.contains("no longer supported"), "got: {msg}");
-    assert!(msg.contains("40-char SHA"), "got: {msg}");
-}
-
-#[test]
-fn rejects_missing_rev() {
-    let yaml = r"
-packages:
-  - name: pkg_without_rev
-    url: https://github.com/example/repo.git
-";
-    let err = PixiNativeManifest::from_yaml_str(yaml).unwrap_err();
-    let msg = format!("{err:#}");
-    assert!(msg.contains("pkg_without_rev"), "got: {msg}");
-    assert!(msg.contains("rev"), "got: {msg}");
-}
-
-#[test]
-fn parses_valid_entries() {
-    let yaml = r"
-packages:
-  - name: pkg_with_rev
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-  - name: pkg_with_subdir
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-    subdir: packages/inner
-    runner-size: 8cpu
-";
-    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
-    assert_eq!(m.packages.len(), 2);
-    assert_eq!(m.packages[0].name.as_str(), "pkg_with_rev");
-    assert_eq!(
-        m.packages[0].rev.as_str(),
-        "4110a9a40736b555c7419119ef6c607951563745"
-    );
-    assert_eq!(m.packages[0].runner_size, RunnerSize::Cpu4);
-    assert_eq!(
-        m.packages[1].subdir.as_deref(),
-        Some(std::path::Path::new("packages/inner"))
-    );
-    assert_eq!(m.packages[1].runner_size, RunnerSize::Cpu8);
-}
-
-#[test]
-fn entry_pin_style_defaults_to_range_and_parses_exact_pins() {
-    let yaml = r"
-packages:
-  - name: plain
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-  - name: lockstep
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-    exact-pins: true
-";
-    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
-    assert_eq!(m.packages[0].pin_style, SiblingPinStyle::Range);
-    assert_eq!(m.packages[1].pin_style, SiblingPinStyle::Exact);
-}
-
-#[test]
-fn entry_submodules_defaults_to_false_and_parses_when_set() {
-    let yaml = r"
-packages:
-  - name: plain
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-  - name: with_submodules
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-    submodules: true
-";
-    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
-    assert!(!m.packages[0].submodules);
-    assert!(m.packages[1].submodules);
-}
-
-#[test]
-fn rebuild_epoch_defaults_to_zero() {
-    let yaml = r"
-packages:
-  - name: pkg
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-";
-    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
-    assert_eq!(m.rebuild_epoch, 0);
-}
-
-#[test]
-fn rebuild_epoch_parses_when_present() {
-    let yaml = r"
-rebuild_epoch: 3
-packages:
-  - name: pkg
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-";
-    let m = PixiNativeManifest::from_yaml_str(yaml).unwrap();
-    assert_eq!(m.rebuild_epoch, 3);
-}
-
-#[test]
-fn rebuild_epoch_rejects_negative() {
-    let yaml = r"
-rebuild_epoch: -1
-packages:
-  - name: pkg
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-";
-    assert!(PixiNativeManifest::from_yaml_str(yaml).is_err());
-}
-
-#[test]
-fn rebuild_epoch_rejects_string() {
-    let yaml = r#"
-rebuild_epoch: "1"
-packages:
-  - name: pkg
-    url: https://github.com/example/repo.git
-    rev: 4110a9a40736b555c7419119ef6c607951563745
-"#;
-    assert!(PixiNativeManifest::from_yaml_str(yaml).is_err());
 }
 
 #[test]
@@ -387,13 +189,6 @@ fn version_padding_is_invisible_to_identity_but_not_to_display() {
     assert_ne!(short.to_string(), "1.0.0");
     // `1` fills out too.
     assert_eq!(Version::parse("1").unwrap(), long);
-    // Only a spelled-out triple counts as an exact pin.
-    assert!(!short.is_explicit_triple());
-    assert!(
-        Version::parse("1.0.0-alpha.1")
-            .unwrap()
-            .is_explicit_triple()
-    );
 }
 
 #[test]
@@ -427,14 +222,6 @@ fn sha40_from_str_matches_new() {
 }
 
 #[test]
-fn remote_channel_rejects_local_paths() {
-    // A file: channel cannot be swept, so it must not be representable as a
-    // RemoteChannel at all.
-    assert!(RemoteChannel::parse("file:///tmp/out").is_err());
-    assert!(RemoteChannel::parse("https://example.invalid/general").is_ok());
-}
-
-#[test]
 fn local_channel_is_an_empty_absolute_file_url() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = tmp.path().join("chan");
@@ -443,19 +230,4 @@ fn local_channel_is_an_empty_absolute_file_url() {
     let abs = std::fs::canonicalize(&dir).unwrap();
     assert_eq!(ch.to_string(), format!("file://{}/", abs.display()));
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
-}
-
-#[test]
-fn remote_channel_sibling_swaps_the_last_segment() {
-    let base = RemoteChannel::parse("az://stg.blob.core.windows.net/general").unwrap();
-    assert_eq!(
-        base.sibling("app").to_string(),
-        "az://stg.blob.core.windows.net/app"
-    );
-    // A trailing slash is not a segment of its own.
-    let slashed = RemoteChannel::parse("https://example.invalid/general/").unwrap();
-    assert_eq!(
-        slashed.sibling("app").to_string(),
-        "https://example.invalid/app"
-    );
 }

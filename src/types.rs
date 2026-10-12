@@ -8,14 +8,11 @@
 
 use std::borrow::Borrow;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 
-use color_eyre::eyre::bail;
 use serde::{Deserialize, Serialize};
 use url::Url;
-
-use crate::consts::{PIXI_TOML, RECIPE_YAML};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -24,45 +21,6 @@ pub enum Arch {
     Linux64,
     #[serde(rename = "linux-aarch64")]
     LinuxAarch64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum DeepstreamVersion {
-    #[serde(rename = "7.1")]
-    V7_1,
-    #[serde(rename = "8.0")]
-    V8_0,
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
-)]
-#[serde(rename_all = "lowercase")]
-pub enum RunnerSize {
-    #[serde(rename = "4cpu")]
-    #[default]
-    Cpu4,
-    #[serde(rename = "8cpu")]
-    Cpu8,
-    #[serde(rename = "16cpu")]
-    Cpu16,
-    #[serde(rename = "32cpu")]
-    Cpu32,
-}
-
-/// A pixi-native build bucket: a runner size plus an optional high-memory flavor.
-///
-/// Renders as `16cpu` / `16cpu-himem` / `16cpu-himem-200gb` — the string that
-/// rides the matrix `runner-size` field, artifact names, and `--runner-size`.
-///
-/// `himem` swaps the `RunsOn` instance family from the default c-family
-/// (2GB/cpu) to the m-family (4GB/cpu) for packages whose template-heavy
-/// builds OOM at the default ratio.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RunnerSpec {
-    pub size: RunnerSize,
-    pub himem: bool,
-    pub volume: Option<u32>,
 }
 
 impl fmt::Display for Arch {
@@ -87,28 +45,6 @@ impl FromStr for Arch {
     }
 }
 
-impl fmt::Display for DeepstreamVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::V7_1 => "7.1",
-            Self::V8_0 => "8.0",
-        })
-    }
-}
-
-impl FromStr for DeepstreamVersion {
-    type Err = color_eyre::eyre::Report;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "7.1" => Ok(Self::V7_1),
-            "8.0" => Ok(Self::V8_0),
-            other => {
-                color_eyre::eyre::bail!("unknown DeepStream version {other:?}; expected 7.1 or 8.0")
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Package name
 // ---------------------------------------------------------------------------
@@ -124,8 +60,7 @@ impl FromStr for DeepstreamVersion {
 ///   `=`, `<`, `>`, `*`, `,`, `[`, or whitespace;
 /// * written back as a bare YAML scalar (`name: <name>`, `- <name>:`) — so no
 ///   `:`, `#`, quote characters, and no leading `-`;
-/// * used as an argv element and as the head of a synthesized `.conda`
-///   filename for routing.
+/// * used as an argv element.
 ///
 /// The rule is *permissive* because this type also carries names the tool
 /// does not control — dependency **keys** copied out of upstream `pixi.toml`
@@ -318,20 +253,6 @@ impl Version {
         self.parsed.major
     }
 
-    /// Whether the text as written spells out all three components, rather
-    /// than leaning on this type filling them out. Callers that write a *pin*
-    /// need this: `==1.2` means something wider than `==1.2.0` to the solver,
-    /// so it must not be read as an exact pin just because it parses here.
-    #[must_use]
-    pub fn is_explicit_triple(&self) -> bool {
-        // Build metadata cannot be present, so `-` bounds the numeric core.
-        let core = self
-            .text
-            .split_once('-')
-            .map_or(self.text.as_str(), |(core, _)| core);
-        core.matches('.').count() == 2
-    }
-
     /// The derived sibling pin `>=<self>,<<major+1>`: floor at this exact
     /// version, cap at the next major. Prerelease floors are fine —
     /// `>=1.24.0-alpha.2,<2` admits the prerelease and everything after it.
@@ -466,30 +387,6 @@ impl<'de> Deserialize<'de> for Sha40 {
     }
 }
 
-/// The name of a vinca recipe, as written in the vinca config.
-///
-/// Unlike everything else in this module this is a **label, not a parse type**:
-/// it carries no invariant, its `FromStr` is infallible, and its `Deserialize`
-/// accepts any string. Holding one proves only that some string was labelled a
-/// recipe name. Do not assume it has been validated, and do not add a rule here
-/// without checking every producer — the vinca config is not ours.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RecipeName(String);
-
-impl RecipeName {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for RecipeName {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // GitHub repository URL
 // ---------------------------------------------------------------------------
@@ -619,53 +516,6 @@ impl Serialize for GithubRepoUrl {
 // Channels
 // ---------------------------------------------------------------------------
 
-/// A conda channel served over the network.
-///
-/// It cannot change while a build job runs (builds publish into a local output
-/// channel and are drained to the real ones afterwards), so its index may be
-/// swept once and cached.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RemoteChannel(Url);
-
-impl RemoteChannel {
-    pub fn parse(s: &str) -> color_eyre::eyre::Result<Self> {
-        let url =
-            Url::parse(s).map_err(|e| color_eyre::eyre::eyre!("not a channel URL: {s:?} ({e})"))?;
-        color_eyre::eyre::ensure!(
-            url.scheme() != "file",
-            "{s:?} is a local channel; remote channel URLs are swept once and \
-             cached, which is only sound for a channel the build cannot mutate"
-        );
-        Ok(Self(url))
-    }
-
-    /// The channel of the same host and parent path named `channel`.
-    ///
-    /// Routing names destination channels relative to the default one
-    /// (`.../default` → `.../foo`), so this replaces the last path segment.
-    #[must_use]
-    pub fn sibling(&self, channel: &str) -> Self {
-        let mut url = self.0.clone();
-        if let Ok(mut segments) = url.path_segments_mut() {
-            segments.pop_if_empty().pop().push(channel);
-        }
-        Self(url)
-    }
-}
-
-impl fmt::Display for RemoteChannel {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.0.as_str())
-    }
-}
-
-impl FromStr for RemoteChannel {
-    type Err = color_eyre::eyre::Report;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-    }
-}
-
 /// A conda channel that is a directory on this machine, rendered as a
 /// `file://` URL.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -702,188 +552,16 @@ impl fmt::Display for LocalChannel {
 // pixi-native manifest
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-pub struct PixiNativeEntry {
-    pub name: PackageName,
-    pub url: GithubRepoUrl,
-    pub rev: Sha40,
-    pub subdir: Option<PathBuf>,
-    pub runner_size: RunnerSize,
-    /// Run this entry's bucket on m-family (4GB/cpu) instances instead of the
-    /// default c-family (2GB/cpu). See [`RunnerSpec`].
-    pub himem: bool,
-    /// Extra runner disk in GB, added as `/volume={n}gb` to the runs-on label.
-    /// None keeps the runner's default.
-    pub volume: Option<u32>,
-    /// Pull the entry's Git LFS objects after checkout. Off by default:
-    /// `fetch_rev` leaves pointers in place, which is what a package with no
-    /// LFS-tracked build inputs wants.
-    pub lfs: bool,
-    /// Init the repo's git submodules after checkout. Off by default:
-    /// `fetch_rev` leaves submodule dirs empty, which is what a package with
-    /// no submodule-sourced build inputs wants.
-    pub submodules: bool,
-    /// How this entry's sibling `path =` deps are pinned in the published
-    /// artifact. `exact-pins: true` in the yaml opts into lockstep `==` pins.
-    pub pin_style: SiblingPinStyle,
+/// True if the pixi-native manifest lists an entry named `name`.
+///
+/// Parsed through [`PixiNativeNames`]: the answer must not fail because some
+/// *other* entry in the file is malformed. The file's own structure still has
+/// to be valid YAML.
+pub fn pixi_native_has_entry(yaml: &str, name: &PackageName) -> color_eyre::eyre::Result<bool> {
+    let names: PixiNativeNames = serde_yaml_ng::from_str(yaml)?;
+    Ok(names.packages.iter().any(|p| &p.name == name))
 }
 
-impl PixiNativeEntry {
-    /// The entry's directory inside its repo checkout: its `subdir`, or the
-    /// checkout root when it has none.
-    #[must_use]
-    pub fn subdir_or_root(&self) -> &Path {
-        self.subdir.as_deref().unwrap_or_else(|| Path::new("."))
-    }
-
-    /// The build bucket this entry belongs to.
-    #[must_use]
-    pub const fn runner_spec(&self) -> RunnerSpec {
-        RunnerSpec {
-            size: self.runner_size,
-            himem: self.himem,
-            volume: self.volume,
-        }
-    }
-
-    /// Path of this entry's `pixi.toml` relative to its repo root.
-    #[must_use]
-    pub fn manifest_rel_path(&self) -> String {
-        self.rel_path(PIXI_TOML)
-    }
-
-    #[must_use]
-    pub fn recipe_rel_path(&self) -> String {
-        self.rel_path(RECIPE_YAML)
-    }
-
-    fn rel_path(&self, file: &str) -> String {
-        self.subdir
-            .as_deref()
-            .map(|p| p.to_string_lossy().trim_matches('/').to_string())
-            .filter(|s| !s.is_empty() && s != ".")
-            .map_or_else(|| file.to_string(), |s| format!("{s}/{file}"))
-    }
-}
-
-#[derive(Deserialize)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "mirrors the yaml's independent flags"
-)]
-struct PixiNativeEntryRaw {
-    name: PackageName,
-    url: GithubRepoUrl,
-    #[serde(default)]
-    rev: Option<Sha40>,
-    // Kept solely to produce a helpful migration-pointer error when `ref:` appears.
-    #[serde(default, rename = "ref")]
-    git_ref: Option<String>,
-    #[serde(default)]
-    subdir: Option<PathBuf>,
-    #[serde(default, rename = "runner-size")]
-    runner_size: Option<RunnerSize>,
-    #[serde(default)]
-    himem: bool,
-    #[serde(default)]
-    volume: Option<u32>,
-    #[serde(default)]
-    lfs: bool,
-    #[serde(default)]
-    submodules: bool,
-    #[serde(default, rename = "exact-pins")]
-    exact_pins: bool,
-}
-
-impl TryFrom<PixiNativeEntryRaw> for PixiNativeEntry {
-    type Error = color_eyre::eyre::Report;
-    fn try_from(raw: PixiNativeEntryRaw) -> Result<Self, Self::Error> {
-        if raw.git_ref.is_some() {
-            color_eyre::eyre::bail!(
-                "entry {:?}: `ref:` is no longer supported; use `rev:` with a 40-char SHA. \
-                 Replace it with the commit SHA the ref resolves to.",
-                raw.name.as_str()
-            );
-        }
-        let rev = raw.rev.ok_or_else(|| {
-            color_eyre::eyre::eyre!(
-                "entry {:?}: missing required `rev:` (40-char SHA)",
-                raw.name.as_str()
-            )
-        })?;
-        Ok(Self {
-            name: raw.name,
-            url: raw.url,
-            rev,
-            subdir: raw.subdir,
-            runner_size: raw.runner_size.unwrap_or_default(),
-            himem: raw.himem,
-            volume: raw.volume,
-            lfs: raw.lfs,
-            submodules: raw.submodules,
-            pin_style: if raw.exact_pins {
-                SiblingPinStyle::Exact
-            } else {
-                SiblingPinStyle::Range
-            },
-        })
-    }
-}
-
-#[derive(Deserialize)]
-struct PixiNativeManifestRaw {
-    #[serde(default)]
-    rebuild_epoch: u64,
-    packages: Vec<PixiNativeEntryRaw>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PixiNativeManifest {
-    /// Global rebuild salt. Added to each package's upstream `build-number`
-    /// when computing the effective build number used for the channel-skip
-    /// check and the published artifact. Bump to force a fleet-wide rebuild
-    /// (e.g. after a ros2-distro-mutex / fastdds-mutex bump).
-    pub rebuild_epoch: u64,
-    pub packages: Vec<PixiNativeEntry>,
-}
-
-impl PixiNativeManifest {
-    pub fn from_yaml_str(yaml: &str) -> color_eyre::eyre::Result<Self> {
-        let raw: PixiNativeManifestRaw = serde_yaml_ng::from_str(yaml)?;
-        let packages = raw
-            .packages
-            .into_iter()
-            .map(PixiNativeEntry::try_from)
-            .collect::<color_eyre::eyre::Result<Vec<_>>>()?;
-
-        let mut seen = std::collections::HashSet::new();
-        let dups = packages
-            .iter()
-            .map(|pkg| pkg.name.as_str())
-            .filter(|name| !seen.insert(*name))
-            .collect::<Vec<_>>();
-        if !dups.is_empty() {
-            bail!("Got duplicate entries: {}", dups.join(", "));
-        }
-
-        Ok(Self {
-            rebuild_epoch: raw.rebuild_epoch,
-            packages,
-        })
-    }
-
-    /// True if the manifest lists an entry named `name`.
-    ///
-    /// Parsed through [`PixiNativeNames`]: the answer must not fail because
-    /// some *other* entry in the file is malformed. The file's own structure
-    /// still has to be valid YAML.
-    pub fn has_entry(yaml: &str, name: &PackageName) -> color_eyre::eyre::Result<bool> {
-        let names: PixiNativeNames = serde_yaml_ng::from_str(yaml)?;
-        Ok(names.packages.iter().any(|p| &p.name == name))
-    }
-}
-
-/// Entry names only — see [`PixiNativeManifest::has_entry`].
 #[derive(Deserialize)]
 struct PixiNativeNames {
     packages: Vec<PixiNativeName>,
@@ -892,86 +570,6 @@ struct PixiNativeNames {
 #[derive(Deserialize)]
 struct PixiNativeName {
     name: PackageName,
-}
-
-impl FromStr for RecipeName {
-    type Err = std::convert::Infallible;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.to_string()))
-    }
-}
-
-impl RunnerSize {
-    /// The cores the name promises, for sizing a runner or for budgeting a
-    /// build that shares one with others.
-    #[must_use]
-    pub const fn cpus(self) -> usize {
-        match self {
-            Self::Cpu4 => 4,
-            Self::Cpu8 => 8,
-            Self::Cpu16 => 16,
-            Self::Cpu32 => 32,
-        }
-    }
-}
-
-impl fmt::Display for RunnerSize {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Cpu4 => "4cpu",
-            Self::Cpu8 => "8cpu",
-            Self::Cpu16 => "16cpu",
-            Self::Cpu32 => "32cpu",
-        })
-    }
-}
-
-impl FromStr for RunnerSize {
-    type Err = color_eyre::eyre::Report;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "4cpu" => Ok(Self::Cpu4),
-            "8cpu" => Ok(Self::Cpu8),
-            "16cpu" => Ok(Self::Cpu16),
-            "32cpu" => Ok(Self::Cpu32),
-            other => color_eyre::eyre::bail!(
-                "unknown runner size {other:?}; expected one of 4cpu/8cpu/16cpu/32cpu"
-            ),
-        }
-    }
-}
-
-impl fmt::Display for RunnerSpec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.size)?;
-        if self.himem {
-            f.write_str("-himem")?;
-        }
-        if let Some(volume) = self.volume {
-            write!(f, "-{volume}gb")?;
-        }
-        Ok(())
-    }
-}
-
-impl FromStr for RunnerSpec {
-    type Err = color_eyre::eyre::Report;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (s, volume) = s.rsplit_once('-').map_or((s, None), |(base, suffix)| {
-            suffix
-                .strip_suffix("gb")
-                .and_then(|gb| gb.parse::<u32>().ok())
-                .map_or((s, None), |gb| (base, Some(gb)))
-        });
-        let (size, himem) = s
-            .strip_suffix("-himem")
-            .map_or((s, false), |base| (base, true));
-        Ok(Self {
-            size: size.parse()?,
-            himem,
-            volume,
-        })
-    }
 }
 
 #[cfg(test)]
