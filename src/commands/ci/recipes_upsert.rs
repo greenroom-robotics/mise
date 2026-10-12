@@ -453,7 +453,7 @@ pub(crate) fn route(
     let pixi_native_text = read_if_exists(&pixi_native_abs)?;
     let rosdistro_text = read_if_exists(&rosdistro_abs)?;
     let in_pixi_native = match pixi_native_text.as_deref() {
-        Some(t) => crate::types::PixiNativeManifest::has_entry(t, package)
+        Some(t) => crate::types::pixi_native_has_entry(t, package)
             .with_context(|| format!("parsing {}", pixi_native_abs.display()))?,
         None => false,
     };

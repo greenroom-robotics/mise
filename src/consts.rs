@@ -16,21 +16,13 @@ pub const DEFAULT_BRANCH: &str = "main";
 /// Conventional name of the remote a checkout fetches from and pushes to.
 pub const ORIGIN: &str = "origin";
 
-/// Upstream ROS channel: `snapshot refresh` caches its repodata and the vinca
-/// build solves against it.
-pub const ROBOSTACK_CHANNEL: &str = "https://prefix.dev/robostack-kilted";
-
 /// Pixi workspace/package manifest filename.
 pub const PIXI_TOML: &str = "pixi.toml";
-pub const RECIPE_YAML: &str = "recipe.yaml";
 
-/// Manifest of packages built straight from their own pixi manifests. Read by
-/// `repo`, diffed by `matrix`, upserted into by `recipes_upsert`.
+/// Manifest of packages built straight from their own pixi manifests. Upserted
+/// into by `recipes_upsert`.
 pub const PIXI_NATIVE_PACKAGES_YAML: &str = "pixi_native_packages.yaml";
 
-/// Channel routing rules for published pixi-native packages.
-pub const ROUTING_YAML: &str = "routing.yaml";
-
-/// Manifest of extra rosdistro-sourced recipes. Diffed by `matrix`, upserted
-/// into by `recipes_upsert`.
+/// Manifest of extra rosdistro-sourced recipes. Upserted into by
+/// `recipes_upsert`.
 pub const ROSDISTRO_RECIPES_YAML: &str = "rosdistro_additional_recipes.yaml";

@@ -1,5 +1,6 @@
 use super::*;
 use crate::consts::DEFAULT_BRANCH;
+use crate::types::Sha40;
 
 /// A temp repo with one empty commit and a deterministic identity.
 fn temp_repo() -> tempfile::TempDir {
@@ -75,44 +76,6 @@ fn tags_lists_every_tag() {
     assert_eq!(tags(td.path()).unwrap(), ["pkg@1.0.0", "pkg@1.1.0"]);
 }
 
-#[test]
-fn file_at_rev_is_none_for_a_path_absent_at_that_rev() {
-    let td = temp_repo();
-    let repo = td.path();
-    std::fs::write(repo.join("kept"), "body\n").unwrap();
-    process::run_in(repo, "git", &["add", "-A"]).unwrap();
-    commit(repo, &["-m", "add kept"]);
-    let head = Sha40::new(
-        process::capture_in(repo, "git", &["rev-parse", "HEAD"])
-            .unwrap()
-            .trim(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        file_at_rev(repo, &head, "kept").unwrap().as_deref(),
-        Some("body\n")
-    );
-    assert_eq!(file_at_rev(repo, &head, "never-existed").unwrap(), None);
-}
-
-#[test]
-fn changed_files_lists_the_range() {
-    let td = temp_repo();
-    let repo = td.path();
-    let base = process::capture_in(repo, "git", &["rev-parse", "HEAD"])
-        .unwrap()
-        .trim()
-        .to_string();
-    std::fs::write(repo.join("one"), "1\n").unwrap();
-    std::fs::write(repo.join("two"), "2\n").unwrap();
-    process::run_in(repo, "git", &["add", "-A"]).unwrap();
-    commit(repo, &["-m", "two files"]);
-
-    let changed = changed_files(repo, &format!("{base}..HEAD")).unwrap();
-    assert_eq!(changed, [PathBuf::from("one"), PathBuf::from("two")]);
-}
-
 // --- clone / fetch, all against local repos, no network ---------------------
 
 /// A source repo with two commits on `main`, cloneable over `file://`.
@@ -155,20 +118,6 @@ fn shallow_clone_checks_out_the_named_branch() {
     assert_eq!(
         std::fs::read_to_string(into.join("a.txt")).unwrap(),
         "second\n"
-    );
-}
-
-#[test]
-fn fetch_rev_lands_on_an_arbitrary_commit_and_creates_the_destination() {
-    let (_origin, url, first, _second) = origin_repo();
-    let dest = tempfile::TempDir::new().unwrap();
-    // Nested path that does not exist yet — fetch_rev must create it.
-    let into = dest.path().join("nested/workdir");
-    fetch_rev(&into, &url, &first).unwrap();
-    assert_eq!(head_sha(&into).as_str(), first.as_str());
-    assert_eq!(
-        std::fs::read_to_string(into.join("a.txt")).unwrap(),
-        "first\n"
     );
 }
 
@@ -223,31 +172,4 @@ fn remote_url_reads_the_configured_remote() {
         "git@github.com:owner/repo.git"
     );
     assert!(remote_url(td.path(), "nope").is_err());
-}
-
-// --- rev_exists / file_at_rev ----------------------------------------------
-
-// A shallow CI checkout genuinely does not have the base commit. Reading a
-// file at that rev must say so, not report the file as absent — the two lead
-// to opposite decisions in the matrix computation.
-#[test]
-fn file_at_rev_distinguishes_a_missing_commit_from_a_missing_file() {
-    let (_origin, url, first, _second) = origin_repo();
-    let dest = tempfile::TempDir::new().unwrap();
-    let into = dest.path().join("shallow");
-    // Depth-1 clone of the tip: `first` exists upstream but was never fetched.
-    shallow_clone(&url, DEFAULT_BRANCH, &into).unwrap();
-    assert!(!rev_exists(&into, &first).unwrap());
-    let err = format!("{:#}", file_at_rev(&into, &first, "a.txt").unwrap_err());
-    assert!(err.contains("not present"), "{err}");
-    assert!(err.contains("fetch-depth"), "{err}");
-
-    let head = head_sha(&into);
-    assert!(rev_exists(&into, &head).unwrap());
-    assert_eq!(
-        file_at_rev(&into, &head, "a.txt").unwrap().as_deref(),
-        Some("second\n")
-    );
-    // Present commit, absent path: that really is None.
-    assert_eq!(file_at_rev(&into, &head, "nope.txt").unwrap(), None);
 }
