@@ -116,3 +116,78 @@ fn bumps_cargo_files_beside_each_package() {
             .contains("version = \"2.0.0\"")
     );
 }
+
+const TOOL_LOCK: &str = "version = 3\n\n[[package]]\nname = \"tool-cli\"\nversion = \"1.0.0\"\n";
+const WORKSPACE_TOML: &str = "[workspace]\nmembers = [\"tool-cli\"]\n";
+
+fn pixi_with_build(dir: &std::path::Path, build: &str) -> PathBuf {
+    let pixi = dir.join("pixi.toml");
+    std::fs::write(&pixi, format!("{}{build}", manifest("tool", "1.0.0"))).unwrap();
+    pixi
+}
+
+fn bump(pixi: PathBuf) -> color_eyre::eyre::Result<()> {
+    BumpPixi {
+        version: ver("2.0.0"),
+        pixi_toml: vec![pixi],
+    }
+    .run()
+}
+
+#[test]
+fn bumps_subcrate_named_by_source_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::create_dir_all(dir.join("tool-cli")).unwrap();
+    let pixi = pixi_with_build(dir, "\n[package.build]\nsource.path = \"tool-cli\"\n");
+    std::fs::write(dir.join("Cargo.toml"), WORKSPACE_TOML).unwrap();
+    std::fs::write(dir.join("Cargo.lock"), TOOL_LOCK).unwrap();
+    std::fs::write(
+        dir.join("tool-cli/Cargo.toml"),
+        manifest("tool-cli", "1.0.0"),
+    )
+    .unwrap();
+    bump(pixi).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("tool-cli/Cargo.toml")).unwrap(),
+        manifest("tool-cli", "2.0.0")
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Cargo.lock")).unwrap(),
+        TOOL_LOCK.replace("1.0.0", "2.0.0")
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Cargo.toml")).unwrap(),
+        WORKSPACE_TOML
+    );
+}
+
+#[test]
+fn virtual_workspace_without_source_path_errors_and_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let pixi = pixi_with_build(dir, "");
+    std::fs::write(dir.join("Cargo.toml"), WORKSPACE_TOML).unwrap();
+    let err = bump(pixi).unwrap_err();
+    assert!(format!("{err:#}").contains("Cargo.toml"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Cargo.toml")).unwrap(),
+        WORKSPACE_TOML
+    );
+}
+
+#[test]
+fn non_local_source_touches_no_cargo_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let pixi = pixi_with_build(
+        dir,
+        "\n[package.build]\nsource.git = \"https://example.com/tool\"\n",
+    );
+    std::fs::write(dir.join("Cargo.toml"), manifest("tool", "1.0.0")).unwrap();
+    bump(pixi).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Cargo.toml")).unwrap(),
+        manifest("tool", "1.0.0")
+    );
+}

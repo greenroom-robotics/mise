@@ -767,3 +767,59 @@ fn is_self_path_resolves_a_root_package_named_by_its_parent() {
     assert!(is_self_path(Path::new(""), "."));
     assert!(!is_self_path(Path::new(""), "../elsewhere-not-this-dir"));
 }
+
+fn crate_source(build: &str) -> CrateSource {
+    let text = format!("[package]\nname = \"tool\"\nversion = \"1.0.0\"\n{build}");
+    PackageManifest::parse(&text)
+        .unwrap()
+        .crate_source()
+        .clone()
+}
+
+#[test]
+fn crate_source_defaults_to_package_dir() {
+    assert_eq!(crate_source(""), CrateSource::PackageDir);
+    assert_eq!(
+        crate_source("[package.build]\nbackend = { name = \"pixi-build-rust\" }\n"),
+        CrateSource::PackageDir
+    );
+}
+
+#[test]
+fn crate_source_reads_local_path() {
+    assert_eq!(
+        crate_source("[package.build]\nsource.path = \"tool-cli\"\n"),
+        CrateSource::Subpath(PathBuf::from("tool-cli"))
+    );
+}
+
+#[test]
+fn crate_source_non_local_when_source_has_no_path() {
+    assert_eq!(
+        crate_source("[package.build]\nsource.git = \"https://example.com/tool\"\n"),
+        CrateSource::NonLocal
+    );
+}
+
+#[test]
+fn package_crate_dir_joins_source_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pixi = tmp.path().join("pixi.toml");
+    let write = |build: &str| {
+        std::fs::write(
+            &pixi,
+            format!("[package]\nname = \"tool\"\nversion = \"1.0.0\"\n{build}"),
+        )
+        .unwrap();
+        Package::read(&pixi).unwrap().crate_dir()
+    };
+    assert_eq!(write(""), Some(tmp.path().to_path_buf()));
+    assert_eq!(
+        write("[package.build]\nsource.path = \"tool-cli\"\n"),
+        Some(tmp.path().join("tool-cli"))
+    );
+    assert_eq!(
+        write("[package.build]\nsource.git = \"https://example.com/tool\"\n"),
+        None
+    );
+}

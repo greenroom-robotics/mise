@@ -2,7 +2,8 @@ use clap::Args;
 use color_eyre::eyre::WrapErr;
 use std::path::PathBuf;
 
-use super::sync_cargo::{manifest_dir, sync_package};
+use super::sync_cargo::sync_package;
+use crate::manifest::Package;
 
 /// Writes the new version into each package's pixi.toml [package] section.
 ///
@@ -36,7 +37,10 @@ impl BumpPixi {
             std::fs::write(path, new_body)
                 .with_context(|| format!("writing {}", path.display()))?;
             println!("Bumped {} to version {}", path.display(), self.version);
-            for synced in sync_package(manifest_dir(path), &self.version)? {
+            let Some(crate_dir) = Package::read(path)?.crate_dir() else {
+                continue;
+            };
+            for synced in sync_package(&crate_dir, &self.version)? {
                 println!("Bumped {} to version {}", synced.display(), self.version);
             }
         }

@@ -68,6 +68,7 @@ pub enum Manifest {
 #[derive(Debug)]
 pub struct PackageManifest {
     package: PackageSection,
+    crate_source: CrateSource,
     /// Every dependency entry across [`DEP_TABLES`], in that order.
     deps: Vec<Dep>,
 }
@@ -79,6 +80,17 @@ pub struct PackageManifest {
 pub struct PackageIdentity {
     pub name: PackageName,
     pub version: Version,
+}
+
+/// Where the crate that `[package.build]` compiles lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CrateSource {
+    /// No `source` key: the crate is the package directory itself.
+    PackageDir,
+    /// `source.path`: a subdirectory of the package directory.
+    Subpath(PathBuf),
+    /// `source` without a local `path` (git, url): nothing on disk to bump.
+    NonLocal,
 }
 
 /// One entry from a dependency table: the dep *key* — which is the channel
@@ -104,6 +116,28 @@ struct ManifestRaw {
 struct PackageSection {
     name: PackageName,
     version: Version,
+    #[serde(default)]
+    build: BuildSection,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct BuildSection {
+    source: Option<SourceSection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SourceSection {
+    path: Option<PathBuf>,
+}
+
+impl From<BuildSection> for CrateSource {
+    fn from(build: BuildSection) -> Self {
+        match build.source {
+            None => Self::PackageDir,
+            Some(SourceSection { path: Some(path) }) => Self::Subpath(path),
+            Some(SourceSection { path: None }) => Self::NonLocal,
+        }
+    }
 }
 
 impl Manifest {
@@ -113,10 +147,15 @@ impl Manifest {
         let raw: ManifestRaw = value.try_into()?;
         Ok(match raw.package {
             None => Self::WorkspaceOnly,
-            Some(package) => Self::Package(PackageManifest {
-                package: package.try_into().context("[package]")?,
-                deps,
-            }),
+            Some(package) => {
+                let mut package: PackageSection = package.try_into().context("[package]")?;
+                let crate_source = std::mem::take(&mut package.build).into();
+                Self::Package(PackageManifest {
+                    package,
+                    crate_source,
+                    deps,
+                })
+            }
         })
     }
 
@@ -243,6 +282,11 @@ impl PackageManifest {
         }
     }
 
+    #[must_use]
+    pub const fn crate_source(&self) -> &CrateSource {
+        &self.crate_source
+    }
+
     /// Every dependency entry, across all of [`DEP_TABLES`].
     #[must_use]
     pub fn deps(&self) -> &[Dep] {
@@ -305,6 +349,17 @@ impl Package {
     #[must_use]
     pub fn identity(&self) -> PackageIdentity {
         self.manifest.identity()
+    }
+
+    /// The directory of the crate this package builds, `None` when its
+    /// source is not on disk.
+    #[must_use]
+    pub fn crate_dir(&self) -> Option<PathBuf> {
+        match self.manifest.crate_source() {
+            CrateSource::PackageDir => Some(self.dir.clone()),
+            CrateSource::Subpath(path) => Some(self.dir.join(path)),
+            CrateSource::NonLocal => None,
+        }
     }
 }
 
