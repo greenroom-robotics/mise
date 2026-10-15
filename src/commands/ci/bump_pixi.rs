@@ -2,9 +2,13 @@ use clap::Args;
 use color_eyre::eyre::WrapErr;
 use std::path::PathBuf;
 
+use super::sync_cargo::{manifest_dir, sync_package};
+
 /// Writes the new version into each package's pixi.toml [package] section.
-/// All manifests are read and validated before any is written, so a bad
-/// path leaves every file untouched.
+///
+/// A package that is also a crate gets its Cargo.toml and Cargo.lock bumped
+/// too. All pixi manifests are read and validated before any is written, so a
+/// bad pixi.toml path leaves every file untouched.
 #[derive(Args, Debug)]
 pub struct BumpPixi {
     /// New version, no leading 'v' (matches `${nextRelease.version}`).
@@ -32,6 +36,9 @@ impl BumpPixi {
             std::fs::write(path, new_body)
                 .with_context(|| format!("writing {}", path.display()))?;
             println!("Bumped {} to version {}", path.display(), self.version);
+            for synced in sync_package(manifest_dir(path), &self.version)? {
+                println!("Bumped {} to version {}", synced.display(), self.version);
+            }
         }
         Ok(())
     }

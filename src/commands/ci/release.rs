@@ -3,6 +3,7 @@ use color_eyre::eyre::WrapErr;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use super::sync_cargo::{cargo_files, manifest_dir, sync_package};
 use crate::manifest::Package;
 use crate::types::{PackageName, ReleaseTag, Version};
 
@@ -316,6 +317,7 @@ impl Release {
                 .with_context(|| format!("bumping {}", pkg.manifest_path.display()))?;
             std::fs::write(&pkg.manifest_path, bumped)?;
             files.push(pkg.manifest_path.clone());
+            files.extend(sync_package(&pkg.dir, &rel.version)?);
             if self.changelog {
                 let changelog = pkg.dir.join("CHANGELOG.md");
                 let existing = std::fs::read_to_string(&changelog).unwrap_or_default();
@@ -413,6 +415,11 @@ impl Release {
             assets.push("CHANGELOG.md".to_string());
         }
         assets.push("**/pixi.toml".to_string());
+        assets.extend(
+            cargo_files(manifest_dir(pixi))
+                .iter()
+                .map(|p| cwd_relative(&absolute(p)).to_string_lossy().into_owned()),
+        );
         assets.extend(self.extra_git_asset.iter().cloned());
         // Names the package in the commit subject; otherwise matches
         // @semantic-release/git's default message.

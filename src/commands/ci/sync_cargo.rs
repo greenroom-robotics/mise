@@ -1,14 +1,10 @@
 use clap::Args;
 use color_eyre::eyre::WrapErr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-/// mise-specific prepare callback.
-///
-/// Run via `mise ci release --extra-prepare-cmd`
-/// after bump-pixi and before the @semantic-release/git commit, so Cargo.toml
-/// and Cargo.lock land in the same `chore(release)` commit (and tag) as
-/// pixi.toml — keeping `mise --version` (`CARGO_PKG_VERSION`) in step with the
-/// released package without a second follow-up commit.
+use crate::types::Version;
+
+/// Syncs Cargo.toml and Cargo.lock to the released version with explicit paths.
 #[derive(Args, Debug)]
 pub struct SyncCargo {
     /// New version, no leading 'v' (matches `${nextRelease.version}`).
@@ -47,10 +43,102 @@ impl SyncCargo {
     }
 }
 
+/// A crate's Cargo.toml and the Cargo.lock nearest above it, searching no
+/// further than the enclosing git repository root.
+struct CargoFiles {
+    toml: PathBuf,
+    lock: Option<PathBuf>,
+}
+
+impl CargoFiles {
+    fn find(dir: &Path) -> Option<Self> {
+        let toml = dir.join("Cargo.toml");
+        let is_crate = std::fs::read_to_string(&toml)
+            .ok()?
+            .parse::<toml_edit::DocumentMut>()
+            .ok()
+            .is_none_or(|d| d.contains_key("package"));
+        if !is_crate {
+            return None;
+        }
+        let abs = std::path::absolute(dir).unwrap_or_else(|_| dir.to_owned());
+        let mut lock = None;
+        for d in abs.ancestors() {
+            lock = Some(d.join("Cargo.lock")).filter(|l| l.is_file());
+            if lock.is_some() || d.join(".git").exists() {
+                break;
+            }
+        }
+        Some(Self { toml, lock })
+    }
+}
+
+/// The directory holding a manifest path, `.` for a bare file name.
+#[must_use]
+pub fn manifest_dir(manifest: &Path) -> &Path {
+    match manifest.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    }
+}
+
+/// Cargo.toml and Cargo.lock that [`sync_package`] would touch for `dir`.
+#[must_use]
+pub fn cargo_files(dir: &Path) -> Vec<PathBuf> {
+    CargoFiles::find(dir)
+        .into_iter()
+        .flat_map(|f| std::iter::once(f.toml).chain(f.lock))
+        .collect()
+}
+
+/// Bumps the crate in `dir` and its Cargo.lock entry to `version`.
+///
+/// A directory without Cargo.toml is left alone. Everything is validated
+/// before anything is written; returns the files written.
+pub fn sync_package(dir: &Path, version: &Version) -> color_eyre::eyre::Result<Vec<PathBuf>> {
+    let Some(files) = CargoFiles::find(dir) else {
+        return Ok(Vec::new());
+    };
+    let toml = std::fs::read_to_string(&files.toml)
+        .with_context(|| format!("reading {}", files.toml.display()))?;
+    let name = crate_name(&toml).with_context(|| files.toml.display().to_string())?;
+    let new_toml = crate::manifest::set_package_version(&toml, version)
+        .with_context(|| format!("bumping {}", files.toml.display()))?;
+    let mut writes = vec![(files.toml, new_toml)];
+    if let Some(lock_path) = files.lock {
+        let lock = std::fs::read_to_string(&lock_path)
+            .with_context(|| format!("reading {}", lock_path.display()))?;
+        let new_lock = bump_cargo_lock(&lock, &name, version)
+            .with_context(|| format!("bumping {}", lock_path.display()))?;
+        writes.push((lock_path, new_lock));
+    }
+    for (path, body) in &writes {
+        std::fs::write(path, body).with_context(|| format!("writing {}", path.display()))?;
+    }
+    Ok(writes.into_iter().map(|(path, _)| path).collect())
+}
+
+/// `[package].name`, refusing a version inherited from a workspace since
+/// bumping it would move every crate that shares it.
+fn crate_name(cargo_toml: &str) -> color_eyre::eyre::Result<String> {
+    let doc: toml_edit::DocumentMut = cargo_toml.parse().context("parsing Cargo.toml")?;
+    let package = doc
+        .get("package")
+        .ok_or_else(|| color_eyre::eyre::eyre!("no [package] table"))?;
+    if package.get("version").is_some_and(|v| !v.is_str()) {
+        color_eyre::eyre::bail!("[package].version is not a plain string (workspace-inherited?)");
+    }
+    package
+        .get("name")
+        .and_then(|n| n.as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| color_eyre::eyre::eyre!("no [package].name"))
+}
+
 fn bump_cargo_lock(
     body: &str,
     package: &str,
-    new_version: &crate::types::Version,
+    new_version: &Version,
 ) -> color_eyre::eyre::Result<String> {
     let mut doc: toml_edit::DocumentMut = body.parse().context("parsing Cargo.lock")?;
     let pkgs = doc
@@ -59,8 +147,12 @@ fn bump_cargo_lock(
         .ok_or_else(|| color_eyre::eyre::eyre!("no [[package]] entries in Cargo.lock"))?;
     let entry = pkgs
         .iter_mut()
-        .find(|e| e.get("name").and_then(|n| n.as_str()) == Some(package))
-        .ok_or_else(|| color_eyre::eyre::eyre!("no [[package]] named {package:?} in Cargo.lock"))?;
+        .find(|e| {
+            e.get("name").and_then(|n| n.as_str()) == Some(package) && !e.contains_key("source")
+        })
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!("no local [[package]] named {package:?} in Cargo.lock")
+        })?;
     entry["version"] = toml_edit::value(new_version.to_string());
     Ok(doc.to_string())
 }

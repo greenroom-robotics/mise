@@ -35,7 +35,7 @@ pub enum Ci {
     BumpPixi(BumpPixi),
     /// Callback invoked by semantic-release publish hook to open the recipes-repo PR. Not for direct use.
     RecipesPr(RecipesPr),
-    /// mise-specific prepare callback to sync Cargo.toml/Cargo.lock to the released version. Not for direct use.
+    /// Sync Cargo.toml/Cargo.lock at explicit paths to a version.
     SyncCargo(SyncCargo),
     /// Callback invoked by semantic-release prepare hook to check sibling path deps against their release tags. Not for direct use.
     VerifySiblings(VerifySiblings),

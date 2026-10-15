@@ -113,8 +113,7 @@ jobs:
       # extra-prepare-cmd + extra-git-assets fold the Cargo.toml/Cargo.lock bump
       # into the same `chore(release)` commit and tag as pixi.toml, so
       # `mise --version` (CARGO_PKG_VERSION) tracks the released package without
-      # a follow-up commit. This Rust-specific wiring lives here, not in the
-      # generic `mise ci release` path which stays Cargo-agnostic.
+      # a follow-up commit.
       - uses: ./.github/actions/release
         with:
           skip-setup: "true"

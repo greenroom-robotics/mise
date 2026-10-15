@@ -31,4 +31,4 @@ cargo test
 cargo run -- --help
 ```
 
-See `~/Repositories/platform/docs/pixi.md` for the wider pixi workflow this fits into. Releases are cut by semantic-release; the version in `Cargo.toml` is synced by the `ci prepare` hook.
+See `~/Repositories/platform/docs/pixi.md` for the wider pixi workflow this fits into. Releases are cut by semantic-release; `mise ci release` also syncs `Cargo.toml` and `Cargo.lock` for packages that are crates.
