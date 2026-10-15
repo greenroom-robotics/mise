@@ -51,15 +51,16 @@ struct CargoFiles {
 }
 
 impl CargoFiles {
-    fn find(dir: &Path) -> Option<Self> {
+    fn find(dir: &Path) -> color_eyre::eyre::Result<Option<Self>> {
         let toml = dir.join("Cargo.toml");
-        let is_crate = std::fs::read_to_string(&toml)
-            .ok()?
+        let Ok(body) = std::fs::read_to_string(&toml) else {
+            return Ok(None);
+        };
+        if body
             .parse::<toml_edit::DocumentMut>()
-            .ok()
-            .is_none_or(|d| d.contains_key("package"));
-        if !is_crate {
-            return None;
+            .is_ok_and(|d| !d.contains_key("package"))
+        {
+            color_eyre::eyre::bail!("{} has no [package] table", toml.display());
         }
         let abs = std::path::absolute(dir).unwrap_or_else(|_| dir.to_owned());
         let mut lock = None;
@@ -69,34 +70,25 @@ impl CargoFiles {
                 break;
             }
         }
-        Some(Self { toml, lock })
-    }
-}
-
-/// The directory holding a manifest path, `.` for a bare file name.
-#[must_use]
-pub fn manifest_dir(manifest: &Path) -> &Path {
-    match manifest.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d,
-        _ => Path::new("."),
+        Ok(Some(Self { toml, lock }))
     }
 }
 
 /// Cargo.toml and Cargo.lock that [`sync_package`] would touch for `dir`.
-#[must_use]
-pub fn cargo_files(dir: &Path) -> Vec<PathBuf> {
-    CargoFiles::find(dir)
+pub fn cargo_files(dir: &Path) -> color_eyre::eyre::Result<Vec<PathBuf>> {
+    Ok(CargoFiles::find(dir)?
         .into_iter()
         .flat_map(|f| std::iter::once(f.toml).chain(f.lock))
-        .collect()
+        .collect())
 }
 
 /// Bumps the crate in `dir` and its Cargo.lock entry to `version`.
 ///
-/// A directory without Cargo.toml is left alone. Everything is validated
+/// A directory without Cargo.toml is left alone; one whose Cargo.toml has
+/// no `[package]` is an error. Everything is validated
 /// before anything is written; returns the files written.
 pub fn sync_package(dir: &Path, version: &Version) -> color_eyre::eyre::Result<Vec<PathBuf>> {
-    let Some(files) = CargoFiles::find(dir) else {
+    let Some(files) = CargoFiles::find(dir)? else {
         return Ok(Vec::new());
     };
     let toml = std::fs::read_to_string(&files.toml)

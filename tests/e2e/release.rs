@@ -156,3 +156,51 @@ fn single_package_release_commits_cargo_files_of_a_crate() {
         serde_json::json!(["CHANGELOG.md", "**/pixi.toml", "Cargo.toml", "Cargo.lock"])
     );
 }
+
+#[test]
+fn single_package_release_commits_cargo_files_of_source_path_crate() {
+    let e2e = E2e::new();
+    e2e.respond(Shim::Npx, &[], "");
+    let src = e2e.path().join("source");
+    fs::create_dir_all(&src).unwrap();
+    write_file(
+        &src,
+        "pixi.toml",
+        &package_pixi_toml("tool", "\n[package.build]\nsource.path = \"tool-cli\"\n"),
+    );
+    write_file(
+        &src,
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"tool-cli\"]\n",
+    );
+    write_file(
+        &src,
+        "tool-cli/Cargo.toml",
+        "[package]\nname = \"tool-cli\"\nversion = \"1.0.0\"\n",
+    );
+    write_file(&src, "Cargo.lock", "version = 3\n");
+
+    e2e.mise()
+        .current_dir(&src)
+        .args(["ci", "release", "--package-dir", src.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let releaserc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(src.join(".releaserc")).unwrap()).unwrap();
+    let git = releaserc["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p[0] == "@semantic-release/git")
+        .unwrap();
+    assert_eq!(
+        git[1]["assets"],
+        serde_json::json!([
+            "CHANGELOG.md",
+            "**/pixi.toml",
+            "tool-cli/Cargo.toml",
+            "Cargo.lock"
+        ])
+    );
+}

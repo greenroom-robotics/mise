@@ -169,7 +169,7 @@ fn non_cargo_dir_is_untouched() {
         sync_package(tmp.path(), &ver("2.0.0")).unwrap(),
         Vec::<PathBuf>::new()
     );
-    assert_eq!(cargo_files(tmp.path()), Vec::<PathBuf>::new());
+    assert_eq!(cargo_files(tmp.path()).unwrap(), Vec::<PathBuf>::new());
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("Cargo.lock")).unwrap(),
         LOCK
@@ -177,15 +177,22 @@ fn non_cargo_dir_is_untouched() {
 }
 
 #[test]
-fn virtual_workspace_manifest_is_not_a_crate() {
+fn virtual_workspace_manifest_errors_naming_file_and_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
-    write(tmp.path(), "Cargo.toml", "[workspace]\nmembers = []\n");
+    let toml = "[workspace]\nmembers = []\n";
+    write(tmp.path(), "Cargo.toml", toml);
     write(tmp.path(), "Cargo.lock", LOCK);
+    let err = sync_package(tmp.path(), &ver("2.0.0")).unwrap_err();
+    assert!(format!("{err:#}").contains("Cargo.toml"));
+    assert!(cargo_files(tmp.path()).is_err());
     assert_eq!(
-        sync_package(tmp.path(), &ver("2.0.0")).unwrap(),
-        Vec::<PathBuf>::new()
+        std::fs::read_to_string(tmp.path().join("Cargo.toml")).unwrap(),
+        toml
     );
-    assert_eq!(cargo_files(tmp.path()), Vec::<PathBuf>::new());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("Cargo.lock")).unwrap(),
+        LOCK
+    );
 }
 
 #[test]
@@ -199,5 +206,5 @@ fn lock_search_stops_at_git_root() {
         &cargo_toml("foo", "1.0.0"),
     );
     let dir = tmp.path().join("repo/foo");
-    assert_eq!(cargo_files(&dir), vec![dir.join("Cargo.toml")]);
+    assert_eq!(cargo_files(&dir).unwrap(), vec![dir.join("Cargo.toml")]);
 }
