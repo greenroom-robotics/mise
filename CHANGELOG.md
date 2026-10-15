@@ -1,3 +1,10 @@
+## [8.30.0](https://github.com/greenroom-robotics/mise/compare/mise@8.29.8...mise@8.30.0) (2026-10-15)
+
+
+### Features
+
+* sync Cargo version automatically in ci release ([#115](https://github.com/greenroom-robotics/mise/issues/115)) ([b504fde](https://github.com/greenroom-robotics/mise/commit/b504fdea022ff5e597805a26cf691efda8f7badf))
+
 ## [8.29.8](https://github.com/greenroom-robotics/mise/compare/mise@8.29.7...mise@8.29.8) (2026-10-07)
 
 
