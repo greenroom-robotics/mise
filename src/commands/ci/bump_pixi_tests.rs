@@ -86,3 +86,33 @@ fn invalid_manifest_fails_before_any_write() {
         manifest("pkg_a", "1.0.0")
     );
 }
+
+#[test]
+fn bumps_cargo_files_beside_each_package() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("pkgs/foo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pixi = dir.join("pixi.toml");
+    std::fs::write(&pixi, manifest("foo", "1.0.0")).unwrap();
+    std::fs::write(dir.join("Cargo.toml"), manifest("foo", "1.0.0")).unwrap();
+    std::fs::write(
+        dir.join("Cargo.lock"),
+        "version = 3\n\n[[package]]\nname = \"foo\"\nversion = \"1.0.0\"\n",
+    )
+    .unwrap();
+    BumpPixi {
+        version: ver("2.0.0"),
+        pixi_toml: vec![pixi],
+    }
+    .run()
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("Cargo.toml")).unwrap(),
+        manifest("foo", "2.0.0")
+    );
+    assert!(
+        std::fs::read_to_string(dir.join("Cargo.lock"))
+            .unwrap()
+            .contains("version = \"2.0.0\"")
+    );
+}

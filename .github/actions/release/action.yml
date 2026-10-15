@@ -47,7 +47,7 @@ inputs:
     required: false
     default: ""
   extra-git-assets:
-    description: Space-separated extra path(s) to fold into the release commit alongside pixi.toml (e.g. "Cargo.toml Cargo.lock" for Rust-native repos). Each becomes a --extra-git-asset flag.
+    description: Space-separated extra path(s) to fold into the release commit alongside pixi.toml. Each becomes a --extra-git-asset flag.
     required: false
     default: ""
   extra-prepare-cmd:

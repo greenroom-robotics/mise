@@ -122,3 +122,37 @@ fn multi_package_release_synthesizes_workspaces_and_ordering_deps() {
         "release/multi_nodeb.releaserc.json",
     );
 }
+
+#[test]
+fn single_package_release_commits_cargo_files_of_a_crate() {
+    let e2e = E2e::new();
+    e2e.respond(Shim::Npx, &[], "");
+    let src = e2e.path().join("source");
+    fs::create_dir_all(&src).unwrap();
+    write_file(&src, "pixi.toml", &package_pixi_toml("solo", ""));
+    write_file(
+        &src,
+        "Cargo.toml",
+        "[package]\nname = \"solo\"\nversion = \"1.0.0\"\n",
+    );
+    write_file(&src, "Cargo.lock", "version = 3\n");
+
+    e2e.mise()
+        .current_dir(&src)
+        .args(["ci", "release", "--package-dir", src.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let releaserc: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(src.join(".releaserc")).unwrap()).unwrap();
+    let git = releaserc["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p[0] == "@semantic-release/git")
+        .unwrap();
+    assert_eq!(
+        git[1]["assets"],
+        serde_json::json!(["CHANGELOG.md", "**/pixi.toml", "Cargo.toml", "Cargo.lock"])
+    );
+}
