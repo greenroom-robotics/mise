@@ -1,3 +1,10 @@
+## [8.30.1](https://github.com/greenroom-robotics/mise/compare/mise@8.30.0...mise@8.30.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* sync Cargo crate at the package build source path ([#116](https://github.com/greenroom-robotics/mise/issues/116)) ([404c031](https://github.com/greenroom-robotics/mise/commit/404c0316c5481198583009ea3ea1b8f663da1c65))
+
 ## [8.30.0](https://github.com/greenroom-robotics/mise/compare/mise@8.29.8...mise@8.30.0) (2026-10-15)
 
 
