@@ -26,9 +26,10 @@ def fetch_grants() -> tomlkit.TOMLDocument:
         text=True,
     )
     if result.returncode != 0:
+        print(result.stderr, file=sys.stderr)
         sys.exit(
-            "::error::could not fetch pixi channel grants; "
-            "does the GitHub App have read access to ros-recipes?"
+            "::error::could not fetch pixi channel grants from ros-recipes "
+            f"(gh exited {result.returncode}); see gh output above"
         )
     return tomlkit.parse(result.stdout)
 
