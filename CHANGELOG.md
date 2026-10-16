@@ -1,3 +1,10 @@
+## [8.30.2](https://github.com/greenroom-robotics/mise/compare/mise@8.30.1...mise@8.30.2) (2026-10-16)
+
+
+### Bug Fixes
+
+* **pixi-grants:** surface gh output when fetching grants fails ([#117](https://github.com/greenroom-robotics/mise/issues/117)) ([46bb643](https://github.com/greenroom-robotics/mise/commit/46bb64355d9e3ee15bc17beefef2964bf78818a5))
+
 ## [8.30.1](https://github.com/greenroom-robotics/mise/compare/mise@8.30.0...mise@8.30.1) (2026-10-15)
 
 
