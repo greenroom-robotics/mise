@@ -1,3 +1,10 @@
+## [8.30.3](https://github.com/greenroom-robotics/mise/compare/mise@8.30.2...mise@8.30.3) (2026-10-20)
+
+
+### Bug Fixes
+
+* read deps inside pixi if() conditional tables ([#118](https://github.com/greenroom-robotics/mise/issues/118)) ([5252b74](https://github.com/greenroom-robotics/mise/commit/5252b74d1fab8c19c8a8e9dd69e07ae4945ee8aa))
+
 ## [8.30.2](https://github.com/greenroom-robotics/mise/compare/mise@8.30.1...mise@8.30.2) (2026-10-16)
 
 
