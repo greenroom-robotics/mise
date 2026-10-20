@@ -166,6 +166,54 @@ fn dep_keys_may_be_underscore_prefixed_conda_packages() {
 }
 
 #[test]
+fn deps_inside_if_tables_are_read_as_deps() {
+    let m = PackageManifest::parse(
+        "[package]\nname=\"node\"\nversion=\"1\"\n\
+         [package.host-dependencies]\ngstreamer = \"*\"\n\
+         [package.host-dependencies.\"if(host_platform == 'linux-64')\"]\n\
+         cuda-cudart-dev = \"*\"\n\
+         [package.extra-dependencies.test]\nros-dev-tools-meta = \"*\"\n\
+         [package.extra-dependencies.test.\"if(host_platform == 'linux-64')\"]\n\
+         cuda-cudart-dev = \"*\"\nlib = { path = \"../lib\" }\n",
+    )
+    .unwrap();
+    let mut names: Vec<&str> = m.deps().iter().map(|d| d.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec![
+            "cuda-cudart-dev",
+            "cuda-cudart-dev",
+            "gstreamer",
+            "lib",
+            "ros-dev-tools-meta"
+        ]
+    );
+    assert_eq!(
+        m.path_dep_rel_paths(Path::new("pkgs/node")),
+        vec!["../lib".to_string()]
+    );
+}
+
+#[test]
+fn nested_if_tables_are_rejected() {
+    let err = PackageManifest::parse(
+        "[package]\nname=\"node\"\nversion=\"1\"\n\
+         [package.host-dependencies.\"if(unix)\".\"if(linux)\"]\nx = \"*\"\n",
+    )
+    .unwrap_err();
+    assert!(format!("{err:#}").contains("nested condition"), "{err:#}");
+}
+
+#[test]
+fn a_non_if_non_package_key_is_still_rejected() {
+    assert!(PackageManifest::parse(
+        "[package]\nname=\"node\"\nversion=\"1\"\n[package.host-dependencies]\n\"if(unix\" = \"*\"\n",
+    )
+    .is_err());
+}
+
+#[test]
 fn path_dep_rel_paths_excludes_self_idiom() {
     let t = PackageManifest::parse(
         "[dependencies]\nnode = { path = \".\" }\n\
@@ -734,6 +782,32 @@ fn resolve_path_deps_rewrites_path_deps_inside_extras() {
     let doc: toml::Value = toml::from_str(&fs::read_to_string(&consumer).unwrap()).unwrap();
     assert_eq!(
         doc["package"]["extra-dependencies"]["test"]["bin"].as_str(),
+        Some(">=2.5.0,<3")
+    );
+}
+
+#[test]
+fn resolve_path_deps_rewrites_path_deps_inside_if_tables() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    write_checkout_pkg(root, "bin", "");
+    let consumer = write_checkout_pkg(
+        root,
+        "node",
+        "[package.host-dependencies.\"if(unix)\"]\nbin = { path = \"../bin\" }\n\
+         [package.extra-dependencies.test.\"if(unix)\"]\nbin = { path = \"../bin\" }\n",
+    );
+    let resolved = resolve_path_deps(&consumer, SiblingPinStyle::Range).unwrap();
+    assert_eq!(resolved.len(), 2);
+
+    let doc: toml::Value = toml::from_str(&fs::read_to_string(&consumer).unwrap()).unwrap();
+    let pkg = &doc["package"];
+    assert_eq!(
+        pkg["host-dependencies"]["if(unix)"]["bin"].as_str(),
+        Some(">=2.5.0,<3")
+    );
+    assert_eq!(
+        pkg["extra-dependencies"]["test"]["if(unix)"]["bin"].as_str(),
         Some(">=2.5.0,<3")
     );
 }
