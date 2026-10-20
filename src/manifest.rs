@@ -11,7 +11,7 @@
 //! [`Package`] is the two joined at the point of discovery: a manifest parsed
 //! once, carrying the directory that owns it.
 
-use color_eyre::eyre::{Result, WrapErr};
+use color_eyre::eyre::{Result, WrapErr, bail, eyre};
 use serde::Deserialize;
 use std::path::{Component, Path, PathBuf};
 
@@ -39,6 +39,24 @@ pub const DEP_TABLES: &[&[TableSeg]] = &[
         TableSeg::EachChild,
     ],
 ];
+
+/// A key in a dependency table: a package, or an `if(...)` condition whose
+/// value is a table of packages. Pixi does not nest conditions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DepKey {
+    Package(PackageName),
+    Condition,
+}
+
+impl DepKey {
+    pub fn parse(key: &str) -> Result<Self> {
+        if key.starts_with("if(") && key.ends_with(')') {
+            Ok(Self::Condition)
+        } else {
+            PackageName::new(key).map(Self::Package)
+        }
+    }
+}
 
 /// One step of a [`DEP_TABLES`] path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,17 +189,42 @@ fn collect_deps(value: &toml::Value) -> Result<Vec<Dep>> {
     let mut out = Vec::new();
     for table_path in DEP_TABLES {
         for_each_table_at(value, table_path, &mut Vec::new(), &mut |keys, table| {
-            for (name, value) in table {
-                out.push(Dep {
-                    name: PackageName::new(name.clone())
-                        .with_context(|| format!("dependency key in [{}]", keys.join(".")))?,
-                    value: value.clone(),
-                });
-            }
-            Ok(())
+            collect_table_deps(keys, table, false, &mut out)
         })?;
     }
     Ok(out)
+}
+
+/// Push the deps of one dependency table; `in_condition` is whether `table`
+/// is itself the value of an `if(...)` key.
+fn collect_table_deps(
+    keys: &[&str],
+    table: &toml::Table,
+    in_condition: bool,
+    out: &mut Vec<Dep>,
+) -> Result<()> {
+    for (key, value) in table {
+        match DepKey::parse(key)
+            .with_context(|| format!("dependency key in [{}]", keys.join(".")))?
+        {
+            DepKey::Package(name) => out.push(Dep {
+                name,
+                value: value.clone(),
+            }),
+            DepKey::Condition if in_condition => {
+                bail!("nested condition {key:?} in [{}]", keys.join("."))
+            }
+            DepKey::Condition => {
+                let inner = value.as_table().ok_or_else(|| {
+                    eyre!("condition {key:?} in [{}] is not a table", keys.join("."))
+                })?;
+                let mut inner_keys = keys.to_vec();
+                inner_keys.push(key);
+                collect_table_deps(&inner_keys, inner, true, out)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Walk `path` from `value`, calling `f` with each table it names and the
@@ -692,7 +735,7 @@ pub fn resolve_path_deps(manifest_path: &Path, style: SiblingPinStyle) -> Result
 
     let mut resolved = Vec::new();
     for_each_dep_table_mut(&mut doc, &mut |table| {
-        rewrite_path_deps_in(table, manifest_dir, style, &mut resolved)
+        rewrite_path_deps_in(table, false, manifest_dir, style, &mut resolved)
     })?;
 
     if !resolved.is_empty() {
@@ -735,16 +778,31 @@ fn for_each_table_at_mut(
     Ok(())
 }
 
-/// Rewrite the sibling `path =` deps of one table to a `style` version pin.
-/// A dep with keys besides `path` keeps them, with `version` set to the pin.
+/// Rewrite the sibling `path =` deps of one table, and of its `if(...)`
+/// tables, to a `style` version pin. A dep with keys besides `path` keeps
+/// them, with `version` set to the pin. `in_condition` is whether `table` is
+/// itself the value of an `if(...)` key.
 fn rewrite_path_deps_in(
     table: &mut dyn toml_edit::TableLike,
+    in_condition: bool,
     manifest_dir: &Path,
     style: SiblingPinStyle,
     resolved: &mut Vec<ResolvedDep>,
 ) -> Result<()> {
     let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
     for key in keys {
+        let name = match DepKey::parse(&key)? {
+            DepKey::Package(name) => name,
+            DepKey::Condition if in_condition => bail!("nested condition {key:?}"),
+            DepKey::Condition => {
+                let inner = table
+                    .get_mut(&key)
+                    .and_then(toml_edit::Item::as_table_like_mut)
+                    .ok_or_else(|| eyre!("condition {key:?} is not a table"))?;
+                rewrite_path_deps_in(inner, true, manifest_dir, style, resolved)?;
+                continue;
+            }
+        };
         let Some(spec) = table
             .get_mut(&key)
             .and_then(toml_edit::Item::as_table_like_mut)
@@ -787,7 +845,7 @@ fn rewrite_path_deps_in(
             table.insert(&key, toml_edit::value(pin));
         }
         resolved.push(ResolvedDep {
-            name: PackageName::new(key)?,
+            name,
             version,
             manifest: sib_manifest,
         });
