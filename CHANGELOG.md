@@ -1,3 +1,10 @@
+## [8.30.4](https://github.com/greenroom-robotics/mise/compare/mise@8.30.3...mise@8.30.4) (2026-10-22)
+
+
+### Bug Fixes
+
+* **ci:** collect only colcon junit locations as test reports ([#119](https://github.com/greenroom-robotics/mise/issues/119)) ([93b7dc9](https://github.com/greenroom-robotics/mise/commit/93b7dc99f0bd0f95609deaa291fd83de195c74a9))
+
 ## [8.30.3](https://github.com/greenroom-robotics/mise/compare/mise@8.30.2...mise@8.30.3) (2026-10-20)
 
 
