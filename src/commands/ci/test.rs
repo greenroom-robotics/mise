@@ -133,9 +133,8 @@ impl Test {
 
 /// Collect a package's `JUnit` XML test reports into `report_dir`.
 ///
-/// Globs `<pkg_dir>/build/**/*.xml` (the standard colcon `test-result`
-/// location) and copies each file to
-/// `<report_dir>/<package-dir-name>/<env>/<path-relative-to-pkg_dir>`,
+/// Copies the `JUnit` files colcon writes under `<pkg_dir>/build/` (see
+/// [`find_xml`]) to `<report_dir>/<package-dir-name>/<env>/<path-relative-to-pkg_dir>`,
 /// preserving the relative path so filenames never collide across packages or
 /// across environments that share the same `build/` dir. Returns the number of
 /// files copied.
@@ -167,28 +166,52 @@ fn collect_reports(
     Ok(xml.len())
 }
 
-/// Recursively collect `*.xml` files under `dir`.
-fn find_xml(dir: &Path) -> color_eyre::eyre::Result<Vec<PathBuf>> {
+/// Find the `JUnit` reports under a colcon `build` dir: `*.xml` directly in
+/// `build/` (a pytest `--junitxml=build/...` path), `build/<pkg>/pytest.xml`
+/// (colcon's `ament_python` result) and everything under
+/// `build/<pkg>/test_results/` (`ament_cmake` gtest and lint results). Other
+/// XML under `build/` (`CTest`'s `Testing/`, `package.xml`, vendored source
+/// trees) is not a report and is never visited.
+fn find_xml(build: &Path) -> color_eyre::eyre::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
-        let path = entry?.path();
-        if path.is_dir() {
-            // Skip CTest's native result dir: build/<pkg>/Testing/<stamp>/Test.xml
-            // is a <Site> doc, not JUnit, and crashes dorny/test-reporter.
-            if path.file_name().is_some_and(|n| n == "Testing") {
-                continue;
+    for entry in read_dir(build)? {
+        if entry.is_dir() {
+            let pkg_build = entry;
+            let pytest_xml = pkg_build.join("pytest.xml");
+            if pytest_xml.is_file() {
+                out.push(pytest_xml);
             }
-            out.extend(find_xml(&path)?);
-        } else if path.extension().is_some_and(|e| e == "xml")
-            && path.file_name().is_some_and(|n| n != "package.xml")
-        {
-            // package.xml is the ROS manifest, not a JUnit report; colcon copies
-            // it into build/<pkg>/ and collecting it crashes dorny/test-reporter
-            // the same way CTest's Test.xml does.
-            out.push(path);
+            let results = pkg_build.join("test_results");
+            if results.is_dir() {
+                collect_xml_recursive(&results, &mut out)?;
+            }
+        } else if is_xml(&entry) {
+            out.push(entry);
         }
     }
     Ok(out)
+}
+
+fn collect_xml_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> color_eyre::eyre::Result<()> {
+    for path in read_dir(dir)? {
+        if path.is_dir() {
+            collect_xml_recursive(&path, out)?;
+        } else if is_xml(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn read_dir(dir: &Path) -> color_eyre::eyre::Result<Vec<PathBuf>> {
+    std::fs::read_dir(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .map(|entry| Ok(entry?.path()))
+        .collect()
+}
+
+fn is_xml(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "xml")
 }
 
 #[cfg(test)]

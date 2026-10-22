@@ -17,6 +17,10 @@ fn collect_reports_copies_junit_xml_namespaced_by_package() {
     fs::write(ctest.join("Test.xml"), "<Site/>").unwrap();
     // The ROS package manifest is not JUnit and must be excluded.
     fs::write(pkg_dir.join("build/foo/package.xml"), "<package/>").unwrap();
+    // Vendored source trees cloned into build/ must be excluded.
+    let vendored = pkg_dir.join("build/foo/foo-prefix/src/foo/templates");
+    fs::create_dir_all(&vendored).unwrap();
+    fs::write(vendored.join("package.in.xml"), "<package/>").unwrap();
 
     let report_dir = tmp.path().join("test-reports");
     let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
@@ -25,6 +29,23 @@ fn collect_reports_copies_junit_xml_namespaced_by_package() {
     let dest = report_dir.join("foo/tests/build/foo/test_results/foo/foo.gtest.xml");
     assert!(dest.exists(), "expected {} to exist", dest.display());
     assert_eq!(fs::read_to_string(&dest).unwrap(), "<testsuite/>");
+}
+
+#[test]
+fn collect_reports_collects_ament_python_and_build_root_pytest_xml() {
+    let tmp = TempDir::new().unwrap();
+    let pkg_dir = tmp.path().join("packages/foo");
+    fs::create_dir_all(pkg_dir.join("build/foo")).unwrap();
+    fs::write(pkg_dir.join("build/foo/pytest.xml"), "<testsuites/>").unwrap();
+    fs::write(pkg_dir.join("build/test_results.xml"), "<testsuites/>").unwrap();
+    fs::write(pkg_dir.join("build/foo/package.xml"), "<package/>").unwrap();
+
+    let report_dir = tmp.path().join("test-reports");
+    let n = collect_reports(&pkg_dir, &report_dir, "tests").unwrap();
+
+    assert_eq!(n, 2);
+    assert!(report_dir.join("foo/tests/build/foo/pytest.xml").exists());
+    assert!(report_dir.join("foo/tests/build/test_results.xml").exists());
 }
 
 #[test]
