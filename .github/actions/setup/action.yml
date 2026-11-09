@@ -96,10 +96,11 @@ runs:
     # minted from it); explicit SAS is only required for writes (reindex).
     - name: Install pixi (Greenroom fork)
       if: inputs.skip-pixi != 'true'
-      uses: greenroom-robotics/pixi/.github/actions/setup-pixi-gr@main
-      with:
-        version: ${{ inputs.pixi-version }}
-        install: "false"
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        PIXI_VERSION: ${{ inputs.pixi-version }}
+      run: python3 -I "${GITHUB_ACTION_PATH}/../install_pixi_gr.py" "$PIXI_VERSION"
 
     # Write a dedicated pixi manifest that depends solely on mise, then install
     # it. Downstream actions run mise via
