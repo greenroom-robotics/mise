@@ -1,3 +1,15 @@
+## [8.32.0](https://github.com/greenroom-robotics/mise/compare/mise@8.31.0...mise@8.32.0) (2026-11-09)
+
+
+### Features
+
+* bump pixi to 0.83.1 ([8a16ffc](https://github.com/greenroom-robotics/mise/commit/8a16ffc3f617c768177ad3567830e83b506b8a65))
+
+
+### Bug Fixes
+
+* install pixi-gr via authenticated GitHub API ([#120](https://github.com/greenroom-robotics/mise/issues/120)) ([161eff1](https://github.com/greenroom-robotics/mise/commit/161eff1197723489adf3d9ec85eb58c6e1074903))
+
 ## [8.31.0](https://github.com/greenroom-robotics/mise/compare/mise@8.30.4...mise@8.31.0) (2026-11-09)
 
 
