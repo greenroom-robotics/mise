@@ -18,7 +18,11 @@ inputs:
   pixi-version:
     description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: "0.80.1"
+    default: "0.83.1"
+  gh-token:
+    description: GitHub token used to download the pixi fork release asset through the authenticated API.
+    required: false
+    default: ${{ github.token }}
 
 outputs:
   all:
@@ -35,10 +39,11 @@ runs:
   using: composite
   steps:
     - name: Install pixi (Greenroom fork)
-      uses: greenroom-robotics/pixi/.github/actions/setup-pixi-gr@main
-      with:
-        version: ${{ inputs.pixi-version }}
-        install: "false"
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.gh-token }}
+        PIXI_VERSION: ${{ inputs.pixi-version }}
+      run: python3 -I "${GITHUB_ACTION_PATH}/../install_pixi_gr.py" "$PIXI_VERSION"
 
     - id: discover
       shell: bash
