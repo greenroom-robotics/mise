@@ -1,3 +1,10 @@
+## [8.31.0](https://github.com/greenroom-robotics/mise/compare/mise@8.30.4...mise@8.31.0) (2026-11-09)
+
+
+### Features
+
+* bump pixi default verison to 0.82.3 ([377e39c](https://github.com/greenroom-robotics/mise/commit/377e39cb429827c6876f2aadb4d3bca06d058bd0))
+
 ## [8.30.4](https://github.com/greenroom-robotics/mise/compare/mise@8.30.3...mise@8.30.4) (2026-10-22)
 
 
