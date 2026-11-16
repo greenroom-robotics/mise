@@ -18,6 +18,7 @@ Each is a composite action under `.github/actions/`, versioned with the repo (`@
 | --- | --- |
 | `setup` | GitHub App token, Azure credentials, the Greenroom pixi fork, and the pinned `mise` CLI. Use this to build custom workflows. |
 | `test` | `mise ci test` |
+| `lint` | `pre-commit run --all-files` via `pixi exec` with the `lint-tools-meta` conda package; no pixi workspace needed |
 | `build` | `mise ci build`, emitting `.conda` artifacts under `$RUNNER_TEMP/conda-bld` |
 | `release` | `mise ci release` (semantic-release) |
 | `recipes-pr` | open/update the conda recipe PR for the `<pkg>@<version>` tags a deb release just cut |

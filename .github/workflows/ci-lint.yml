@@ -1,0 +1,92 @@
+# Reusable workflow: run a repo's pre-commit hooks over all files on one runner,
+# using the lint-tools-meta conda package (no pixi workspace needed).
+#
+# Usage (in a consumer repo's .github/workflows/lint.yml):
+#
+#   jobs:
+#     lint:
+#       uses: greenroom-robotics/mise/.github/workflows/ci-lint.yml@v8
+#       with:
+#         runner: runs-on=${{ github.run_id }}/runner=...
+#         skip-hooks: codespell   # optional, comma-separated hook ids
+#       secrets:
+#         gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+#         gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+#         azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+#         azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+#         azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+name: mise ci lint
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: runs-on label/expression for the job (e.g. a runs-on.com dynamic runner).
+        required: true
+        type: string
+      skip-hooks:
+        description: Comma-separated pre-commit hook ids to skip (exported as `SKIP`).
+        required: false
+        type: string
+        default: ""
+      submodules:
+        description: 'Init the repo''s git submodules (recursively), authenticated with the GH App token so private org submodules work regardless of the URL form in .gitmodules.'
+        required: false
+        type: boolean
+        default: false
+      timeout-minutes:
+        description: Lint job timeout.
+        required: false
+        type: number
+        default: 15
+    secrets:
+      gh-app-client-id:
+        required: true
+      gh-app-private-key:
+        required: true
+      azure-client-id:
+        required: true
+      azure-tenant-id:
+        required: true
+      azure-subscription-id:
+        required: true
+
+jobs:
+  lint:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      id-token: write      # Azure OIDC login in setup
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Generate GitHub App token
+        if: inputs.submodules
+        id: submodule-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.gh-app-client-id }}
+          private-key: ${{ secrets.gh-app-private-key }}
+          owner: ${{ github.repository_owner }}
+      - name: Fetch submodules
+        if: inputs.submodules
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.submodule-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          key="url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf"
+          git config --global "$key" "https://github.com/"
+          git config --global --add "$key" "git@github.com:"
+          git submodule update --init --recursive --depth=1
+          git config --global --unset-all "$key"
+
+      - uses: greenroom-robotics/mise/.github/actions/lint@v8
+        with:
+          gh-app-client-id: ${{ secrets.gh-app-client-id }}
+          gh-app-private-key: ${{ secrets.gh-app-private-key }}
+          azure-client-id: ${{ secrets.azure-client-id }}
+          azure-tenant-id: ${{ secrets.azure-tenant-id }}
+          azure-subscription-id: ${{ secrets.azure-subscription-id }}
+          skip-hooks: ${{ inputs.skip-hooks }}
