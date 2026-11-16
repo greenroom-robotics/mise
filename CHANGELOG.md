@@ -1,3 +1,10 @@
+## [8.33.0](https://github.com/greenroom-robotics/mise/compare/mise@8.32.0...mise@8.33.0) (2026-11-16)
+
+
+### Features
+
+* add shared lint action and workflow ([#121](https://github.com/greenroom-robotics/mise/issues/121)) ([ce958c0](https://github.com/greenroom-robotics/mise/commit/ce958c03a5c0ed2c1f7f09c90cbfc43f082483fa))
+
 ## [8.32.0](https://github.com/greenroom-robotics/mise/compare/mise@8.31.0...mise@8.32.0) (2026-11-09)
 
 
