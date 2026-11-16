@@ -206,7 +206,7 @@ fn item_bounds_stops_at_the_next_item_and_excludes_the_gap() {
 fn item_bounds_runs_to_eof_for_the_last_item() {
     let lines: Vec<&str> = PIXI_NATIVE.lines().collect();
     let b = item_bounds(&lines, "beta").unwrap();
-    assert!(b.trailing().is_empty());
+    assert_eq!(b.trailing(), <&[&str]>::default());
 }
 
 #[test]
