@@ -37,7 +37,7 @@ inputs:
   node-version:
     description: Node major version for semantic-release.
     required: false
-    default: "20"
+    default: "26"
   skip-setup:
     description: Skip the bundled mise/setup step. The caller must have already run setup and pass its gh-token. mise's own release.yml uses this to dogfood the in-repo setup action and avoid a v<MAJOR>-tag chicken-and-egg when the fix lives in setup itself.
     required: false
