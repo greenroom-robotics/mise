@@ -50,7 +50,7 @@ caller's workflow diffs against a base ref (e.g. `paths-filter` on a PR).
 ```yaml
 jobs:
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v6
         with:

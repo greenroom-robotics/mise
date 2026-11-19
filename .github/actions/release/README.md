@@ -15,7 +15,7 @@ on:
 
 jobs:
   release:
-    runs-on: 2vcpu-ubuntu-2404
+    runs-on: 2vcpu-ubuntu-2604
     permissions:
       contents: write
       pull-requests: write

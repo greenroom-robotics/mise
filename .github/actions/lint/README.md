@@ -11,7 +11,7 @@ The `~/.cache/pre-commit` hook environments are cached per runner OS/arch and th
 ```yaml
 jobs:
   lint:
-    runs-on: 2vcpu-ubuntu-2404
+    runs-on: 2vcpu-ubuntu-2604
     permissions:
       contents: read
       id-token: write

@@ -7,7 +7,7 @@ One-liner CI step for pixi-native ROS package repos. Sets up the environment, ru
 ```yaml
 jobs:
   build:
-    runs-on: 2vcpu-ubuntu-2404
+    runs-on: 2vcpu-ubuntu-2604
     steps:
       - uses: actions/checkout@v6
       - uses: greenroom-robotics/mise/.github/actions/build@v8

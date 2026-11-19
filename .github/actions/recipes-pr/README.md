@@ -22,7 +22,7 @@ semantic-release, no tagging.
 jobs:
   pixi:
     needs: deb            # deb job creates the tags
-    runs-on: 2vcpu-ubuntu-2404
+    runs-on: 2vcpu-ubuntu-2604
     permissions:
       contents: read
       id-token: write
