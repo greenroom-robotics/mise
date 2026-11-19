@@ -11,7 +11,7 @@ If the test task emits no JUnit XML (e.g. `cargo nextest`), report collection an
 ```yaml
 jobs:
   test:
-    runs-on: 2vcpu-ubuntu-2404
+    runs-on: 2vcpu-ubuntu-2604
     steps:
       - uses: actions/checkout@v6
       - uses: greenroom-robotics/mise/.github/actions/test@v8
