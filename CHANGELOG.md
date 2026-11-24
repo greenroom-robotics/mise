@@ -1,3 +1,14 @@
+## [9.0.0](https://github.com/greenroom-robotics/mise/compare/mise@8.34.1...mise@9.0.0) (2026-11-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* bump pixi to 0.84.1 - breaks locks
+
+### Features
+
+* bump pixi to 0.84.1 - breaks locks ([1a49c75](https://github.com/greenroom-robotics/mise/commit/1a49c7516ab5a7d4b6794ab03ad526588155b694))
+
 ## [8.34.1](https://github.com/greenroom-robotics/mise/compare/mise@8.34.0...mise@8.34.1) (2026-11-24)
 
 
