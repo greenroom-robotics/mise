@@ -1,3 +1,10 @@
+## [9.0.1](https://github.com/greenroom-robotics/mise/compare/mise@9.0.0...mise@9.0.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* move internal actions to new pin ([0fa7d67](https://github.com/greenroom-robotics/mise/commit/0fa7d67cdbb2db6f4ae452d192e0b7888223e938))
+
 ## [9.0.0](https://github.com/greenroom-robotics/mise/compare/mise@8.34.1...mise@9.0.0) (2026-11-24)
 
 
