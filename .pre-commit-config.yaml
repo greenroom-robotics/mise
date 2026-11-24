@@ -1,12 +1,11 @@
 # Run `pre-commit install` once per clone to activate these hooks.
-# Mirrors the `Format check` step in .github/workflows/test.yml so fmt
-# failures are caught locally before they reach CI.
+# Runs cargo fmt from the pixi dev environment, the same toolchain CI uses.
 repos:
   - repo: local
     hooks:
       - id: cargo-fmt
         name: cargo fmt
-        entry: cargo fmt --all --
+        entry: pixi run -e dev cargo fmt --all --
         language: system
         types: [rust]
         pass_filenames: false
