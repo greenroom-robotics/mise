@@ -86,7 +86,7 @@ runs:
 
     - name: Install pixi channel grants
       if: inputs.skip-pixi != 'true'
-      uses: greenroom-robotics/mise/.github/actions/pixi-grants@v8
+      uses: greenroom-robotics/mise/.github/actions/pixi-grants@v9
       with:
         gh-token: ${{ steps.app-token.outputs.token }}
         mask-channels: ${{ inputs.mask-channels }}

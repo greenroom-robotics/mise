@@ -7,7 +7,7 @@ The action is idempotent. You can use it without pixi installed, for example to 
 ## Usage
 
 ```yaml
-- uses: greenroom-robotics/mise/.github/actions/pixi-grants@v8
+- uses: greenroom-robotics/mise/.github/actions/pixi-grants@v9
   with:
     gh-token: ${{ steps.setup.outputs.gh-token }}
     mask-channels: true # optional, defaults to true

@@ -17,7 +17,7 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
-      - uses: greenroom-robotics/mise/.github/actions/lint@v8
+      - uses: greenroom-robotics/mise/.github/actions/lint@v9
         with:
           gh-app-client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           gh-app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}

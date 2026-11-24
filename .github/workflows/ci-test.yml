@@ -14,7 +14,7 @@
 #
 #   jobs:
 #     test:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v8
+#       uses: greenroom-robotics/mise/.github/workflows/ci-test.yml@v9
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         package-dir: packages
@@ -154,7 +154,7 @@ jobs:
       # `.github/scripts/...` path 404s for every external caller. The
       # composite ships its own script, resolved via github.action_path.
       - id: all
-        uses: greenroom-robotics/mise/.github/actions/discover@v8
+        uses: greenroom-robotics/mise/.github/actions/discover@v9
         with:
           package: ${{ inputs.package }}
           package-dir: ${{ inputs.package-dir }}
@@ -317,7 +317,7 @@ jobs:
         if: inputs.host-setup != ''
         shell: bash
         run: ${{ inputs.host-setup }}
-      - uses: greenroom-robotics/mise/.github/actions/test@v8
+      - uses: greenroom-robotics/mise/.github/actions/test@v9
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}
@@ -383,7 +383,7 @@ jobs:
 
       - *host-setup
 
-      - uses: greenroom-robotics/mise/.github/actions/setup@v8
+      - uses: greenroom-robotics/mise/.github/actions/setup@v9
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}

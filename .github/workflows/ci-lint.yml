@@ -5,7 +5,7 @@
 #
 #   jobs:
 #     lint:
-#       uses: greenroom-robotics/mise/.github/workflows/ci-lint.yml@v8
+#       uses: greenroom-robotics/mise/.github/workflows/ci-lint.yml@v9
 #       with:
 #         runner: runs-on=${{ github.run_id }}/runner=...
 #         skip-hooks: codespell   # optional, comma-separated hook ids
@@ -82,7 +82,7 @@ jobs:
           git submodule update --init --recursive --depth=1
           git config --global --unset-all "$key"
 
-      - uses: greenroom-robotics/mise/.github/actions/lint@v8
+      - uses: greenroom-robotics/mise/.github/actions/lint@v9
         with:
           gh-app-client-id: ${{ secrets.gh-app-client-id }}
           gh-app-private-key: ${{ secrets.gh-app-private-key }}
