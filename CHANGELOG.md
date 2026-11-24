@@ -1,3 +1,10 @@
+## [8.34.1](https://github.com/greenroom-robotics/mise/compare/mise@8.34.0...mise@8.34.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* Revert "feat: bump pixi to 0.84.1 ([#124](https://github.com/greenroom-robotics/mise/issues/124))" ([f93c7d4](https://github.com/greenroom-robotics/mise/commit/f93c7d4bf615cea9e171d98d147cdd18fbc7408c))
+
 ## [8.34.0](https://github.com/greenroom-robotics/mise/compare/mise@8.33.0...mise@8.34.0) (2026-11-24)
 
 
