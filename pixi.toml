@@ -6,20 +6,16 @@ preview = ["pixi-build"]
 
 [dependencies]
 mise = { path = "." }
-rust = "1.95.*"
-cargo-nextest = ">=0.9.143,<0.10"
 
 [tasks]
 mise = "mise"
-lint = "cargo fmt --all && cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings"
-test = "cargo nextest run --locked --color always && cargo test --doc --locked"
 
 [package]
 name = "mise"
 version = "8.33.0"
 
 [package.build-dependencies]
-rust = "1.95.*"
+rust = "1.100.*"
 
 [package.build.backend]
 channels = [
@@ -28,3 +24,15 @@ channels = [
 ]
 name = "pixi-build-rust"
 version = "*"
+
+[feature.dev.dependencies]
+rust = "1.100.*"
+cargo-nextest = ">=0.9.143,<0.10"
+
+[feature.dev.tasks]
+lint = "cargo fmt --all && cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings"
+lint-check = "cargo fmt --all --check && cargo clippy --all-targets --all-features --locked -- -D warnings"
+test = "cargo nextest run --locked --color always && cargo test --doc --locked"
+
+[environments]
+dev = { features = ["dev"], no-default-feature = true }

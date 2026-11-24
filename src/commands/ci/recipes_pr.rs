@@ -87,10 +87,8 @@ impl RecipesPr {
         let mut changed: BTreeSet<PathBuf> = BTreeSet::new();
         // Seeded from the open PR's body so siblings already on the rolling
         // PR keep their entries at their own versions.
-        let mut released: BTreeMap<PackageName, String> = existing_body
-            .as_deref()
-            .map(body_packages)
-            .unwrap_or_default();
+        let mut released: BTreeMap<PackageName, String> =
+            existing_body.as_deref().map_or_default(body_packages);
         let mut old_refs: Vec<recipes_upsert::OldRef> = Vec::new();
         for (name, subdir) in &targets {
             // A vendored-by-name target with no recipe would otherwise fall
