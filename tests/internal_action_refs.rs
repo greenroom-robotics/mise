@@ -67,8 +67,7 @@ fn breaking_since(repo: &Path, tag: &str) -> bool {
             .output()
             .ok()
             .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default()
+            .map_or_default(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     };
 
     let bang = Regex::new(r"(?m)^[a-zA-Z]+(\([^)]*\))?!:").unwrap();

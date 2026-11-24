@@ -119,10 +119,9 @@ fn a_package_without_path_deps_is_left_alone() {
     let solo = write_pkg(root, "solo", &[]);
     let before = fs::read_to_string(&solo).unwrap();
 
-    assert!(
-        prepare_all(root, channel(root), &["solo"])
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        prepare_all(root, channel(root), &["solo"]).unwrap(),
+        Vec::<String>::new()
     );
     assert_eq!(fs::read_to_string(&solo).unwrap(), before);
 }
