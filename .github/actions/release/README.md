@@ -45,6 +45,10 @@ jobs:
 5. `mise ci release ...` writes a `.releaserc` for each package, then runs semantic-release (or multi-semantic-release for the multi-package case).
 6. semantic-release's `@semantic-release/exec` plugin calls back into `mise ci recipes-pr` to open/update the recipes-repo PR.
 
+## LFS packages
+
+Set `lfs-packages` (newline- or comma-separated) to mark packages whose recipes entry gets `lfs: true`. Each name is forwarded to `mise ci recipes-pr` as `--lfs-package`. The list is authoritative: a released package that is not listed has any existing `lfs: true` removed.
+
 ## Recipes-repo contract
 
 The recipes repo must accept PRs from greenroom-bot. `mise ci recipes-pr` clones the repo using `API_TOKEN_GITHUB`, creates a version-independent branch `release/<source-repo>`, upserts the package's entry in `rosdistro_additional_recipes.yaml`, and opens (or force-pushes onto an existing) PR. The branch name omits the version on purpose: every release of a source repo lands on the same rolling PR, so a newer release always supersedes an older one instead of leaving stale per-version PRs open.

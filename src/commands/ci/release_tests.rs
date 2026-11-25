@@ -432,3 +432,34 @@ fn tag_format_renders_to_the_recorded_release_tag() {
         assert_eq!(rendered, recorded);
     }
 }
+
+fn publish_cmd_for(args: &[&str]) -> String {
+    let cli = TestCli::parse_from(std::iter::once(&"x").chain(args));
+    cli.release
+        .publish_cmd(Path::new("/abs/packages"), &pkg("mise"))
+}
+
+#[test]
+fn publish_cmd_has_no_lfs_flag_by_default() {
+    assert!(!publish_cmd_for(&[]).contains("--lfs-package"));
+}
+
+#[test]
+fn publish_cmd_forwards_one_lfs_package() {
+    let cmd = publish_cmd_for(&["--lfs-package=mako_bin"]);
+    assert!(cmd.ends_with(" --lfs-package=mako_bin"), "{cmd}");
+}
+
+#[test]
+fn publish_cmd_forwards_each_lfs_package() {
+    let cmd = publish_cmd_for(&["--lfs-package=mako_bin", "--lfs-package", "other_bin"]);
+    assert!(
+        cmd.ends_with(" --lfs-package=mako_bin --lfs-package=other_bin"),
+        "{cmd}"
+    );
+}
+
+#[test]
+fn invalid_lfs_package_name_is_rejected() {
+    assert!(TestCli::try_parse_from(["x", "--lfs-package=Bad Name"]).is_err());
+}
