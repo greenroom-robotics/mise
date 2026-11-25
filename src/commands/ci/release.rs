@@ -1,6 +1,7 @@
 use clap::Args;
 use color_eyre::eyre::WrapErr;
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use super::sync_cargo::{cargo_files, sync_package};
@@ -82,6 +83,10 @@ pub struct Release {
     /// `${nextRelease.version}` placeholder is available.
     #[arg(long)]
     pub extra_prepare_cmd: Option<String>,
+    /// Repeatable. Packages whose recipes entry gets `lfs: true`; forwarded to
+    /// `mise ci recipes-pr --lfs-package`.
+    #[arg(long = "lfs-package")]
+    pub lfs_packages: Vec<PackageName>,
 }
 
 /// semantic-release tag format, from [`ReleaseTag`] in both modes.
@@ -340,6 +345,19 @@ impl Release {
         crate::process::git(&["push", "origin", &refspec])
     }
 
+    fn publish_cmd(&self, abs_pkgdir: &Path, pkg_name: &PackageName) -> String {
+        let mut cmd = format!(
+            "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --package={} --sha=${{nextRelease.gitHead}}",
+            self.recipes_repo,
+            abs_pkgdir.display(),
+            pkg_name,
+        );
+        for lfs in &self.lfs_packages {
+            let _ = write!(cmd, " --lfs-package={lfs}");
+        }
+        cmd
+    }
+
     /// `pkg_name` is embedded literally in both callbacks so
     /// multi-semantic-release needs no plugin-context env vars at runtime.
     fn releaserc_json(
@@ -375,12 +393,7 @@ impl Release {
             prepare_cmd.push_str(extra);
         }
 
-        let publish_cmd = format!(
-            "mise ci recipes-pr --version=${{nextRelease.version}} --recipes-repo={} --package-dir={} --package={} --sha=${{nextRelease.gitHead}}",
-            self.recipes_repo,
-            abs_pkgdir.display(),
-            pkg_name,
-        );
+        let publish_cmd = self.publish_cmd(&abs_pkgdir, pkg_name);
 
         let mut plugins: Vec<serde_json::Value> = vec![
             serde_json::json!(["@semantic-release/commit-analyzer", { "preset": "conventionalcommits" }]),
