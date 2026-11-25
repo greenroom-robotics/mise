@@ -18,7 +18,7 @@ inputs:
   pixi-version:
     description: Greenroom pixi fork release version (see greenroom-robotics/pixi releases).
     required: false
-    default: "0.84.1"
+    default: "0.84.2"
   gh-token:
     description: GitHub token used to download the pixi fork release asset through the authenticated API.
     required: false
