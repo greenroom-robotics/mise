@@ -12,7 +12,7 @@ mise = "mise"
 
 [package]
 name = "mise"
-version = "9.0.2"
+version = "9.1.0"
 
 [package.build-dependencies]
 rust = "1.100.*"

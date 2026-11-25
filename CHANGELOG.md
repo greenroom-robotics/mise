@@ -1,3 +1,10 @@
+## [9.1.0](https://github.com/greenroom-robotics/mise/compare/mise@9.0.2...mise@9.1.0) (2026-11-25)
+
+
+### Features
+
+* forward lfs-packages from the release action to recipes-pr ([#126](https://github.com/greenroom-robotics/mise/issues/126)) ([1db9ef2](https://github.com/greenroom-robotics/mise/commit/1db9ef2a77e260a32b81e1921876270b39fec21d))
+
 ## [9.0.2](https://github.com/greenroom-robotics/mise/compare/mise@9.0.1...mise@9.0.2) (2026-11-25)
 
 
