@@ -1,3 +1,10 @@
+## [9.0.2](https://github.com/greenroom-robotics/mise/compare/mise@9.0.1...mise@9.0.2) (2026-11-25)
+
+
+### Bug Fixes
+
+* use pixi 0.84.2 ([1b823b7](https://github.com/greenroom-robotics/mise/commit/1b823b7232027b330d2605de6d9379f258379b8e))
+
 ## [9.0.1](https://github.com/greenroom-robotics/mise/compare/mise@9.0.0...mise@9.0.1) (2026-11-24)
 
 
